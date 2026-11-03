@@ -5,6 +5,7 @@
 //!   zig build run            build and open it
 //!   zig build app            zig-out/Nanolight.app, for /Applications
 //!   zig build test           its search, math, suggestions and panel
+//!   zig build server         the sync server, zig-out/bin/nanolight-server
 //!   zig build film           the walkthrough's renderer (tools/film.sh)
 //!   zig build promo          the promo's renderer (tools/promo.sh)
 //!   -Dnix=true               a Nix build: Nix owns updates and startup, so
@@ -84,6 +85,15 @@ pub fn build(b: *std.Build) void {
     // zig-out/bin/nanolight-tests: the tests, to run on another machine.
     b.step("test-bin", "Install the tests as zig-out/bin/nanolight-tests").dependOn(&b.addInstallArtifact(tests, .{ .dest_sub_path = if (os == .windows) "nanolight-tests.exe" else "nanolight-tests" }).step);
     b.step("test", "Test Nanolight's search, math, suggestions and panel").dependOn(&b.addRunArtifact(tests).step);
+
+    // nanolight-server: the sync server (src/server.zig). Plain std, no nanoui.
+    const server = b.addExecutable(.{ .name = "nanolight-server", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/server.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    if (optimize != .debug) server.root_module.strip = true;
+    b.step("server", "Build the sync server (zig-out/bin/nanolight-server)").dependOn(&b.addInstallArtifact(server, .{}).step);
 
     // The walkthrough, rendered offscreen (src/film.zig, tools/film.sh).
     const film = b.addExecutable(.{ .name = "nanolight-film", .root_module = b.createModule(.{

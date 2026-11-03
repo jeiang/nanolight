@@ -13,6 +13,7 @@ test {
     _ = @import("suggest.zig");
     _ = @import("promo_camera.zig");
     _ = @import("settings.zig");
+    _ = @import("server.zig");
     _ = @import("toml.zig");
     _ = @import("config.zig");
     _ = @import("apps.zig");

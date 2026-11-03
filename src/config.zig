@@ -9,12 +9,7 @@ const nanoui = @import("nanoui");
 const toml = @import("toml.zig");
 const shortcut = @import("shortcut.zig");
 
-pub const Quicklink = struct {
-    name: []const u8,
-    /// `{argument}` is where the typed words go, escaped.
-    url: []const u8,
-    keyword: []const u8 = "",
-};
+pub const Quicklink = @import("settings.zig").Quicklink;
 
 pub const Clipboard = struct {
     enabled: bool = true,
