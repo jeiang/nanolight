@@ -97,7 +97,7 @@ pub const Stage = struct {
             ui.div(c).h(4).end();
             const k = ui.div(c).row().gap(10).itemsCenter();
             defer k.end();
-            ui.text(c, "github.com/justrach/nanolight", .{ .size = 14, .mono = true, .color = ui.Color.white.alpha(0.7) });
+            ui.text(c, "github.com/jeiang/nanolight", .{ .size = 14, .mono = true, .color = ui.Color.white.alpha(0.7) });
             ui.text(c, "·", .{ .size = 14, .color = ui.Color.white.alpha(0.5) });
             ui.text(c, "⌘Space", .{ .size = 14, .weight = .semibold, .color = ui.Color.white.alpha(0.85) });
         }
