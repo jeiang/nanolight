@@ -37,3 +37,11 @@ jobs:
       - run: zig build test
       - run: zig build test -Dnix=true
       - run: zig build server
+
+  # Needs a committed flake.lock (`nix flake lock`).
+  nix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix flake check -L

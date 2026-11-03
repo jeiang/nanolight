@@ -115,6 +115,85 @@ From the [latest release](https://github.com/jeiang/nanolight/releases/latest):
 
 On first run a short welcome picks the key that opens it and says who else holds it. On the Mac that's ⌘Space, ⌥Space, ⌃Space or ⌥⌘Space (any other, such as ⌥X, can be recorded later in Settings; Spotlight gives up ⌘Space in System Settings → Keyboard → Keyboard Shortcuts → Spotlight); on a PC, Alt Space, Ctrl Alt Space, Ctrl Space or Ctrl Shift Space. Releases update themselves from this repository's releases, restarting into the new version while the panel is away. (A build made with `-Dnix=true` never does.)
 
+## Nix
+
+`flake.nix` offers the app, the sync server and modules that install the app, write `config.toml` from Nix, and start it at login (the Nix build has no updater and no login-item UI: the modules own startup). Add the input, and let `nixpkgs` follow yours:
+
+```nix
+inputs.nanolight = {
+  url = "github:jeiang/nanolight";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+Every client module takes the same options: `programs.nanolight.enable`, `.package` and `.settings`, which is `config.toml` as Nix (see [Configuration](#configuration)).
+
+**nix-darwin** (`darwinModules.default`):
+
+```nix
+{
+  imports = [inputs.nanolight.darwinModules.default];
+  programs.nanolight = {
+    enable = true;
+    settings.sync = {
+      url = "http://100.64.0.3:8890";
+      token_file = config.sops.secrets.nanolight-token.path;
+    };
+    # codesignIdentity = "Apple Development: Jane Doe (ABCDE12345)";  # see below
+  };
+}
+```
+
+It installs the app, writes `/etc/nanolight/config.toml`, and runs a launch agent (`RunAtLoad`, restarted when it crashes but not after Quit). `disableSpotlightShortcut` (on by default) turns off Spotlight's ⌘Space; it needs `system.primaryUser`.
+
+Pasting into another app needs the Accessibility grant (System Settings → Privacy & Security → Accessibility). macOS ties the grant to the app's code signature, and a Nix build is signed ad hoc with a new signature each time it changes, so the grant is lost on every rebuild. Set `codesignIdentity` to an identity in your login keychain (Keychain Access → Certificate Assistant → Create a Certificate, type Code Signing, is enough) and the module copies the app to `/Applications/Nanolight.app`, signs it there as `system.primaryUser`, and runs that copy; the grant then survives rebuilds.
+
+**NixOS** (`nixosModules.default`, the client; it starts as a systemd user service with the graphical session):
+
+```nix
+{
+  imports = [inputs.nanolight.nixosModules.default];
+  programs.nanolight = {
+    enable = true;
+    settings.hotkey = "alt_space";
+  };
+}
+```
+
+**home-manager** (`homeManagerModules.default`): the same options, with `~/.config/nanolight/config.toml` and a systemd user service (Linux) or launch agent (macOS).
+
+```nix
+{
+  imports = [inputs.nanolight.homeManagerModules.default];
+  programs.nanolight.enable = true;
+}
+```
+
+**Server** (`nixosModules.server`, `packages.<system>.nanolight-server`): a hardened systemd service with its own user and `/var/lib/nanolight`. It speaks plain HTTP, so keep it on a private address (a VPN or mesh) or behind a TLS proxy.
+
+```nix
+{
+  imports = [inputs.nanolight.nixosModules.server];
+  services.nanolight-server = {
+    enable = true;
+    listenAddress = "100.64.0.3";
+    tokensFile = config.sops.secrets.nanolight-tokens.path;  # root-only is fine
+    openFirewall = true;
+  };
+}
+```
+
+Tokens: make a random token per account, hash it, and give each computer its own copy of the token.
+
+```sh
+token=$(openssl rand -hex 32)
+nix run github:jeiang/nanolight#nanolight-server -- hash-token "$token"   # prints ACCOUNT:<sha256>
+```
+
+Put `me:<sha256>` (replace `ACCOUNT`; `[a-z0-9_-]`, up to 64) on a line of the file `tokensFile` names, a sops-nix secret for instance, and the bare token in the file that each client's `sync.token_file` names. Only the hash is on the server.
+
+The flake commits no `flake.lock`: run `nix flake lock` once (CI needs the committed lock, and fails without it). Hosts need `nix-command flakes`. `nix flake check` builds the app (running `zig build test`), the server and a NixOS VM test of the server, and evaluates a NixOS configuration with both modules; the nix-darwin and home-manager modules are evaluated against stand-ins for the options they set.
+
 ## Build
 
 You need Zig 0.17.0 and Xcode or the Command Line Tools.
@@ -127,6 +206,7 @@ zig build server    # zig-out/bin/nanolight-server, the sync server
 VERSION=0.1.0 sh macos/package.sh   # the Mac release: signed app, disk image, update zip, manifest.json
 VERSION=0.1.0 sh pc/package.sh      # Windows' zip and Linux's tarballs, added to manifest.json
 zig build -Dtarget=x86_64-windows-gnu   # any target from any machine
+nix build .#nanolight .#nanolight-server  # the Nix packages (see Nix)
 zig build -Dnix=true                    # a Nix-managed build: no updater, no Open at Login (the Nix modules own startup)
 ```
 
@@ -151,6 +231,7 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 | `src/script_commands.zig`, `src/script_run.zig` | Raycast script commands, run in Zig |
 | `src/toml.zig`, `src/config.zig` | `config.toml`: the TOML subset parser, the typed schema and loader, and how the file seeds settings |
 | `src/onboard.zig`, `src/shortcut.zig`, `src/recorder.zig` | The welcome, which key is free, recording one's own |
+| `flake.nix`, `nix/` | The packages, the NixOS, nix-darwin and home-manager modules, the server module, and the flake's checks |
 | `src/film.zig`, `src/stage.zig`, `tools/film.sh` | The walkthrough, rendered offscreen |
 | `src/promo.zig`, `src/promo_scene.zig`, `src/promo_camera.zig`, `tools/promo.sh`, `tools/promo/` | The promo: nanoui's shots, Blender's laptops, the Windows and Linux recordings ([docs/promo.md](docs/promo.md)) |
 
