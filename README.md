@@ -21,7 +21,7 @@ Apps, math, quicklinks (Google, Claude, Grok, X...) and Raycast script commands:
 - **Quicklinks**: web searches under the apps, from `[[quicklinks]]` in `config.toml` (`{argument}` is where what you typed goes, URL-escaped). The built-in ones are Google (the first row, a search for what you typed), DuckDuckGo (`ddg`), Claude, Grok and X; the first five are listed, and any others answer to their `keyword`. `ddg liquid glass` runs only DuckDuckGo. A URL without `{argument}` opens as it is; only `http` and `https` addresses are accepted. Google's suggestions stay with the quicklink whose address is Google's, and are not shown without one. Return, ⌘↩ and the in-panel page work for every quicklink.
 - **Raycast script commands** ([raycast/script-commands](https://github.com/raycast/script-commands), MIT): any script with `@raycast.*` comments, dropped in the Script Commands folder, is a row. Nanolight runs it itself: its arguments as a form, its output as it prints (`fullOutput`), its last line (`compact`), or nothing (`silent`).
 - **Settings in the panel**: ⌘, (Ctrl+, on a PC), the gear in the footer, or type "settings".
-- **⌘1–⌘9** run a row at once; ↑ ↓ and ⌃N ⌃P move.
+- **⌘1–⌘9** run a row at once; ↑ ↓, ⌃N ⌃P and ⌃J ⌃K move (also in Settings and script screens; on a PC a script's actions are on Ctrl+O, since Ctrl+K moves up). After the panel has been hidden longer than `pop_to_root_seconds` (default 90, `0` = never) it reopens at the root: empty query, first row, no Settings or script screen.
 - **Config file**: `config.toml` seeds the settings (see [Configuration](#configuration)).
 - On the Mac it lives in the menu bar: no Dock icon, and nothing drawn while it's idle. **Show in Menu Bar** in Settings hides the icon; Settings stays a ⌘, away in the panel.
 
@@ -101,7 +101,7 @@ url = ""                      # e.g. "http://100.x.y.z:8890"; empty = off
 token_file = ""               # file holding the bearer token (sops path under Nix)
 ```
 
-Today `hotkey`, `suggestions`, `open_searches_in_browser`, `show_in_menu_bar`, `[apps] extra_dirs`, `[script_commands] dirs` and `[sync]` take effect. `[[quicklinks]]` take effect too. `pop_to_root_seconds` and `[clipboard]` are read and checked but do nothing yet. A key of the wrong type fails the file; an unknown key is logged and ignored. The parser (`src/toml.zig`) is TOML 1.0 without datetimes, and reads what Nix's `pkgs.formats.toml` writes.
+Today `hotkey`, `suggestions`, `open_searches_in_browser`, `show_in_menu_bar`, `[apps] extra_dirs`, `[script_commands] dirs` and `[sync]` take effect. `[[quicklinks]]` take effect too. `pop_to_root_seconds` takes effect too; `[clipboard]` is read and checked but does nothing yet. A key of the wrong type fails the file; an unknown key is logged and ignored. The parser (`src/toml.zig`) is TOML 1.0 without datetimes, and reads what Nix's `pkgs.formats.toml` writes.
 
 When the file sets `hotkey`, the welcome skips its key and login steps.
 

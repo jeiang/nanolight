@@ -264,8 +264,8 @@ pub const Settings = struct {
             return;
         }
         if (!s.returned(c)) s.took_return = false;
-        if (c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true })) s.sel = (s.sel + 1) % rows.len;
-        if (c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true })) s.sel = (s.sel + rows.len - 1) % rows.len;
+        if (panel.Nanolight.moveDown(c)) s.sel = (s.sel + 1) % rows.len;
+        if (panel.Nanolight.moveUp(c)) s.sel = (s.sel + rows.len - 1) % rows.len;
         if (c.shortcut(.{ .key = S.left })) s.nudge(n, rows, -1);
         if (c.shortcut(.{ .key = S.right })) s.nudge(n, rows, 1);
         // Space is also typed into the field once Settings closes; only

@@ -91,7 +91,7 @@ test "a list's rows, its actions on ⌘K, and Return runs the first" {
     try std.testing.expect(t.hasText("Front Page"));
     try std.testing.expect(t.hasText("Show HN: Nanolight"));
     try std.testing.expect(t.hasText("128"));
-    try std.testing.expect(t.shortcut(.{ .key = 'k', .cmd = true }));
+    try std.testing.expect(t.shortcut(@import("raycast_view.zig").actions_key));
     t.settle(1);
     try std.testing.expect(t.hasText("Copy Link"));
     _ = t.shortcut(.{ .key = ui.Shortcut.down });

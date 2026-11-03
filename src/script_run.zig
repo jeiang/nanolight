@@ -204,11 +204,16 @@ pub const Runner = struct {
                 r.ext.note("Copied to the clipboard", false);
             }
         } else if (std.mem.eql(u8, m.type, "pop")) {
-            r.stop();
-            r.shown = false;
-            r.ext.stop();
+            r.pop();
             r.hooks.redraw(r.hooks.ctx);
         }
+    }
+
+    /// Ends the script and closes its screen.
+    pub fn pop(r: *Runner) void {
+        r.stop();
+        r.shown = false;
+        r.ext.stop();
     }
 
     /// Ends a script still running.

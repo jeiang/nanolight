@@ -348,6 +348,7 @@ pub const Live = struct {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (w.isFocused()) return;
         if (l.recorder.active()) record(l, false);
+        l.s.hid(account.now());
         l.through.stop();
         l.s.note = "";
         // The Mac's popover hides itself; elsewhere the panel goes as
@@ -362,6 +363,7 @@ pub const Live = struct {
             l.keep_open = false;
             return;
         }
+        l.s.hid(account.now());
         if (l.window) |w| w.hide();
     }
 
@@ -379,11 +381,18 @@ pub const Live = struct {
         const w = l.window orelse return;
         const showing = w.isVisible() and panel.focused(w);
         l.o.pressed(showing);
-        if (showing) return w.hide();
+        if (showing) {
+            l.s.hid(account.now());
+            return w.hide();
+        }
         // Freed a key in System Settings, quit a launcher: look again.
         if (l.o.active) l.o.refresh();
         panel.place(w);
         rc.refresh(l);
+        if (l.s.popDue(account.now())) {
+            l.scripts.pop();
+            l.s.toRoot();
+        }
         l.s.reveal();
         w.show();
         panel.shown(w);
@@ -564,6 +573,7 @@ pub fn main(init: std.process.Init) !void {
         init.gpa.destroy(a);
     };
     s.host = live.host();
+    s.pop_after = cfg.pop_to_root_seconds;
     if (!app.flags.hidden) _ = live.setQuicklinks(config.loadQuicklinks(cfg_arena.allocator(), kv));
     // Google's completions are on unless turned off in Settings.
     if (kv.get(init.gpa, suggest_key) catch null) |v| {

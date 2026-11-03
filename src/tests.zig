@@ -611,3 +611,58 @@ test "a welcome whose key is set elsewhere skips the key step, in two steps" {
     o.start(.cmd_space);
     try std.testing.expectEqual(onboard.Step.try_it, o.step);
 }
+
+test "Ctrl+J and Ctrl+K move down and up, and the field never sees them" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    ix.starters = &mac_starters;
+    for ([_][]const u8{ "Safari", "System Settings", "Notes" }) |n| {
+        var buf: [64]u8 = undefined;
+        try ix.add(n, try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n}));
+    }
+    var probe: Probe = .{};
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = .{ .ctx = &probe, .open = Probe.open, .hide = Probe.hide };
+    s.reveal();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = 480, .dark = true });
+    defer t.deinit();
+    t.settle(1);
+    press(&t, &.{.{ .insert = "s" }});
+    try std.testing.expect(t.shortcut(.{ .key = 'j', .ctrl = true }));
+    try std.testing.expectEqual(@as(usize, 1), s.sel);
+    try std.testing.expect(t.shortcut(.{ .key = 'k', .ctrl = true }));
+    try std.testing.expectEqual(@as(usize, 0), s.sel);
+    try std.testing.expect(t.shortcut(.{ .key = 'k', .ctrl = true }));
+    try std.testing.expect(s.sel > 0);
+    try std.testing.expectEqualStrings("s", s.query.text());
+}
+
+test "the panel reopens at the root only after being away longer than pop_after" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var s: view.Nanolight = .{ .index = &ix, .pop_after = 90 };
+    defer s.query.deinit();
+    // Never hidden: nothing to pop.
+    try std.testing.expect(!s.popDue(1000));
+    s.hid(1000);
+    try std.testing.expect(!s.popDue(1090));
+    s.hid(1000);
+    try std.testing.expect(s.popDue(1091));
+    // One decision per hiding.
+    try std.testing.expect(!s.popDue(5000));
+    s.pop_after = 0;
+    s.hid(1000);
+    try std.testing.expect(!s.popDue(1_000_000));
+
+    s.query.set("notes");
+    s.sel = 2;
+    s.settings_ui.show();
+    s.toRoot();
+    try std.testing.expectEqualStrings("", s.query.text());
+    try std.testing.expectEqual(@as(usize, 0), s.sel);
+    try std.testing.expect(!s.settings_ui.open);
+}

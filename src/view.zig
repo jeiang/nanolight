@@ -113,6 +113,30 @@ pub const Nanolight = struct {
     /// Settings, drawn in the panel in place of the rows.
     settings_ui: settings_view.Settings = .{},
     ext: ?*@import("raycast_view.zig").Ext = null,
+    /// When the panel last went away (seconds), and how long it may be away
+    /// before it reopens at the root; 0 is never.
+    away_at: ?i64 = null,
+    pop_after: u32 = 90,
+
+    /// The panel went away at `now`.
+    pub fn hid(s: *Nanolight, now: i64) void {
+        s.away_at = now;
+    }
+
+    /// Whether the panel, shown at `now`, was away longer than `pop_after`.
+    pub fn popDue(s: *Nanolight, now: i64) bool {
+        const t = s.away_at orelse return false;
+        s.away_at = null;
+        return s.pop_after > 0 and now - t > s.pop_after;
+    }
+
+    /// The first screen again: no query, the first row, no Settings or page.
+    pub fn toRoot(s: *Nanolight) void {
+        s.query.clear();
+        s.sel = 0;
+        s.back();
+        s.settings_ui.hide();
+    }
 
     /// Called as it is shown: the query selected, the keys its own.
     pub fn reveal(s: *Nanolight) void {
@@ -213,7 +237,19 @@ pub const Nanolight = struct {
         return h;
     }
 
-    /// Arrows, ^N/^P and Escape, before the field sees them.
+    /// ↓, ^N or ^J; offered before the field, so the key never edits.
+    pub fn moveDown(c: *ui.Context) bool {
+        const S = ui.Shortcut;
+        return c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true }) or c.shortcut(.{ .key = 'j', .ctrl = true });
+    }
+
+    /// ↑, ^P or ^K.
+    pub fn moveUp(c: *ui.Context) bool {
+        const S = ui.Shortcut;
+        return c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true }) or c.shortcut(.{ .key = 'k', .ctrl = true });
+    }
+
+    /// Arrows, ^N/^P, ^J/^K and Escape, before the field sees them.
     fn keys(s: *Nanolight, c: *ui.Context) void {
         const S = ui.Shortcut;
         if (s.previewing) {
@@ -229,10 +265,10 @@ pub const Nanolight = struct {
         const more = s.completion();
         if (more.len > 0 and c.shortcut(.{ .key = S.tab })) s.take(more);
         const n = s.res.n;
-        if (c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true })) {
+        if (moveDown(c)) {
             if (n > 0) s.sel = (s.sel + 1) % n;
         }
-        if (c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true })) {
+        if (moveUp(c)) {
             if (n > 0) s.sel = (s.sel + n - 1) % n;
         }
         // ⌘1…⌘9: the row of that number, at once.
