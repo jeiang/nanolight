@@ -2,7 +2,7 @@
 
 <h1 align="center">Nanolight</h1>
 <p align="center"><b>A launcher for the Mac, Windows and Linux, drawn by <a href="https://github.com/justrach/nanoui">nanoui</a>.</b><br>
-Apps, math, Google, Grok, X and Raycast script commands: one keystroke away. Native Zig, no Electron, about 2 MB.</p>
+Apps, math, quicklinks (Google, Claude, Grok, X...) and Raycast script commands: one keystroke away. Native Zig, no Electron, about 2 MB.</p>
 
 <p align="center"><sub>Forked from <a href="https://github.com/justrach/nanolight">justrach/nanolight</a>, built on <a href="https://github.com/justrach/nanoui">nanoui</a>.</sub></p>
 
@@ -18,7 +18,7 @@ Apps, math, Google, Grok, X and Raycast script commands: one keystroke away. Nat
 - **Does math**: `2^10 * 3` answers 3,072 (and `0xC00`). Return copies it.
 - **Google suggestions**: up to four, under the apps, the words you add in bold. Nothing that reads as an address (a dot, a slash, an @) is sent.
 - **Results in the panel**: Return on a search shows Google's page in the panel itself. Esc goes back to the list, ⌘↩ opens it in your browser, ⌘[ goes back a page. Prefer the browser? Turn on **Open Searches in Browser** in Settings: Return opens your browser, and ⌘↩ shows the page in the panel.
-- **Ask Grok, search X**, a row away.
+- **Quicklinks**: web searches under the apps, from `[[quicklinks]]` in `config.toml` (`{argument}` is where what you typed goes, URL-escaped). The built-in ones are Google (the first row, a search for what you typed), DuckDuckGo (`ddg`), Claude, Grok and X; the first five are listed, and any others answer to their `keyword`. `ddg liquid glass` runs only DuckDuckGo. A URL without `{argument}` opens as it is; only `http` and `https` addresses are accepted. Google's suggestions stay with the quicklink whose address is Google's, and are not shown without one. Return, ⌘↩ and the in-panel page work for every quicklink.
 - **Raycast script commands** ([raycast/script-commands](https://github.com/raycast/script-commands), MIT): any script with `@raycast.*` comments, dropped in the Script Commands folder, is a row. Nanolight runs it itself: its arguments as a form, its output as it prints (`fullOutput`), its last line (`compact`), or nothing (`silent`).
 - **Settings in the panel**: ⌘, (Ctrl+, on a PC), the gear in the footer, or type "settings".
 - **⌘1–⌘9** run a row at once; ↑ ↓ and ⌃N ⌃P move.
@@ -31,7 +31,7 @@ Off until `[sync]` in `config.toml` names a server you run (`nanolight-server`, 
 
 - the key that opens Nanolight,
 - whether Google suggestions are on,
-- the quicklinks from the config (carried in the record; nothing lists them yet),
+- the quicklinks (the panel shows what the config or sync last set; the later change wins),
 - how often you open each app, so an empty panel suggests the same apps everywhere.
 
 Two computers merge rather than overwrite: the key, the suggestions setting and the quicklinks follow whichever computer changed them last, and each app keeps its higher count. A computer's first sync with a server keeps what the server already holds. Nothing else is sent: no queries, no history, no files. Settings and the menu bar icon's menu show `Sync: <host>, last synced <time>`, `Sync: error <reason>` or `Sync: off (set [sync] in config.toml)`. Nanolight syncs at launch, when the panel opens and the last sync is over five minutes old, and two seconds after a change.
@@ -101,7 +101,7 @@ url = ""                      # e.g. "http://100.x.y.z:8890"; empty = off
 token_file = ""               # file holding the bearer token (sops path under Nix)
 ```
 
-Today `hotkey`, `suggestions`, `open_searches_in_browser`, `show_in_menu_bar`, `[apps] extra_dirs`, `[script_commands] dirs` and `[sync]` take effect. `pop_to_root_seconds`, `[[quicklinks]]` and `[clipboard]` are read and checked but do nothing yet (the quicklinks only travel in the sync record). A key of the wrong type fails the file; an unknown key is logged and ignored. The parser (`src/toml.zig`) is TOML 1.0 without datetimes, and reads what Nix's `pkgs.formats.toml` writes.
+Today `hotkey`, `suggestions`, `open_searches_in_browser`, `show_in_menu_bar`, `[apps] extra_dirs`, `[script_commands] dirs` and `[sync]` take effect. `[[quicklinks]]` take effect too. `pop_to_root_seconds` and `[clipboard]` are read and checked but do nothing yet. A key of the wrong type fails the file; an unknown key is logged and ignored. The parser (`src/toml.zig`) is TOML 1.0 without datetimes, and reads what Nix's `pkgs.formats.toml` writes.
 
 When the file sets `hotkey`, the welcome skips its key and login steps.
 

@@ -63,6 +63,12 @@ pub const Probe = struct {
 /// The Mac's starters, which these tests' apps are named after.
 const mac_starters = [_][]const u8{ "Safari", "Notes", "Calendar", "System Settings", "Finder" };
 
+/// The selected row is the first quicklink: the search for what was typed.
+pub fn onFirstQuicklink(s: *const view.Nanolight) bool {
+    const r = s.res.rows[s.sel];
+    return r.kind == .quicklink and r.ql == 0;
+}
+
 pub fn press(t: *ui.Tester, ops: []const ui.TextOp) void {
     t.textOps(ops);
     t.settle(1);
@@ -129,13 +135,13 @@ test "the panel finds, moves, answers and hands off" {
     press(&t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("3072", t.clipboard.items);
 
-    // Anything else: Google, Grok, X.
+    // Anything else: the quicklinks, Google first.
     press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "liquid glass" } });
-    try std.testing.expect(t.containsText("Search X for"));
+    try std.testing.expect(t.containsText("Search Claude for"));
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     press(&t, &.{.{ .command = .insert_newline }});
-    try std.testing.expectEqualStrings("https://x.com/search?f=live&q=liquid+glass", probe.opened[0..probe.opened_len]);
+    try std.testing.expectEqualStrings("https://claude.ai/new?q=liquid+glass", probe.opened[0..probe.opened_len]);
 
     // Escape clears the query, then closes.
     probe.hidden = false;
@@ -207,18 +213,18 @@ test "Google's completions land below, and a search shows in the panel" {
     // Return would search what was typed. The selection, moved before
     // the answer comes, stays on its row, though the completions land
     // above it, a key under the search.
-    try std.testing.expectEqual(results.Kind.search_web, s.res.rows[s.sel].kind);
+    try std.testing.expect(onFirstQuicklink(&s));
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
-    try std.testing.expectEqual(results.Kind.search_x, s.res.rows[s.sel].kind);
+    try std.testing.expectEqual(@as(u16, 2), s.res.rows[s.sel].ql);
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid glass", "liquid glass apple" }) |w| said.push(w);
     s.answered("liquid gl", &said);
     t.settle(1);
-    try std.testing.expect(t.hasText("Google"));
+    try std.testing.expect(t.hasText("Search"));
     try std.testing.expect(t.hasText("liquid glass apple"));
     try std.testing.expectEqual(results.Kind.suggest, s.res.rows[1].kind);
-    try std.testing.expectEqual(results.Kind.search_x, s.res.rows[s.sel].kind);
+    try std.testing.expectEqual(@as(u16, 2), s.res.rows[s.sel].ql);
     // The first completion shows faintly in the field; Tab takes it.
     try std.testing.expect(t.hasText("ass"));
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.tab }));
@@ -228,7 +234,7 @@ test "Google's completions land below, and a search shows in the panel" {
     // Known at once this time, yet Return still searches what was typed,
     // not a completion nobody picked.
     try std.testing.expectEqual(results.Kind.suggest, s.res.rows[1].kind);
-    try std.testing.expectEqual(results.Kind.search_web, s.res.rows[s.sel].kind);
+    try std.testing.expect(onFirstQuicklink(&s));
     // ⌘2 is Google's first completion.
     try std.testing.expect(t.hasText(results.mod ++ "2"));
     // One more letter: the answer so far stands in, and nothing is asked
@@ -264,7 +270,7 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(t.hasText("Search Google for “pizzas”"));
 
     // ⌘↩ in the page, and on the row: the browser, and the panel hides.
-    while (s.res.rows[s.sel].kind != .search_web) _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    while (!onFirstQuicklink(&s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
     press(&t, &.{.{ .command = .insert_newline }});
     try std.testing.expect(web.page_len != null);
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
@@ -274,7 +280,7 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(web.page_len == null);
     web.probe = .{};
     t.settle(1);
-    while (s.res.rows[s.sel].kind != .search_web) _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    while (!onFirstQuicklink(&s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
     try std.testing.expectEqualStrings("https://www.google.com/search?q=pizzas", web.probe.opened[0..web.probe.opened_len]);
 }

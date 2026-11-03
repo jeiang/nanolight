@@ -9,7 +9,8 @@ const nanoui = @import("nanoui");
 const toml = @import("toml.zig");
 const shortcut = @import("shortcut.zig");
 
-pub const Quicklink = @import("settings.zig").Quicklink;
+const settings = @import("settings.zig");
+pub const Quicklink = settings.Quicklink;
 
 pub const Clipboard = struct {
     enabled: bool = true,
@@ -61,6 +62,8 @@ pub const suggest_key = "nanolight.suggest";
 pub const searches_out_key = "nanolight.searches_out";
 /// "0": no menu bar icon (issue #8).
 pub const menu_bar_key = "nanolight.menu_bar";
+/// The quicklinks in use, as JSON: the config's, or what sync last brought.
+pub const quicklinks_key = "nanolight.quicklinks";
 /// When this machine last changed its key or suggestions (settings.zig's `at`).
 pub const sync_at_key = "nanolight.sync.at";
 
@@ -182,6 +185,10 @@ const Reader = struct {
             const url = try r.get([]const u8, t, "quicklinks.", "url") orelse return r.bad("quicklinks.", "url", "set, as a string");
             if (name.len == 0 or url.len == 0) return r.bad("quicklinks.", "name and url", "not empty");
             r.unknown(t, "quicklinks.", &.{ "name", "url", "keyword" });
+            if (!settings.webUrl(url)) {
+                warn("nanolight: config: quicklink \"{s}\": only http and https addresses work; ignored", .{name});
+                continue;
+            }
             try out.append(r.a, .{ .name = name, .url = url, .keyword = try r.get([]const u8, t, "quicklinks.", "keyword") orelse "" });
         }
         return out.items;
@@ -230,8 +237,31 @@ fn seedBool(store: nanoui.kv.Store, gpa: std.mem.Allocator, key: []const u8, kv_
     return true;
 }
 
+fn seedQuicklinks(store: nanoui.kv.Store, gpa: std.mem.Allocator, list: []const Quicklink, synced: *bool) void {
+    if (list.len == 0) return forget(store, "quicklinks");
+    const json = std.json.Stringify.valueAlloc(gpa, list, .{}) catch return;
+    defer gpa.free(json);
+    if (!fresh(store, gpa, "quicklinks", json)) return;
+    store.set(quicklinks_key, json) catch {};
+    synced.* = true;
+}
+
+/// The quicklinks kept by the file or by sync; empty means the built-in ones.
+pub fn loadQuicklinks(arena: std.mem.Allocator, store: nanoui.kv.Store) []const Quicklink {
+    const text = (store.get(arena, quicklinks_key) catch return &.{}) orelse return &.{};
+    return std.json.parseFromSliceLeaky([]const Quicklink, arena, text, .{ .ignore_unknown_fields = true }) catch &.{};
+}
+
+/// Keeps `list` as the quicklinks in use; empty goes back to the built-in ones.
+pub fn saveQuicklinks(store: nanoui.kv.Store, gpa: std.mem.Allocator, list: []const Quicklink) void {
+    if (list.len == 0) return store.remove(quicklinks_key);
+    const json = std.json.Stringify.valueAlloc(gpa, list, .{}) catch return;
+    defer gpa.free(json);
+    store.set(quicklinks_key, json) catch {};
+}
+
 /// Applies the file's values that changed since they were last applied.
-/// A changed hotkey or suggestions counts as a local change at `now`, so
+/// A changed hotkey, suggestions or quicklinks list counts as a local change at `now`, so
 /// it syncs.
 pub fn seed(store: nanoui.kv.Store, gpa: std.mem.Allocator, c: Config, now: i64) void {
     var synced = false;
@@ -243,6 +273,7 @@ pub fn seed(store: nanoui.kv.Store, gpa: std.mem.Allocator, c: Config, now: i64)
             }
         } else warn("nanolight: config: hotkey \"{s}\" is not a shortcut this system can use; ignored", .{h});
     } else forget(store, "hotkey");
+    seedQuicklinks(store, gpa, c.quicklinks, &synced);
     if (seedBool(store, gpa, "suggestions", suggest_key, c.suggestions)) synced = true;
     _ = seedBool(store, gpa, "open_searches_in_browser", searches_out_key, c.open_searches_in_browser);
     _ = seedBool(store, gpa, "show_in_menu_bar", menu_bar_key, c.show_in_menu_bar);
@@ -448,4 +479,53 @@ test "a hotkey this system cannot use is ignored, and not recorded" {
     try testing.expect(!store.has("nanolight.hotkey"));
     try expectKv(store, sync_at_key, null);
     try expectKv(store, applied_prefix ++ "hotkey", null);
+}
+
+test "quicklinks: a changed list is a local change now, an unchanged one leaves the app's alone" {
+    var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
+    defer m.deinit();
+    const store = m.store();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ddg: []const Quicklink = &.{.{ .name = "DDG", .url = "https://duckduckgo.com/?q={argument}", .keyword = "ddg" }};
+    seed(store, testing.allocator, .{ .quicklinks = ddg }, 100);
+    try testing.expectEqualStrings("ddg", loadQuicklinks(a, store)[0].keyword);
+    try expectKv(store, sync_at_key, "100");
+
+    // Sync brought another list; the same file leaves it, and the time, alone.
+    const synced: []const Quicklink = &.{.{ .name = "Kagi", .url = "https://kagi.com/search?q={argument}" }};
+    saveQuicklinks(store, testing.allocator, synced);
+    try store.set(sync_at_key, "150");
+    seed(store, testing.allocator, .{ .quicklinks = ddg }, 200);
+    try testing.expectEqualStrings("Kagi", loadQuicklinks(a, store)[0].name);
+    try expectKv(store, sync_at_key, "150");
+
+    // An edited file wins again, as a change now.
+    const edited: []const Quicklink = &.{.{ .name = "Bing", .url = "https://bing.com/search?q={argument}" }};
+    seed(store, testing.allocator, .{ .quicklinks = edited }, 300);
+    try testing.expectEqualStrings("Bing", loadQuicklinks(a, store)[0].name);
+    try expectKv(store, sync_at_key, "300");
+
+    // No list in the file touches nothing; an empty saved list is the defaults.
+    seed(store, testing.allocator, .{}, 400);
+    try testing.expectEqual(@as(usize, 1), loadQuicklinks(a, store).len);
+    saveQuicklinks(store, testing.allocator, &.{});
+    try testing.expectEqual(@as(usize, 0), loadQuicklinks(a, store).len);
+}
+
+test "a quicklink that is not http or https is dropped, the rest stay" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const c = try parseOk(arena.allocator(),
+        \\[[quicklinks]]
+        \\name = "Local"
+        \\url = "file:///etc/passwd?{argument}"
+        \\[[quicklinks]]
+        \\name = "Ok"
+        \\url = "https://a.example/?q={argument}"
+        \\
+    );
+    try testing.expectEqual(@as(usize, 1), c.quicklinks.len);
+    try testing.expectEqualStrings("Ok", c.quicklinks[0].name);
 }

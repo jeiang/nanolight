@@ -2,7 +2,7 @@
 //! ⌘Space, or the key picked in its welcome (onboard.zig), or from its
 //! menu bar icon; finds apps as you type (initials
 //! too: "ss" is System Settings), answers math, and hands anything else to
-//! Grok, X or Google, with Google's completions of it (suggest.zig) and its
+//! your quicklinks (Google, Claude, Grok...), with Google's completions of it (suggest.zig) and its
 //! results in the panel (preview.zig). Its panel is the system's vibrancy
 //! (NSVisualEffectView, as launchers use), nanoui drawing on it.
 //! It lives in the menu bar: no Dock icon, nothing drawn while idle.
@@ -32,7 +32,8 @@ const ClickThrough = if (mac) @import("clickthrough.zig").ClickThrough else @imp
 const Recorder = if (mac) @import("recorder.zig").Recorder else @import("pc_stubs.zig").Recorder;
 const account = @import("account.zig");
 const rc = @import("script_live.zig");
-const Settings = @import("settings.zig").Settings;
+const settings_mod = @import("settings.zig");
+const Settings = settings_mod.Settings;
 const config = @import("config.zig");
 /// A Nix build: no updater and no login-item UI; the modules own both.
 const nix_managed = @import("build_options").nix_managed;
@@ -91,6 +92,10 @@ pub const Live = struct {
     env: ?*const std.process.Environ.Map = null,
     /// config.toml, as read at launch (strings live in main's arena).
     cfg: config.Config = .{},
+    /// The quicklinks from the config or sync, empty for the built-in ones
+    /// (`setQuicklinks`).
+    ql_custom: []const settings_mod.Quicklink = &.{},
+    ql_arena: ?*std.heap.ArenaAllocator = null,
     /// The next `hide` is skipped: a command just took the panel.
     keep_open: bool = false,
 
@@ -135,11 +140,45 @@ pub const Live = struct {
         for (ix.apps.items, ix.launches.items) |a, n| if (n > 0) list.append(arena, .{ .name = a.name, .path = a.path, .count = n }) catch break;
         var at: i64 = 0;
         if (l.kv.get(arena, sync_at_key) catch null) |v| at = std.fmt.parseInt(i64, v, 10) catch 0;
-        const name = arena.create([32]u8) catch return .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.cfg.quicklinks };
-        return .{ .hotkey = l.choice.name(name), .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.cfg.quicklinks };
+        const name = arena.create([32]u8) catch return .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.ql_custom };
+        return .{ .hotkey = l.choice.name(name), .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.ql_custom };
     }
 
-    /// The account's settings, merged: the key, the suggestions, the counts.
+    /// Lists `list` (those with an http or https address) in the panel, or
+    /// the built-in quicklinks when none. False when nothing changed.
+    fn setQuicklinks(l: *Live, list: []const settings_mod.Quicklink) bool {
+        const arena = l.app.gpa.create(std.heap.ArenaAllocator) catch return false;
+        arena.* = .init(l.app.gpa);
+        var keep: std.ArrayList(settings_mod.Quicklink) = .empty;
+        for (list) |q| {
+            if (!settings_mod.webUrl(q.url)) {
+                std.log.warn("nanolight: quicklink \"{s}\": only http and https addresses work; ignored", .{q.name});
+                continue;
+            }
+            const copy: settings_mod.Quicklink = .{
+                .name = arena.allocator().dupe(u8, q.name) catch break,
+                .url = arena.allocator().dupe(u8, q.url) catch break,
+                .keyword = arena.allocator().dupe(u8, q.keyword) catch break,
+            };
+            keep.append(arena.allocator(), copy) catch break;
+        }
+        if (settings_mod.sameQuicklinks(keep.items, l.ql_custom)) {
+            arena.deinit();
+            l.app.gpa.destroy(arena);
+            return false;
+        }
+        if (l.ql_arena) |old| {
+            old.deinit();
+            l.app.gpa.destroy(old);
+        }
+        l.ql_arena = arena;
+        l.ql_custom = keep.items;
+        l.s.quicklinks = if (keep.items.len > 0) keep.items else &settings_mod.default_quicklinks;
+        l.s.built = 1;
+        return true;
+    }
+
+    /// The account's settings, merged: the key, the suggestions, the quicklinks, the counts.
     fn applySynced(ctx: *anyopaque, st: Settings) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         var at: [24]u8 = undefined;
@@ -152,6 +191,7 @@ pub const Live = struct {
             l.s.suggest_on = st.suggest;
             l.kv.set(suggest_key, if (st.suggest) "1" else "0") catch {};
         }
+        if (l.setQuicklinks(st.quicklinks)) config.saveQuicklinks(l.kv, l.app.gpa, l.ql_custom);
         const ix = l.s.index;
         for (st.launches) |la| {
             const i = if (la.path.len > 0)
@@ -519,7 +559,12 @@ pub fn main(init: std.process.Init) !void {
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
     defer s.query.deinit();
     var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa), .cfg = cfg };
+    defer if (live.ql_arena) |a| {
+        a.deinit();
+        init.gpa.destroy(a);
+    };
     s.host = live.host();
+    if (!app.flags.hidden) _ = live.setQuicklinks(config.loadQuicklinks(cfg_arena.allocator(), kv));
     // Google's completions are on unless turned off in Settings.
     if (kv.get(init.gpa, suggest_key) catch null) |v| {
         defer init.gpa.free(v);

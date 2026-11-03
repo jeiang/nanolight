@@ -13,6 +13,7 @@ const text = @import("text.zig");
 const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Row = results.Row;
+const settings = @import("settings.zig");
 
 /// What the panel asks of whatever shows it (the window, or the film).
 pub const Host = struct {
@@ -91,7 +92,6 @@ pub const Nanolight = struct {
     copied_at: f64 = -10,
     kv: ?nanoui.kv.Store = null,
     spans: [results.max_rows][16]ui.Span = undefined,
-    url_buf: [1024]u8 = undefined,
     last_h: f32 = 0,
     /// The query as it was shown: selected, so no completion after it yet.
     revealed: u64 = 0,
@@ -101,6 +101,8 @@ pub const Nanolight = struct {
     onboard: ?*@import("onboard.zig").Onboard = null,
     /// Google's completions: whether to ask, those listed, the answers.
     suggest_on: bool = true,
+    /// The quicklinks listed under the apps (config.toml, or synced).
+    quicklinks: []const settings.Quicklink = &settings.default_quicklinks,
     web: suggest.List = .{},
     cache: suggest.Cache = .{},
     /// A search's page is in the panel, for the query as it was then.
@@ -253,7 +255,7 @@ pub const Nanolight = struct {
             .bare = true,
             .size = 21,
             .width = .fill,
-            .placeholder = "Search apps, do math, ask Grok…",
+            .placeholder = "Search apps, do math, search the web…",
             .placeholder_color = p.sub.alpha(0.75),
             .color = p.text,
         });
@@ -274,7 +276,7 @@ pub const Nanolight = struct {
             if (name.len <= q.len or !text.utf8StartsWithFold(name, q)) return "";
             return name[q.len..];
         }
-        if (r.kind != .search_web) return "";
+        if (r.kind != .quicklink or s.res.keyed != null or s.res.google != r.ql) return "";
         for (0..s.web.n) |i| {
             const w = s.web.get(i);
             if (w.len > q.len and text.utf8StartsWithFold(w, q)) return w[q.len..];
@@ -302,7 +304,8 @@ pub const Nanolight = struct {
         if (h == s.built) return;
         s.built = h;
         s.web.n = 0;
-        if (s.host) |host| if (host.suggest) |ask| if (s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null) {
+        const asks = results.google(s.quicklinks) != null and results.keyed(s.quicklinks, std.mem.trim(u8, q, " ")) == null;
+        if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null) {
             if (!s.cache.lookup(q, &s.web)) ask(host.ctx, q);
         };
         s.fill();
@@ -315,7 +318,7 @@ pub const Nanolight = struct {
         var sug: [results.max_apps]u32 = undefined;
         const ns = s.index.suggestions(&sug);
         var web: [suggest.max_rows][]const u8 = undefined;
-        s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web));
+        s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web), s.quicklinks);
     }
 
     /// Google's completions of `typed` (what `Host.suggest` asked): kept,
@@ -340,6 +343,7 @@ pub const Nanolight = struct {
         for (s.res.slice(), 0..) |now, i| {
             const same_row = now.kind == r.kind and switch (r.kind) {
                 .app => now.app == r.app,
+                .quicklink => now.ql == r.ql,
                 .suggest => suggest.same(s.web.get(now.web), was_text[0..was_len]),
                 else => true,
             };
@@ -412,18 +416,10 @@ pub const Nanolight = struct {
                 const w = s.web.get(r.web);
                 ui.richText(c, w, s.added(i, w, p), .{ .size = 13.5, .color = p.text.alpha(0.72), .truncate = .ellipsis });
             },
-            .ask_grok, .search_x, .search_web => {
-                const verb = switch (r.kind) {
-                    .ask_grok => "Ask Grok",
-                    .search_x => "Search X for",
-                    else => "Search Google for",
-                };
-                ui.textf(c, .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis }, "{s} “{s}”", .{ verb, std.mem.trim(u8, q, " ") });
-                ui.text(c, switch (r.kind) {
-                    .ask_grok => "grok.com",
-                    .search_x => "x.com · Latest",
-                    else => "google.com",
-                }, .{ .size = 12, .color = p.sub.alpha(0.8) });
+            .quicklink => {
+                const ql = s.quicklinks[r.ql];
+                ui.textf(c, .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis }, "Search {s} for “{s}”", .{ ql.name, s.res.argument(q) });
+                ui.text(c, results.host(ql.url), .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
         }
         ui.spacer(c);
@@ -451,14 +447,9 @@ pub const Nanolight = struct {
         const side: f32 = if (big) 34 else 26;
         const box = ui.div(c).size(side, side).rounded(if (big) 9 else 7).bg(p.tile).center();
         defer box.end();
-        if (r.kind == .search_x) {
-            ui.text(c, "𝕏", .{ .size = 15, .weight = .bold, .color = p.text });
-            return;
-        }
         ui.icon(c, switch (r.kind) {
             .calc => "plus.forwardslash.minus",
-            .ask_grok => "sparkles",
-            .search_web => "globe",
+            .quicklink => "globe",
             .suggest => "magnifyingglass",
             .settings => "gearshape",
             else => "app.dashed",
@@ -513,7 +504,11 @@ pub const Nanolight = struct {
             return;
         }
         if (s.res.n == 0) return;
-        ui.text(c, s.res.rows[@min(s.sel, s.res.n - 1)].kind.action(), .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
+        const sel = s.res.rows[@min(s.sel, s.res.n - 1)];
+        if (sel.kind == .quicklink)
+            ui.textf(c, .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85), .truncate = .ellipsis }, "Search {s}", .{s.quicklinks[sel.ql].name})
+        else
+            ui.text(c, sel.kind.action(), .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
         ui.kbd(c, "↩");
         ui.div(c).w(1).h(14).bg(p.hair).end();
         ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
@@ -536,14 +531,13 @@ pub const Nanolight = struct {
                 s.index.opened(r.app, s.kv);
                 s.go(s.index.apps.items[r.app].path);
             },
-            .ask_grok, .search_x => s.go(results.url(&s.url_buf, r.kind, s.query.text())),
-            .search_web => s.search(s.query.text(), !s.searches_out),
+            .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), !s.searches_out),
             .settings => s.openSettings(),
             .pane => s.go(@import("settings_panes.zig").urls[r.app]),
             .suggest => {
                 // Its words fill the field, as a search box's would.
                 s.query.set(s.web.get(r.web));
-                s.search(s.query.text(), !s.searches_out);
+                s.searchWith(s.res.google orelse return, s.query.text(), !s.searches_out);
             },
         }
     }
@@ -553,17 +547,18 @@ pub const Nanolight = struct {
         if (s.res.n == 0) return;
         const r = s.res.rows[@min(s.sel, s.res.n - 1)];
         switch (r.kind) {
-            .search_web => s.search(s.query.text(), s.searches_out),
-            .suggest => s.search(s.web.get(r.web), s.searches_out),
+            .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), s.searches_out),
+            .suggest => s.searchWith(s.res.google orelse return, s.web.get(r.web), s.searches_out),
             else => s.activate(c),
         }
     }
 
-    /// Google's page for `words`: in the panel when `in_panel` and the host
-    /// can show it there, else in the browser.
-    fn search(s: *Nanolight, words: []const u8, in_panel: bool) void {
+    /// Quicklink `ql`'s page for `words`: in the panel when `in_panel` and
+    /// the host can show it there, else in the browser.
+    fn searchWith(s: *Nanolight, ql: u16, words: []const u8, in_panel: bool) void {
         const h = s.host orelse return;
-        const u = results.url(&s.preview_buf, .search_web, words);
+        if (ql >= s.quicklinks.len) return;
+        const u = results.url(&s.preview_buf, s.quicklinks[ql].url, words);
         const show = (if (in_panel) h.preview else null) orelse return s.go(u);
         s.preview_url = u;
         s.previewing = true;

@@ -22,6 +22,24 @@ pub const Quicklink = struct {
     keyword: []const u8 = "",
 };
 
+/// What Nanolight searches with when no quicklinks are set; the first is
+/// the search for what was typed, and Google's suggestions go with Google.
+pub const default_quicklinks = [_]Quicklink{
+    .{ .name = "Google", .url = "https://www.google.com/search?q={argument}" },
+    .{ .name = "DuckDuckGo", .url = "https://duckduckgo.com/?q={argument}", .keyword = "ddg" },
+    .{ .name = "Claude", .url = "https://claude.ai/new?q={argument}" },
+    .{ .name = "Grok", .url = "https://grok.com/?q={argument}" },
+    .{ .name = "X", .url = "https://x.com/search?f=live&q={argument}" },
+};
+
+/// A quicklink opens in a browser or the panel: http and https only.
+pub fn webUrl(url: []const u8) bool {
+    inline for (.{ "http://", "https://" }) |scheme| {
+        if (url.len > scheme.len and std.ascii.eqlIgnoreCase(url[0..scheme.len], scheme)) return true;
+    }
+    return false;
+}
+
 const max_quicklinks = 64;
 const max_quicklink_field = 512;
 
@@ -90,8 +108,12 @@ pub fn merge(arena: std.mem.Allocator, local: Settings, remote: Settings, prefer
 pub fn same(a: Settings, b: Settings) bool {
     if (!std.mem.eql(u8, a.hotkey, b.hotkey) or a.suggest != b.suggest or a.at != b.at or a.launches.len != b.launches.len) return false;
     for (a.launches, b.launches) |x, y| if (x.count != y.count or !launchSame(x, y)) return false;
-    if (a.quicklinks.len != b.quicklinks.len) return false;
-    for (a.quicklinks, b.quicklinks) |x, y| {
+    return sameQuicklinks(a.quicklinks, b.quicklinks);
+}
+
+pub fn sameQuicklinks(a: []const Quicklink, b: []const Quicklink) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
         if (!std.mem.eql(u8, x.name, y.name) or !std.mem.eql(u8, x.url, y.url) or !std.mem.eql(u8, x.keyword, y.keyword)) return false;
     }
     return true;
@@ -156,4 +178,13 @@ test "a v1 record decodes with no quicklinks, and the quicklinks go with the lat
     try std.testing.expectEqual(@as(usize, 1), (try merge(a, newer, old, false)).quicklinks.len);
     try std.testing.expect(!same(old, newer));
     try std.testing.expectEqual(@as(u8, 2), (try merge(a, old, old, false)).v);
+}
+
+test "only http and https quicklinks are web addresses" {
+    try std.testing.expect(webUrl("https://x.com/?q={argument}"));
+    try std.testing.expect(webUrl("HTTP://a/b"));
+    try std.testing.expect(!webUrl("file:///etc/passwd"));
+    try std.testing.expect(!webUrl("javascript:alert(1)"));
+    try std.testing.expect(!webUrl("https://"));
+    for (default_quicklinks) |q| try std.testing.expect(webUrl(q.url));
 }

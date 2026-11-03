@@ -8,7 +8,7 @@ const view = @import("view.zig");
 const settings_view = @import("settings_view.zig");
 const tests = @import("tests.zig");
 const mac = @import("builtin").os.tag == .macos;
-const placeholder = "Search apps, do math, ask Grok…";
+const placeholder = "Search apps, do math, search the web…";
 
 /// Where the field's placeholder is in the first frame after the panel
 /// shows, and once it has settled.
@@ -42,7 +42,7 @@ test "on the Mac the panel's first frame is where it settles (issue #9)" {
 
 fn findRow(t: *ui.Tester, s: *view.Nanolight, words: []const u8) void {
     tests.press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = words } });
-    while (s.res.rows[s.sel].kind != .search_web) _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    while (!tests.onFirstQuicklink(s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
 }
 
 test "searches can open in the browser, ⌘↩ showing them in the panel (issue #10)" {

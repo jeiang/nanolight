@@ -34,7 +34,7 @@ pub const Hooks = struct {
 };
 
 const Example = struct { q: []const u8, what: []const u8, icon: []const u8 };
-/// An app every machine of the kind has, math, and words for Grok or X;
+/// An app every machine of the kind has, math, and words for a quicklink;
 /// icons nanoui draws there (SF Symbols on the Mac, its own set elsewhere).
 const examples = [_]Example{
     switch (@import("builtin").os.tag) {
@@ -43,7 +43,7 @@ const examples = [_]Example{
         else => .{ .q = "term", .what = "Open a terminal", .icon = "terminal" },
     },
     .{ .q = "2^10 * 3", .what = "Do math", .icon = if (mac) "plus.forwardslash.minus" else "plus" },
-    .{ .q = "liquid glass", .what = "Ask Grok or search X", .icon = "sparkles" },
+    .{ .q = "liquid glass", .what = "Search the web", .icon = "sparkles" },
 };
 
 pub const Onboard = struct {
@@ -130,7 +130,7 @@ pub const Onboard = struct {
             const t = ui.div(c).column().gap(4);
             defer t.end();
             ui.text(c, "Welcome to Nanolight", .{ .size = 22, .weight = .semibold, .color = p.text, .tracking = -0.3 });
-            ui.text(c, "Apps, math, Grok and X — one keystroke away.", .{ .size = 13.5, .color = p.sub });
+            ui.text(c, "Apps, math and quicklinks — one keystroke away.", .{ .size = 13.5, .color = p.sub });
         }
         ui.div(c).wFull().h(1).bg(p.hair).end();
         const body = ui.div(c).column().wFull().px(28).pt(18).gap(12);

@@ -133,7 +133,7 @@ pub const Stage = struct {
         defer t.end();
         view.appIcon(c, 96);
         ui.text(c, "Nanolight", .{ .size = 66, .weight = .bold, .color = .white, .tracking = -1.2 });
-        ui.text(c, "Every app, math, Grok and X — one keystroke away.", .{ .size = 23, .weight = .medium, .color = ui.Color.white.alpha(0.88), .wrap = true, .line_height = 30 });
+        ui.text(c, "Every app, math and quicklink — one keystroke away.", .{ .size = 23, .weight = .medium, .color = ui.Color.white.alpha(0.88), .wrap = true, .line_height = 30 });
         const k = ui.div(c).row().gap(10).pt(8).itemsCenter();
         defer k.end();
         {

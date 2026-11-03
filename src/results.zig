@@ -1,9 +1,10 @@
 //! What the panel lists for a query, in order: the answer when it is math,
-//! the apps that match it (or, with no query, suggestions), then Google:
-//! a search for exactly what is typed, first, and Google's completions of
-//! it under that, a key or two away; last, the query asked of Grok or
-//! searched on X. With no app or answer, Return searches what was typed
-//! (as an address bar's does). Completions land a moment after the rest;
+//! the apps that match it (or, with no query, suggestions), then the
+//! quicklinks (settings.zig, `[[quicklinks]]`): the first is a search for
+//! exactly what is typed, and Google's completions of it go under the
+//! quicklink whose address is Google's, a key or two away. `<keyword> words`
+//! runs only that quicklink. With no app or answer, Return searches what
+//! was typed (as an address bar's does). Completions land a moment after the rest;
 //! the panel keeps the selection on the row it was on (`Nanolight.answered`).
 const std = @import("std");
 const search = @import("search.zig");
@@ -11,6 +12,7 @@ const calc = @import("calc.zig");
 const panes = @import("settings_panes.zig");
 const mac = @import("builtin").os.tag == .macos;
 const Index = @import("apps.zig").Index;
+pub const Quicklink = @import("settings.zig").Quicklink;
 
 /// The key held for the panel's shortcuts (⌘1, ⌘↩, ⌘,): Ctrl on a PC.
 pub const mod = if (mac) "⌘" else "Ctrl+";
@@ -20,9 +22,8 @@ pub const machine = if (mac) "Mac" else "PC";
 pub const Kind = enum {
     calc,
     app,
-    ask_grok,
-    search_x,
-    search_web,
+    /// A quicklink (`Row.ql`).
+    quicklink,
     /// One of Google's completions (`Row.web`).
     suggest,
     /// Nanolight's own Settings, listed when the query asks for them.
@@ -37,7 +38,7 @@ pub const Kind = enum {
             .app => "Application",
             .settings => "Nanolight",
             .pane => "System Settings",
-            .ask_grok, .search_x, .search_web, .suggest => "Web",
+            .quicklink, .suggest => "Web",
         };
     }
 
@@ -48,9 +49,8 @@ pub const Kind = enum {
             .app => "Open Application",
             .settings => "Open Settings",
             .pane => "Open in System Settings",
-            .ask_grok => "Ask Grok",
-            .search_x => "Search X",
-            .search_web, .suggest => "Search Google",
+            .quicklink => "Search",
+            .suggest => "Search Google",
         };
     }
 
@@ -60,8 +60,7 @@ pub const Kind = enum {
             .app => if (suggested) "Suggestions" else "Applications",
             .settings => "Nanolight",
             .pane => "System Settings",
-            .search_web, .suggest => "Google",
-            .ask_grok, .search_x => "Ask & Search",
+            .quicklink, .suggest => unreachable,
         };
     }
 };
@@ -72,6 +71,8 @@ pub const Row = struct {
     app: u32 = 0,
     /// Which of the completions (`.suggest`).
     web: u8 = 0,
+    /// Which quicklink (`.quicklink`).
+    ql: u16 = 0,
     /// Which of its name's bytes the query matched.
     match: search.Match = .{ .score = 0 },
 };
@@ -81,10 +82,42 @@ pub const max_apps = 6;
 pub const max_panes = 3;
 /// Google's completions fill what room is left, up to four.
 pub const max_web = 4;
-/// Every app and the three web rows leave room for three completions.
-pub const max_rows = max_apps + 3 + 3;
-/// The web rows that always follow the apps: Google, Grok, X.
-const handoffs = 3;
+/// The quicklinks listed under the apps; later ones answer to their keyword.
+pub const max_quicklink_rows = 5;
+/// Every app and the quicklink rows leave room for three completions.
+pub const max_rows = max_apps + max_quicklink_rows + 3;
+
+/// The quicklink a query addresses by keyword, and where its words start.
+pub const Keyed = struct { ql: u16, arg: usize };
+
+/// `<keyword> words`, the keyword any case; `query` is trimmed.
+pub fn keyed(ql: []const Quicklink, query: []const u8) ?Keyed {
+    for (ql[0..@min(ql.len, std.math.maxInt(u16))], 0..) |q, i| {
+        const k = q.keyword;
+        if (k.len == 0 or query.len <= k.len or query[k.len] != ' ' or !std.ascii.eqlIgnoreCase(query[0..k.len], k)) continue;
+        const rest = std.mem.trimStart(u8, query[k.len..], " ");
+        return .{ .ql = @intCast(i), .arg = query.len - rest.len };
+    }
+    return null;
+}
+
+/// The host of an address: "www.google.com" of "https://www.google.com/search?q=".
+pub fn host(address: []const u8) []const u8 {
+    const rest = if (std.mem.indexOf(u8, address, "://")) |i| address[i + 3 ..] else address;
+    const end = std.mem.indexOfAny(u8, rest, "/?#:") orelse rest.len;
+    return rest[0..end];
+}
+
+fn isGoogle(address: []const u8) bool {
+    const h = host(address);
+    return std.ascii.eqlIgnoreCase(h, "google.com") or (h.len > 11 and std.ascii.eqlIgnoreCase(h[h.len - 11 ..], ".google.com"));
+}
+
+/// The listed quicklink whose address is Google's: the one its completions go with.
+pub fn google(ql: []const Quicklink) ?u16 {
+    for (ql[0..@min(ql.len, max_quicklink_rows)], 0..) |q, i| if (isGoogle(q.url)) return @intCast(i);
+    return null;
+}
 
 pub const Results = struct {
     rows: [max_rows]Row = undefined,
@@ -97,17 +130,29 @@ pub const Results = struct {
     /// A whole answer in hexadecimal too ("0xC00"), else empty.
     hex_buf: [24]u8 = undefined,
     hex: []const u8 = "",
+    /// The quicklink holding Google's completions, when listed.
+    google: ?u16 = null,
+    /// The query went to one quicklink by its keyword.
+    keyed: ?Keyed = null,
+
+    /// What a quicklink row searches for: the words, past any keyword.
+    pub fn argument(r: *const Results, query: []const u8) []const u8 {
+        const q = std.mem.trim(u8, query, " ");
+        return if (r.keyed) |k| q[@min(k.arg, q.len)..] else q;
+    }
 
     pub fn slice(r: *const Results) []const Row {
         return r.rows[0..r.n];
     }
 
     /// Lists what `query` finds among `names` (with how often each was
-    /// opened, `boost`) and Google's completions of it (`web`), or
-    /// `suggestions` when the query is empty.
-    pub fn build(r: *Results, query_in: []const u8, ix: *const Index, suggestions: []const u32, web: []const []const u8) void {
+    /// opened, `boost`), the quicklinks `ql`, and Google's completions of it
+    /// (`web`), or `suggestions` when the query is empty.
+    pub fn build(r: *Results, query_in: []const u8, ix: *const Index, suggestions: []const u32, web: []const []const u8, ql: []const Quicklink) void {
         const boost = ix.launches.items;
         r.n = 0;
+        r.google = null;
+        r.keyed = null;
         const query = std.mem.trim(u8, query_in, " ");
         r.suggested = query.len == 0;
         if (query.len == 0) {
@@ -135,13 +180,21 @@ pub const Results = struct {
         var pane_rows: [max_panes]search.Ranked = undefined;
         const np = if (isSettings(query)) 0 else panes.rank(query, &pane_rows);
         for (pane_rows[0..np]) |x| r.push(.{ .kind = .pane, .app = x.index, .match = x.match });
-        // The search for what was typed, its completions (as many as leave
-        // room for the rest), then Grok and X.
-        const room = max_rows - r.n - handoffs - @intFromBool(np > 0);
-        r.push(.{ .kind = .search_web });
-        for (0..@min(web.len, max_web, room)) |i| r.push(.{ .kind = .suggest, .web = @intCast(i) });
-        r.push(.{ .kind = .ask_grok });
-        r.push(.{ .kind = .search_x });
+        // A keyword sends the rest of the query to its quicklink alone.
+        if (keyed(ql, query)) |k| {
+            r.keyed = k;
+            r.push(.{ .kind = .quicklink, .ql = k.ql });
+            return;
+        }
+        // The quicklinks, the first a search for what was typed, Google's
+        // completions (as many as leave room for the rest) under Google's.
+        const shown = @min(ql.len, max_quicklink_rows);
+        const room = max_rows -| r.n -| shown -| @intFromBool(np > 0);
+        r.google = google(ql);
+        for (0..shown) |i| {
+            r.push(.{ .kind = .quicklink, .ql = @intCast(i) });
+            if (r.google == @as(u16, @intCast(i))) for (0..@min(web.len, max_web, room)) |j| r.push(.{ .kind = .suggest, .web = @intCast(j) });
+        }
     }
 
     /// "settings" and "preferences", the words people type for this.
@@ -161,24 +214,33 @@ pub const Results = struct {
 
     /// The header above row `i`, if a section starts there.
     pub fn section(r: *const Results, i: usize) ?[]const u8 {
-        const k = r.rows[i].kind;
-        const name = k.section(r.suggested);
-        if (i > 0 and std.mem.eql(u8, r.rows[i - 1].kind.section(r.suggested), name)) return null;
+        const name = r.sectionName(i);
+        if (i > 0 and std.mem.eql(u8, r.sectionName(i - 1), name)) return null;
         return name;
+    }
+
+    /// A completion sits in its quicklink's section.
+    fn sectionName(r: *const Results, i: usize) []const u8 {
+        var j = i;
+        while (j > 0 and r.rows[j].kind == .suggest) j -= 1;
+        const row = r.rows[j];
+        if (row.kind == .quicklink) return if (row.ql == 0) "Search" else "Quicklinks";
+        return row.kind.section(r.suggested);
     }
 };
 
-/// The address a web row opens for `query`.
-pub fn url(buf: []u8, kind: Kind, query: []const u8) []const u8 {
-    const base = switch (kind) {
-        .ask_grok => "https://grok.com/?q=",
-        .search_x => "https://x.com/search?f=live&q=",
-        .search_web, .suggest => "https://www.google.com/search?q=",
-        .calc, .app, .settings, .pane => return "",
-    };
+/// The address `template` opens for `argument`: each `{argument}` is
+/// replaced by it, escaped; a template without one opens as it is.
+pub fn url(buf: []u8, template: []const u8, argument: []const u8) []const u8 {
+    const mark = "{argument}";
     var w: std.Io.Writer = .fixed(buf);
-    w.writeAll(base) catch return "";
-    escape(&w, query);
+    var rest = template;
+    while (std.mem.indexOf(u8, rest, mark)) |i| {
+        w.writeAll(rest[0..i]) catch return "";
+        escape(&w, argument);
+        rest = rest[i + mark.len ..];
+    }
+    w.writeAll(rest) catch return "";
     return w.buffered();
 }
 
@@ -203,60 +265,108 @@ fn testIndex(a: std.mem.Allocator, names: []const []const u8) !Index {
     return ix;
 }
 
-test "math first, then apps; ask and search only without an answer" {
+const defaults = &@import("settings.zig").default_quicklinks;
+
+test "math first, then apps; quicklinks only without an answer" {
     const t = std.testing;
     var ix = try testIndex(t.allocator, &.{ "Safari", "System Settings", "Calculator" });
     defer ix.deinit();
     var r: Results = .{};
-    r.build("saf", &ix, &.{}, &.{});
+    r.build("saf", &ix, &.{}, &.{}, defaults);
     try t.expectEqual(Kind.app, r.rows[0].kind);
     try t.expectEqual(@as(u32, 0), r.rows[0].app);
-    try t.expectEqual(Kind.search_web, r.rows[r.n - 3].kind);
+    try t.expectEqual(Kind.quicklink, r.rows[1].kind);
+    try t.expectEqual(@as(u16, 0), r.rows[1].ql);
+    try t.expectEqual(@as(usize, 6), r.n);
     try t.expectEqualStrings("Applications", r.section(0).?);
-    try t.expectEqualStrings("Google", r.section(1).?);
-    try t.expectEqualStrings("Ask & Search", r.section(2).?);
+    try t.expectEqualStrings("Search", r.section(1).?);
+    try t.expectEqualStrings("Quicklinks", r.section(2).?);
     try t.expect(r.section(3) == null);
-    r.build("2^10 * 3", &ix, &.{}, &.{"ignored"});
+    r.build("2^10 * 3", &ix, &.{}, &.{"ignored"}, defaults);
     try t.expectEqual(Kind.calc, r.rows[0].kind);
     try t.expectEqualStrings("3,072", r.answer);
     try t.expectEqualStrings("0xC00", r.hex);
     try t.expectEqual(@as(usize, 1), r.n);
-    r.build("", &ix, &.{ 2, 0 }, &.{});
+    r.build("", &ix, &.{ 2, 0 }, &.{}, defaults);
     try t.expectEqual(@as(usize, 2), r.n);
     try t.expectEqualStrings("Suggestions", r.section(0).?);
-    r.build("liquid glass", &ix, &.{}, &.{});
-    try t.expectEqual(@as(usize, 3), r.n);
-    // No app: the search for what was typed comes first.
-    try t.expectEqual(Kind.search_web, r.rows[0].kind);
-    try t.expectEqualStrings("Google", r.section(0).?);
-    try t.expectEqualStrings("Ask & Search", r.section(1).?);
-    // Completions under it, in the same section, then Grok and X.
-    r.build("liquid gl", &ix, &.{}, &.{ "liquid glass", "liquid glue" });
+    r.build("liquid glass", &ix, &.{}, &.{}, defaults);
     try t.expectEqual(@as(usize, 5), r.n);
-    try t.expectEqual(Kind.search_web, r.rows[0].kind);
+    // No app: the search for what was typed comes first.
+    try t.expectEqual(Kind.quicklink, r.rows[0].kind);
+    try t.expectEqualStrings("Search", r.section(0).?);
+    try t.expectEqualStrings("Quicklinks", r.section(1).?);
+    // Completions under Google, in its section, then the other quicklinks.
+    r.build("liquid gl", &ix, &.{}, &.{ "liquid glass", "liquid glue" }, defaults);
+    try t.expectEqual(@as(usize, 7), r.n);
+    try t.expectEqual(Kind.quicklink, r.rows[0].kind);
     try t.expectEqual(Kind.suggest, r.rows[1].kind);
     try t.expectEqual(@as(u8, 1), r.rows[2].web);
-    try t.expectEqual(Kind.ask_grok, r.rows[3].kind);
+    try t.expectEqual(@as(u16, 1), r.rows[3].ql);
     try t.expect(r.section(1) == null and r.section(2) == null);
-    try t.expectEqualStrings("Ask & Search", r.section(3).?);
+    try t.expectEqualStrings("Quicklinks", r.section(3).?);
     // "settings": System Settings first, Nanolight's own a row under it.
-    r.build("settings", &ix, &.{}, &.{});
+    r.build("settings", &ix, &.{}, &.{}, defaults);
     try t.expectEqual(Kind.app, r.rows[0].kind);
     try t.expectEqual(@as(u32, 1), r.rows[0].app);
     try t.expectEqual(Kind.settings, r.rows[1].kind);
-    // A full list of apps still ends with every handoff.
+    // A full list of apps still ends with every quicklink.
     var many_ix = try testIndex(t.allocator, &.{ "Safari", "Mail", "Maps", "Pages", "Calendar", "Calculator", "FaceTime" });
     defer many_ix.deinit();
-    r.build("a", &many_ix, &.{}, &.{ "a1", "a2", "a3", "a4" });
+    r.build("a", &many_ix, &.{}, &.{ "a1", "a2", "a3", "a4" }, defaults);
     try t.expectEqual(max_rows, r.n);
-    try t.expectEqual(Kind.search_web, r.rows[max_apps].kind);
+    try t.expectEqual(Kind.quicklink, r.rows[max_apps].kind);
     try t.expectEqual(Kind.suggest, r.rows[max_apps + 1].kind);
-    try t.expectEqual(Kind.search_x, r.rows[max_rows - 1].kind);
+    try t.expectEqual(Kind.quicklink, r.rows[max_rows - 1].kind);
+    try t.expectEqual(@as(u16, 4), r.rows[max_rows - 1].ql);
+}
+
+test "a keyword sends the rest of the query to that quicklink alone" {
+    const t = std.testing;
+    var ix = try testIndex(t.allocator, &.{"Safari"});
+    defer ix.deinit();
+    var r: Results = .{};
+    r.build("DDG  zig lang", &ix, &.{}, &.{"ignored"}, defaults);
+    try t.expectEqual(@as(usize, 1), r.n);
+    try t.expectEqual(Kind.quicklink, r.rows[0].kind);
+    try t.expectEqual(@as(u16, 1), r.rows[0].ql);
+    try t.expectEqualStrings("zig lang", r.argument(" DDG  zig lang "));
+    // The keyword alone, or a longer word, is an ordinary query.
+    r.build("ddg", &ix, &.{}, &.{}, defaults);
+    try t.expect(r.keyed == null and r.n == 5);
+    r.build("ddgs zig", &ix, &.{}, &.{}, defaults);
+    try t.expect(r.keyed == null);
+    try t.expectEqualStrings("ddgs zig", r.argument("ddgs zig"));
+}
+
+test "Google's completions go with the quicklink that is Google, wherever it is" {
+    const t = std.testing;
+    var ix = try testIndex(t.allocator, &.{});
+    defer ix.deinit();
+    var r: Results = .{};
+    const ql: []const Quicklink = &.{
+        .{ .name = "Duck", .url = "https://duckduckgo.com/?q={argument}" },
+        .{ .name = "G", .url = "https://www.google.co.uk.example.com/?q={argument}" },
+        .{ .name = "Web", .url = "https://WWW.Google.com/search?q={argument}" },
+    };
+    r.build("pizza", &ix, &.{}, &.{ "pizza near me", "pizza hut" }, ql);
+    try t.expectEqual(@as(?u16, 2), r.google);
+    try t.expectEqual(Kind.suggest, r.rows[3].kind);
+    try t.expectEqual(@as(usize, 5), r.n);
+    try t.expectEqualStrings("Quicklinks", r.section(3) orelse "Quicklinks");
+    // Without Google, none are listed.
+    r.build("pizza", &ix, &.{}, &.{"pizza near me"}, ql[0..2]);
+    try t.expect(r.google == null);
+    try t.expectEqual(@as(usize, 2), r.n);
 }
 
 test "queries are escaped into the address" {
     var buf: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("https://x.com/search?f=live&q=liquid+glass+%26+UI", url(&buf, .search_x, " liquid glass & UI "));
+    try std.testing.expectEqualStrings("https://x.com/search?f=live&q=liquid+glass+%26+UI", url(&buf, "https://x.com/search?f=live&q={argument}", " liquid glass & UI "));
+    try std.testing.expectEqualStrings("https://a/zig/zig", url(&buf, "https://a/{argument}/{argument}", "zig"));
+    try std.testing.expectEqualStrings("https://example.com/", url(&buf, "https://example.com/", "ignored"));
+    var tiny: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("", url(&tiny, "https://x.com/?q={argument}", "q"));
 }
 
 test "System Settings' panes come under the apps and keep the panel's height (#12)" {
@@ -265,7 +375,7 @@ test "System Settings' panes come under the apps and keep the panel's height (#1
     var ix = try testIndex(t.allocator, &.{ "Safari", "System Settings", "Calculator" });
     defer ix.deinit();
     var r: Results = .{};
-    r.build("login items", &ix, &.{}, &.{ "login items mac", "login items windows", "login items iphone" });
+    r.build("login items", &ix, &.{}, &.{ "login items mac", "login items windows", "login items iphone" }, defaults);
     try t.expectEqual(Kind.pane, r.rows[0].kind);
     try t.expectEqualStrings("System Settings", r.section(0).?);
     try t.expectEqualStrings("Login Items & Extensions", panes.all[r.rows[0].app].name);
@@ -273,9 +383,9 @@ test "System Settings' panes come under the apps and keep the panel's height (#1
     try t.expect(r.n <= max_rows - 1);
     // "settings" is Nanolight's own Settings and System Settings the app,
     // not every pane with "settings" in a word for it.
-    r.build("settings", &ix, &.{}, &.{});
+    r.build("settings", &ix, &.{}, &.{}, defaults);
     for (r.slice()) |row| try t.expect(row.kind != .pane);
     // Math lists no panes.
-    r.build("2+2", &ix, &.{}, &.{});
+    r.build("2+2", &ix, &.{}, &.{}, defaults);
     try t.expectEqual(@as(usize, 1), r.n);
 }
