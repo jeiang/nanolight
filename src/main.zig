@@ -522,8 +522,9 @@ pub fn main(init: std.process.Init) !void {
     // A headless run is no one's: neither their config nor their settings.
     var cfg_arena: std.heap.ArenaAllocator = .init(init.gpa);
     defer cfg_arena.deinit();
-    const cfg: config.Config = if (app.flags.hidden) .{} else config.load(cfg_arena.allocator(), init.io, init.environ_map);
-    if (!app.flags.hidden) config.seed(kv, init.gpa, cfg, account.now());
+    const loaded: ?config.Config = if (app.flags.hidden) null else config.load(cfg_arena.allocator(), init.io, init.environ_map);
+    const cfg: config.Config = loaded orelse .{};
+    if (loaded) |c| config.seed(kv, init.gpa, c, account.now());
     // The key is the config's or the Nix module's: the welcome does not ask.
     var o: Onboard = .{ .skip_key = nix_managed or cfg.hotkey != null };
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };

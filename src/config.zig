@@ -72,20 +72,23 @@ pub const sync_at_key = "nanolight.sync.at";
 const applied_prefix = "nanolight.config.";
 
 /// Reads the file at `NANOLIGHT_CONFIG`, else `<data dir>/config.toml`. Strings live as long as `arena`.
-pub fn load(arena: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) Config {
+/// A missing file is the defaults; a file that cannot be read or is invalid is null,
+/// so the caller does not seed it.
+pub fn load(arena: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) ?Config {
     const path = env.get("NANOLIGHT_CONFIG") orelse defaultPath(arena) orelse return .{};
     const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch |e| {
-        if (e != error.FileNotFound) std.log.warn("nanolight: {s}: {t}; using the defaults", .{ path, e });
-        return .{};
+        if (e == error.FileNotFound) return .{};
+        std.log.warn("nanolight: {s}: {t}; using the defaults", .{ path, e });
+        return null;
     };
     var problem: Problem = .{};
     return parse(arena, text, &problem) catch |e| {
-        if (e == error.OutOfMemory) return .{};
+        if (e == error.OutOfMemory) return null;
         if (problem.line > 0)
             std.log.warn("nanolight: {s}:{d}: {s}; using the defaults", .{ path, problem.line, problem.msg })
         else
             std.log.warn("nanolight: {s}: {s}; using the defaults", .{ path, problem.msg });
-        return .{};
+        return null;
     };
 }
 
