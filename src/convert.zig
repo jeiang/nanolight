@@ -326,10 +326,19 @@ pub fn rateLine(buf: []u8, m: Money) []const u8 {
     return std.fmt.bufPrint(buf, "1 {s} = {s} {s} · {s}", .{ m.from, formatRate(&rb, m.rate), m.to, m.date }) catch "";
 }
 
+/// Six significant digits, "9.09091e-13": fixed decimals would print 0.
+fn scientific(buf: []u8, v: f64) []const u8 {
+    var tmp: [40]u8 = undefined;
+    const s = std.fmt.bufPrint(&tmp, "{e:.5}", .{v}) catch return "";
+    const at = std.mem.indexOfScalar(u8, s, 'e') orelse return s;
+    const m = std.mem.trimEnd(u8, std.mem.trimEnd(u8, s[0..at], "0"), ".");
+    return std.fmt.bufPrint(buf, "{s}{s}", .{ m, s[at..] }) catch "";
+}
+
 /// The unit answer as the row shows it, and as Return copies it.
 pub fn formatUnit(buf: []u8, a: UnitAnswer, grouped: bool) []const u8 {
     var nb: [64]u8 = undefined;
-    const n = calc.format(&nb, a.value, grouped);
+    const n = if (a.value != 0 and @abs(a.value) < 1e-4) scientific(&nb, a.value) else calc.format(&nb, a.value, grouped);
     return std.fmt.bufPrint(buf, "{s} {s}", .{ n, a.to }) catch "";
 }
 
@@ -468,6 +477,13 @@ test "currencies cross through the dollar" {
     try testing.expect(answer("10 foo to bar", &r) == null);
     try testing.expect(answer("100 usd to ttd", null).? == .pending);
     try testing.expect(answer("100 usd to km", null) == null);
+}
+
+test "tiny unit results keep their digits" {
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("1e-12 km", formatUnit(&buf, answer("1 nm to km", null).?.unit, true));
+    try testing.expectEqualStrings("9.09495e-13 TiB", formatUnit(&buf, answer("1 b to tib", null).?.unit, true));
+    try testing.expectEqualStrings("0.5 km", formatUnit(&buf, answer("500 m to km", null).?.unit, true));
 }
 
 test "money and rates read as people write them" {

@@ -298,6 +298,7 @@ pub const Live = struct {
     fn needRates(ctx: *anyopaque) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         const gpa = l.app.gpa;
+        var loaded = false;
         if (!l.rates_cache_read) {
             l.rates_cache_read = true;
             if (l.kv.get(gpa, rates_at_key) catch null) |v| {
@@ -308,10 +309,14 @@ pub const Live = struct {
                 defer gpa.free(path);
                 if (std.Io.Dir.cwd().readFileAlloc(l.app.io, path, gpa, .limited(convert.max_bytes)) catch null) |body| {
                     defer gpa.free(body);
-                    if (convert.Rates.parse(gpa, body)) |r| l.useRates(r);
+                    if (convert.Rates.parse(gpa, body)) |r| {
+                        l.useRates(r);
+                        loaded = true;
+                    }
                 }
             }
         }
+        if (loaded) l.s.ratesLanded();
         if (l.rates_busy or !convert.due(l.rates != null, l.rates_at, l.rates_tried, account.now())) return;
         l.rates_busy = true;
         l.rates_tried = account.now();

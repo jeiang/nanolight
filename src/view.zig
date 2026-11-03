@@ -353,7 +353,7 @@ pub const Nanolight = struct {
         s.built = h;
         s.web.n = 0;
         const asks = results.google(s.quicklinks) != null and results.keyed(s.quicklinks, std.mem.trim(u8, q, " ")) == null;
-        if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null and convert.parse(q) == null) {
+        if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null and convert.answer(q, null) == null) {
             if (!s.cache.lookup(q, &s.web)) ask(host.ctx, q);
         };
         s.fill();
