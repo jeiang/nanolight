@@ -41,12 +41,10 @@ pub fn build(b: *std.Build) void {
             exe.root_module.linkFramework("Carbon", .{});
             // Opening at login, from its welcome (SMAppService).
             exe.root_module.linkFramework("ServiceManagement", .{});
-            // The Codegraff key, kept in the Keychain (src/keychain_mac.zig).
-            exe.root_module.linkFramework("Security", .{});
         },
         .windows => {
             // A window app: no console. The hot key, the Start menu's icons,
-            // the Credential Manager and the Run key.
+            // and the Run key.
             exe.subsystem = .windows;
             for ([_][]const u8{ "user32", "gdi32", "shell32", "advapi32", "dwmapi", "ole32" }) |lib| exe.root_module.linkSystemLibrary(lib, .{});
         },

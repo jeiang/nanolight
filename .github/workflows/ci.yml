@@ -20,6 +20,7 @@ jobs:
       - run: zig build test
       - run: zig build test -Dnix=true
       - run: zig build app
+      - run: zig build server
       - run: zig build -Dtarget=x86_64-windows-gnu --prefix zig-out/windows
       - run: zig build -Dtarget=x86_64-linux-gnu --prefix zig-out/linux
       - run: zig build app -Dnix=true --prefix zig-out/nix-app
@@ -35,3 +36,4 @@ jobs:
           version: 0.17.0
       - run: zig build test
       - run: zig build test -Dnix=true
+      - run: zig build server

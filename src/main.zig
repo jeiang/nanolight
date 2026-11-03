@@ -81,8 +81,7 @@ pub const Live = struct {
     updater: ?*nanoui.Updater = null,
     tray: ?*nanoui.Tray = null,
     update_label: [64]u8 = undefined,
-    /// Signed in to Codegraff, settings synced between Macs (account.zig).
-    /// Null in headless runs.
+    /// Settings synced through a nanolight-server (account.zig). Null in headless runs.
     acct: ?account.Account = null,
     account_label: [192]u8 = undefined,
     /// The script command running in the panel (script_live.zig).
@@ -136,8 +135,8 @@ pub const Live = struct {
         for (ix.apps.items, ix.launches.items) |a, n| if (n > 0) list.append(arena, .{ .name = a.name, .path = a.path, .count = n }) catch break;
         var at: i64 = 0;
         if (l.kv.get(arena, sync_at_key) catch null) |v| at = std.fmt.parseInt(i64, v, 10) catch 0;
-        const name = arena.create([32]u8) catch return .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at, .launches = list.items };
-        return .{ .hotkey = l.choice.name(name), .suggest = l.s.suggest_on, .at = at, .launches = list.items };
+        const name = arena.create([32]u8) catch return .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.cfg.quicklinks };
+        return .{ .hotkey = l.choice.name(name), .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.cfg.quicklinks };
     }
 
     /// The account's settings, merged: the key, the suggestions, the counts.
@@ -178,21 +177,12 @@ pub const Live = struct {
         if (l.acct) |*a| a.changed();
     }
 
-    fn accountClick(l: *Live, _: *nanoui.menu.Item) void {
-        const a = if (l.acct) |*x| x else return;
-        switch (a.state) {
-            .signed_out => a.signIn(),
-            .starting => {},
-            .waiting, .signed_in => a.signOut(),
-        }
+    fn accountItem(l: *Live) nanoui.menu.MenuItem {
+        return @import("account_menu.zig").item(if (l.acct) |*x| x else null, &l.account_label);
     }
 
-    fn openTerms(_: *Live, _: *nanoui.menu.Item) void {
-        _ = nanoui.shell.openUrl(account.terms_url);
-    }
-
-    fn accountItems(l: *Live) [2]nanoui.menu.MenuItem {
-        return @import("account_menu.zig").items(if (l.acct) |*x| x else null, &l.account_label, .of(l, Live.accountClick), .of(l, Live.openTerms));
+    pub fn syncStatus(l: *Live) []const u8 {
+        return if (l.acct) |*a| a.status(&l.account_label) else account.off_text;
     }
 
     /// Google is asked once typing pauses (`suggest.pause_ms`).
@@ -284,7 +274,7 @@ pub const Live = struct {
         const t = l.tray orelse return;
         const ready = if (l.updater) |u| u.ready() else null;
         const label = if (ready) |v| std.fmt.bufPrint(&l.update_label, "Restart to Update to {s}", .{v}) catch "Restart to Update" else "Check for Updates";
-        const acc = l.accountItems();
+        const acc = l.accountItem();
         const Item = nanoui.menu.MenuItem;
         const update = if (nix_managed) [_]Item{} else [_]Item{.{ .label = label, .disabled = l.updater == null, .click = .of(l, Live.updateNow) }};
         t.setMenu("Nanolight", &([_]Item{
@@ -293,8 +283,7 @@ pub const Live = struct {
             .{ .label = "Welcome…", .click = .of(l, Live.welcome) },
             .{ .label = "Google Suggestions", .kind = .checkbox, .checked = l.s.suggest_on, .click = .of(l, Live.toggleSuggest) },
             .separator,
-            acc[0],
-            acc[1],
+            acc,
             .separator,
         } ++ update ++ [_]Item{.{ .label = "Quit Nanolight", .role = .quit }})) catch {};
     }
@@ -591,8 +580,8 @@ pub fn main(init: std.process.Init) !void {
         // 10 s, unseen, and comes back as it was (update_pc.zig off the Mac).
         u.autoRestart(app, .{ .idle_ms = 10 * 1000 });
     };
-    // Signed in before: synced now. Signing in is from the menu.
-    live.acct = .{ .gpa = init.gpa, .kv = kv, .hooks = live.accountHooks() };
+    // `[sync]` names a server: synced now.
+    live.acct = .{ .gpa = init.gpa, .io = init.io, .kv = kv, .hooks = live.accountHooks(), .cfg = cfg.sync };
     live.acct.?.load();
     live.menu();
     // Restarted by an automatic update: quietly, the panel saying so the

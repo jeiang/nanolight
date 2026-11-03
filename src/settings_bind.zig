@@ -2,7 +2,6 @@
 //! Live that is showing the panel (one Nanolight runs).
 const nanoui = @import("nanoui");
 const shortcut = @import("shortcut.zig");
-const account = @import("account.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 pub var box: SettingsHost = .{
     .ctx = undefined,
@@ -13,11 +12,7 @@ pub var box: SettingsHost = .{
     .suggest = suggest,
     .searches_out = searchesOut,
     .menu_bar = menuBar,
-    .account = acct,
-    .email = email,
-    .sign_in = signIn,
-    .sign_out = signOut,
-    .terms = terms,
+    .sync_status = syncStatus,
     .version = version,
     .ready = ready,
     .check = check,
@@ -50,24 +45,8 @@ fn menuBar(ctx: *anyopaque, set: ?bool) bool {
     return l(ctx).menuBar(set);
 }
 
-fn acct(ctx: *anyopaque) account.State {
-    return if (l(ctx).acct) |*a| a.state else .signed_out;
-}
-
-fn email(ctx: *anyopaque) []const u8 {
-    return if (l(ctx).acct) |*a| a.email() else "";
-}
-
-fn signIn(ctx: *anyopaque) void {
-    if (l(ctx).acct) |*a| a.signIn();
-}
-
-fn signOut(ctx: *anyopaque) void {
-    if (l(ctx).acct) |*a| a.signOut();
-}
-
-fn terms(_: *anyopaque) void {
-    _ = nanoui.shell.openUrl(account.terms_url);
+fn syncStatus(ctx: *anyopaque) []const u8 {
+    return l(ctx).syncStatus();
 }
 
 fn version(ctx: *anyopaque) []const u8 {

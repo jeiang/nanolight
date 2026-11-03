@@ -14,6 +14,7 @@ test {
     _ = @import("promo_camera.zig");
     _ = @import("settings.zig");
     _ = @import("server.zig");
+    _ = @import("account.zig");
     _ = @import("toml.zig");
     _ = @import("config.zig");
     _ = @import("apps.zig");
@@ -374,11 +375,7 @@ pub const Prefs = struct {
             .suggest = suggestSet,
             .searches_out = searchesOut,
             .menu_bar = menuBar,
-            .account = acct,
-            .email = email,
-            .sign_in = noop,
-            .sign_out = noop,
-            .terms = noop,
+            .sync_status = syncStatus,
             .version = ver,
             .ready = ready,
             .check = noop,
@@ -423,11 +420,8 @@ pub const Prefs = struct {
         if (set) |on| p.menu_bar_on = on;
         return p.menu_bar_on;
     }
-    fn acct(_: *anyopaque) @import("account.zig").State {
-        return .signed_out;
-    }
-    fn email(_: *anyopaque) []const u8 {
-        return "";
+    fn syncStatus(_: *anyopaque) []const u8 {
+        return @import("account.zig").off_text;
     }
     fn ver(_: *anyopaque) []const u8 {
         return "0.1.0";
@@ -469,8 +463,7 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     try std.testing.expect(s.settings_ui.open);
     try std.testing.expect(t.hasText("Google Suggestions"));
     try std.testing.expect(t.hasText("Open at Login") != nix);
-    try std.testing.expect(t.hasText("Sign In with Codegraff"));
-    try std.testing.expect(t.hasText("Terms & Privacy"));
+    try std.testing.expect(t.hasText(@import("account.zig").off_text));
     try std.testing.expect(t.hasText("Check for Updates") != nix);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     t.settle(1);

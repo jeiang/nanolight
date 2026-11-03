@@ -27,15 +27,43 @@ Apps, math, Google, Grok, X and Raycast script commands: one keystroke away. Nat
 
 ## Sync across computers (optional)
 
-Off until you turn it on: choose **Sign In with Codegraff** in Settings (or the menu bar icon's menu on the Mac). Your browser opens codegraff.com to approve the sign-in, and from then on every computer signed in to the same account shares:
+Off until `[sync]` in `config.toml` names a server you run (`nanolight-server`, below). Every computer that uses the same account's token shares:
 
 - the key that opens Nanolight,
 - whether Google suggestions are on,
+- the quicklinks from the config (carried in the record; nothing lists them yet),
 - how often you open each app, so an empty panel suggests the same apps everywhere.
 
-Two Macs merge rather than overwrite: the key and the suggestions setting follow whichever Mac changed them last, and each app keeps its higher count. Nothing else is sent: no queries, no history, no files. The sign-in key is kept in your Keychain, and **Sign Out of Codegraff** revokes it.
+Two computers merge rather than overwrite: the key, the suggestions setting and the quicklinks follow whichever computer changed them last, and each app keeps its higher count. A computer's first sync with a server keeps what the server already holds. Nothing else is sent: no queries, no history, no files. Settings and the menu bar icon's menu show `Sync: <host>, last synced <time>`, `Sync: error <reason>` or `Sync: off (set [sync] in config.toml)`. Nanolight syncs at launch, when the panel opens and the last sync is over five minutes old, and two seconds after a change.
 
-Syncing goes through your Codegraff account, so [Codegraff's terms](https://codegraff.com/terms) and [privacy policy](https://codegraff.com/privacy) apply to it. New accounts made by signing in from Nanolight get $2 of Codegraff credit.
+The server keeps one JSON file per account and sees the settings record in the clear: run it on a network you trust (a VPN or a loopback behind your own TLS proxy). The client sends the token as `Authorization: Bearer`, so use `https://` when the path to the server is not private.
+
+### The server
+
+```sh
+zig build server                                  # zig-out/bin/nanolight-server
+nanolight-server hash-token 'a-long-random-token' # ACCOUNT:<sha256>; replace ACCOUNT with the account's name
+nanolight-server serve --listen 127.0.0.1:8890 --state /var/lib/nanolight --tokens /etc/nanolight/tokens
+```
+
+The tokens file has one `account:sha256hex(token)` per line, `#` starts a comment, and an account name matches `[a-z0-9_-]{1,64}` (a bad name stops the server at start). Only hashes are stored on the server. Records live at `<state>/<account>.json`, written to a temp file, fsynced and renamed. The server handles one request at a time and drops a client that has not sent its request within 10 seconds. Bodies over 256 KiB get 413.
+
+| Request | Answer |
+| --- | --- |
+| `GET /healthz` | 200 `ok`, no token |
+| `GET /v1/sync` | 200 with the stored record, 404 before the first PUT |
+| `PUT /v1/sync` | the record merged into the stored one (`X-Nanolight-First: 1`: the stored one wins), 200 with the result; 400 for a bad body |
+| any, wrong or missing token | 401 |
+
+On each computer, put the token in a file only you can read and point the config at it:
+
+```toml
+[sync]
+url = "http://100.64.0.3:8890"
+token_file = "/home/me/.config/nanolight/token"
+```
+
+The token is read only from that file; there is no in-app token entry and nothing goes to a keychain.
 
 ## Configuration
 
@@ -73,7 +101,7 @@ url = ""                      # e.g. "http://100.x.y.z:8890"; empty = off
 token_file = ""               # file holding the bearer token (sops path under Nix)
 ```
 
-Today `hotkey`, `suggestions`, `open_searches_in_browser`, `show_in_menu_bar`, `[apps] extra_dirs` and `[script_commands] dirs` take effect. `pop_to_root_seconds`, `[[quicklinks]]`, `[clipboard]` and `[sync]` are read and checked but do nothing yet. A key of the wrong type fails the file; an unknown key is logged and ignored. The parser (`src/toml.zig`) is TOML 1.0 without datetimes, and reads what Nix's `pkgs.formats.toml` writes.
+Today `hotkey`, `suggestions`, `open_searches_in_browser`, `show_in_menu_bar`, `[apps] extra_dirs`, `[script_commands] dirs` and `[sync]` take effect. `pop_to_root_seconds`, `[[quicklinks]]` and `[clipboard]` are read and checked but do nothing yet (the quicklinks only travel in the sync record). A key of the wrong type fails the file; an unknown key is logged and ignored. The parser (`src/toml.zig`) is TOML 1.0 without datetimes, and reads what Nix's `pkgs.formats.toml` writes.
 
 When the file sets `hotkey`, the welcome skips its key and login steps.
 
@@ -95,6 +123,7 @@ You need Zig 0.17.0 and Xcode or the Command Line Tools.
 zig build test      # search, math, suggestions and the panel, through nanoui's Tester
 zig build run       # build and open it
 zig build app       # zig-out/Nanolight.app, for /Applications
+zig build server    # zig-out/bin/nanolight-server, the sync server
 VERSION=0.1.0 sh macos/package.sh   # the Mac release: signed app, disk image, update zip, manifest.json
 VERSION=0.1.0 sh pc/package.sh      # Windows' zip and Linux's tarballs, added to manifest.json
 zig build -Dtarget=x86_64-windows-gnu   # any target from any machine
@@ -115,7 +144,9 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 | `src/suggest.zig` | Google's completions: the privacy guard, decoding, the cache (after [browse](https://github.com/justrach/browse)) |
 | `src/preview.zig` | The results page in the panel (WKWebView, the Mac) |
 | `src/panel_mac.zig`, `src/panel_pc.zig` | The panel's window on the Mac, and on Windows and Linux |
-| `src/hotkey*.zig`, `src/apps_*.zig`, `src/single*.zig`, `src/login.zig`, `src/keychain*.zig` | Each platform's key, apps, single copy, login item and secret |
+| `src/hotkey*.zig`, `src/apps_*.zig`, `src/single*.zig`, `src/login.zig` | Each platform's key, apps, single copy and login item |
+| `src/account.zig`, `src/account_menu.zig` | The sync client: `[sync]`, the PUT and merge, the status line |
+| `src/server.zig`, `src/settings.zig` | `nanolight-server`: the protocol as a pure function, tokens, atomic records; and the record both sides merge |
 | `src/raycast_model.zig`, `src/raycast_view.zig` | The panel's command screen (a script's output, arguments) |
 | `src/script_commands.zig`, `src/script_run.zig` | Raycast script commands, run in Zig |
 | `src/toml.zig`, `src/config.zig` | `config.toml`: the TOML subset parser, the typed schema and loader, and how the file seeds settings |

@@ -1,6 +1,6 @@
 //! Settings, in the panel itself: the shortcut, Google's suggestions and
-//! where searches open, opening at login, the menu bar icon, syncing
-//! across Macs, updates. The same glass, the
+//! where searches open, opening at login, the menu bar icon, the sync
+//! status, updates. The same glass, the
 //! same rows. Esc goes back to search; ↑/↓ move, Return and Space do the
 //! row. The shortcut is one of four, or any key recorded with ⌘, ⌥ or ⌃
 //! (the last chip). Without a host (tests, the film) it still draws, and changes
@@ -10,7 +10,6 @@ const ui = nanoui.ui;
 const motion = ui.motion;
 const panel = @import("view.zig");
 const shortcut = @import("shortcut.zig");
-const account = @import("account.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Choice = shortcut.Choice;
 const Palette = panel.Palette;
@@ -18,11 +17,11 @@ const mac = @import("builtin").os.tag == .macos;
 /// A Nix build: the Nix modules own startup and updates.
 const nix = @import("build_options").nix_managed;
 
-const RowKind = enum { choice, suggest, browser, login, menu_bar, sync, terms, updates, welcome, quit };
+const RowKind = enum { choice, suggest, browser, login, menu_bar, updates, welcome, quit };
 
 /// As tall as its sections, never past the window. The Mac has two rows
 /// more: where searches open, and the menu bar icon.
-pub const height: f32 = 560 + if (mac) 2 * 46 else 0;
+pub const height: f32 = 512 + if (mac) 2 * 46 else 0;
 
 pub const Settings = struct {
     open: bool = false,
@@ -41,8 +40,7 @@ pub const Settings = struct {
     browser: bool = false,
     login: bool = false,
     menu_bar: bool = true,
-    account: account.State = .signed_out,
-    email: []const u8 = "",
+    sync: []const u8 = @import("account.zig").off_text,
     version: []const u8 = "0.1.0",
     ready: ?[]const u8 = null,
 
@@ -70,15 +68,14 @@ pub const Settings = struct {
         s.choice = h.choice(h.ctx);
         if (s.choice.preset() == null) s.custom = s.choice;
         s.login = h.login(h.ctx, null);
-        s.account = h.account(h.ctx);
-        s.email = h.email(h.ctx);
+        s.sync = h.sync_status(h.ctx);
         s.version = h.version(h.ctx);
         s.ready = h.ready(h.ctx);
     }
 
     pub fn view(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
         s.pull(n);
-        const rows = rowList(s.account);
+        const rows = visibleRows;
         if (s.sel >= rows.len) s.sel = rows.len - 1;
         s.keys(c, n, rows);
         ui.key(c, "settings");
@@ -111,7 +108,7 @@ pub const Settings = struct {
         if (!nix) s.switchRow(c, n, p, rows, .login, "Open at Login");
         if (mac) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
         label(c, p, if (@import("builtin").os.tag == .macos) "Sync Across Macs" else "Sync Across Computers");
-        s.sync(c, n, p, rows);
+        ui.text(c, s.sync, .{ .size = 12.5, .color = p.sub });
         if (!nix) {
             label(c, p, "Updates");
             s.updates(c, n, p, rows);
@@ -233,35 +230,6 @@ pub const Settings = struct {
         }
     }
 
-    fn sync(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
-        switch (s.account) {
-            .signed_out, .starting => {
-                s.button(c, n, p, rows, .sync, if (s.account == .starting) "Signing In…" else "Sign In with Codegraff");
-                s.termsLine(c, n, p, rows);
-            },
-            .waiting => {
-                ui.text(c, "Approve in your browser…", .{ .size = 13.5, .weight = .medium, .color = p.text });
-                s.button(c, n, p, rows, .sync, "Cancel");
-            },
-            .signed_in => {
-                const who = if (s.email.len > 0) s.email else "your Codegraff account";
-                ui.textf(c, .{ .size = 13.5, .weight = .medium, .color = p.text }, "Synced as {s}", .{who});
-                s.button(c, n, p, rows, .sync, "Sign Out");
-            },
-        }
-    }
-
-    fn termsLine(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
-        const on = isSel(rows, s.sel, .terms);
-        ui.key(c, "terms");
-        const line = ui.div(c).row().wFull().h(28).px(4).gap(4).itemsCenter().rounded(8).control().bg(if (on) p.sel else p.fill.alpha(0));
-        defer line.end();
-        if (line.clicked()) s.activate(n, .terms);
-        ui.text(c, "Uses your Codegraff account; Codegraff's", .{ .size = 11.5, .color = p.sub.alpha(0.75) });
-        ui.text(c, "Terms & Privacy", .{ .size = 11.5, .weight = .medium, .color = p.text.alpha(0.9) });
-        ui.text(c, "apply", .{ .size = 11.5, .color = p.sub.alpha(0.75) });
-    }
-
     fn updates(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
         ui.textf(c, .{ .size = 12.5, .color = p.sub }, "Nanolight {s}", .{s.version});
         const text = if (s.ready) |v| c.print("Restart to Update to {s}", .{v}) else "Check for Updates";
@@ -329,7 +297,7 @@ pub const Settings = struct {
     /// Return on the selected row. The field would have taken it.
     pub fn activateSelected(s: *Settings, n: *panel.Nanolight) void {
         s.pull(n);
-        const rows = rowList(s.account);
+        const rows = visibleRows;
         if (s.sel >= rows.len) return;
         s.activate(n, rows[s.sel]);
     }
@@ -343,14 +311,8 @@ pub const Settings = struct {
         const h = s.hooks(n);
         switch (kind) {
             // ←/→ step through the four; Return records one's own.
-            .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, rowList(s.account), 1),
+            .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, visibleRows, 1),
             .suggest, .browser, .login, .menu_bar => s.flip(n, kind),
-            .sync => if (h) |host| switch (s.account) {
-                .signed_out => host.sign_in(host.ctx),
-                .waiting, .signed_in => host.sign_out(host.ctx),
-                .starting => {},
-            },
-            .terms => if (h) |host| host.terms(host.ctx),
             .updates => if (h) |host| {
                 if (s.ready != null) host.restart(host.ctx) else host.check(host.ctx);
             },
@@ -363,29 +325,19 @@ pub const Settings = struct {
     }
 };
 
-fn rowList(state: account.State) []const RowKind {
-    return switch (state) {
-        .signed_out, .starting => visibleRows(true),
-        .waiting, .signed_in => visibleRows(false),
-    };
-}
-
-/// The rows this build and sign-in state show, in order.
-fn visibleRows(comptime terms: bool) []const RowKind {
-    const out = comptime blk: {
-        var list: [10]RowKind = undefined;
-        var n: usize = 0;
-        for ([_]RowKind{ .choice, .suggest, .browser, .login, .menu_bar, .sync, .terms, .updates, .welcome, .quit }) |k| {
-            if (!mac and (k == .browser or k == .menu_bar)) continue;
-            if (!terms and k == .terms) continue;
-            if (nix and (k == .login or k == .updates)) continue;
-            list[n] = k;
-            n += 1;
-        }
-        break :blk list[0..n].*;
-    };
-    return &out;
-}
+/// The rows this build shows, in order.
+const visibleRows = blk: {
+    var list: [8]RowKind = undefined;
+    var n: usize = 0;
+    for ([_]RowKind{ .choice, .suggest, .browser, .login, .menu_bar, .updates, .welcome, .quit }) |k| {
+        if (!mac and (k == .browser or k == .menu_bar)) continue;
+        if (nix and (k == .login or k == .updates)) continue;
+        list[n] = k;
+        n += 1;
+    }
+    const out = list[0..n].*;
+    break :blk &out;
+};
 
 fn isSel(rows: []const RowKind, sel: usize, kind: RowKind) bool {
     if (sel >= rows.len) return false;
@@ -393,14 +345,12 @@ fn isSel(rows: []const RowKind, sel: usize, kind: RowKind) bool {
 }
 
 test "a Nix build's Settings has no login or updates row" {
-    for ([_]account.State{ .signed_out, .signed_in }) |state| {
-        var login = false;
-        var updates = false;
-        for (rowList(state)) |k| {
-            login = login or k == .login;
-            updates = updates or k == .updates;
-        }
-        try @import("std").testing.expectEqual(!nix, login);
-        try @import("std").testing.expectEqual(!nix, updates);
+    var login = false;
+    var updates = false;
+    for (visibleRows) |k| {
+        login = login or k == .login;
+        updates = updates or k == .updates;
     }
+    try @import("std").testing.expectEqual(!nix, login);
+    try @import("std").testing.expectEqual(!nix, updates);
 }
