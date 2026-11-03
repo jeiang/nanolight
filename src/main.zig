@@ -31,7 +31,7 @@ const single = @import("single.zig");
 const ClickThrough = if (mac) @import("clickthrough.zig").ClickThrough else @import("pc_stubs.zig").ClickThrough;
 const Recorder = if (mac) @import("recorder.zig").Recorder else @import("pc_stubs.zig").Recorder;
 const account = @import("account.zig");
-const rc = @import("raycast_live.zig");
+const rc = @import("script_live.zig");
 const Settings = @import("settings.zig").Settings;
 
 const suggest_key = "nanolight.suggest";
@@ -85,9 +85,8 @@ pub const Live = struct {
     /// Null in headless runs.
     acct: ?account.Account = null,
     account_label: [192]u8 = undefined,
-    /// Raycast extensions: the command running in the panel (raycast_live.zig).
+    /// The script command running in the panel (script_live.zig).
     ext_ui: @import("raycast_view.zig").Ext = undefined,
-    runner: @import("raycast.zig").Runner = undefined,
     /// Raycast script commands, run by Nanolight itself (script_run.zig).
     scripts: @import("script_run.zig").Runner = undefined,
     env: ?*const std.process.Environ.Map = null,
@@ -545,8 +544,8 @@ pub fn main(init: std.process.Init) !void {
     panel.adjust(&options, app.flags.hidden, s.height());
     live.window = try app.newWindow(options);
     if (app.flags.hidden) return app.run();
-    // Raycast extensions' commands among the apps (never in headless runs:
-    // they're this machine's).
+    // Script commands among the apps (never in headless runs: they're this
+    // machine's).
     rc.init(&live, init.environ_map);
     defer rc.deinit(&live);
     rc.rescan(&live);

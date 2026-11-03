@@ -29,9 +29,6 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
     exe.root_module.addOptions("build_options", opts);
-    // Raycast extensions' host (raycast/dist/host.js, 170 KB), in the
-    // program: written out for the user's Node when an extension runs.
-    exe.root_module.addAnonymousImport("raycast_host", .{ .root_source_file = b.path("raycast/dist/host.js") });
     // A release is shipped without its debug info (15 MB to 2.8 MB on Linux).
     if (optimize != .debug) exe.root_module.strip = true;
     switch (os) {
@@ -80,7 +77,6 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
     tests.root_module.addOptions("build_options", opts);
-    tests.root_module.addAnonymousImport("raycast_host", .{ .root_source_file = b.path("raycast/dist/host.js") });
     if (os == .windows) for ([_][]const u8{ "user32", "gdi32", "shell32", "advapi32", "dwmapi", "ole32" }) |lib| tests.root_module.linkSystemLibrary(lib, .{});
     // zig-out/bin/nanolight-tests: the tests, to run on another machine.
     b.step("test-bin", "Install the tests as zig-out/bin/nanolight-tests").dependOn(&b.addInstallArtifact(tests, .{ .dest_sub_path = if (os == .windows) "nanolight-tests.exe" else "nanolight-tests" }).step);

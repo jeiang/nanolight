@@ -21,7 +21,6 @@ jobs:
       - run: zig build app
       - run: zig build -Dtarget=x86_64-windows-gnu --prefix zig-out/windows
       - run: zig build -Dtarget=x86_64-linux-gnu --prefix zig-out/linux
-      - run: cd raycast && npm ci && npm test
 
   # The tests on Linux, where they draw with nanoui's own text and renderer.
   linux:

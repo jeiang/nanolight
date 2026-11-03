@@ -162,7 +162,7 @@ pub const Index = struct {
     }
 
     /// Whether `other` lists the same apps and commands, at the same
-    /// paths: a rescan that found nothing new (raycast_live.zig `refresh`).
+    /// paths: a rescan that found nothing new (script_live.zig `refresh`).
     pub fn same(ix: *const Index, other: *const Index) bool {
         if (ix.apps.items.len != other.apps.items.len) return false;
         for (ix.apps.items, other.apps.items) |a, b| {
@@ -244,7 +244,7 @@ pub const Index = struct {
     pub fn icon(ix: *Index, i: u32) ?[]const u8 {
         if (ix.icons.get(i)) |cached| return if (cached) |c| c.png else null;
         const path = ix.apps.items[i].path;
-        const png = if (std.mem.startsWith(u8, path, "raycast")) @import("raycast.zig").icon(ix.gpa, path) else switch (builtin.os.tag) {
+        const png = switch (builtin.os.tag) {
             .macos => iconPng(ix.gpa, path),
             .windows => @import("apps_win.zig").icon(ix.gpa, path),
             else => @import("apps_linux.zig").icon(ix.gpa, std.Io.Threaded.global_single_threaded.io(), path),

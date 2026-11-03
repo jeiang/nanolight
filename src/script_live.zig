@@ -1,26 +1,21 @@
-//! The running app's side of Raycast extensions (raycast.zig): what the
-//! host may ask of it (open, copy, hide), its rows found again after an
-//! install, and a command opened from its row, the panel staying up.
+//! The running app's side of script commands (script_run.zig): the apps
+//! and script rows found again, and a command opened from its row, the
+//! panel staying up.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const main = @import("main.zig");
-const raycast = @import("raycast.zig");
 const sc = @import("script_commands.zig");
 const apps = @import("apps.zig");
 const Live = main.Live;
 
 pub fn isCommand(target: []const u8) bool {
-    return std.mem.startsWith(u8, target, raycast.prefix) or std.mem.eql(u8, target, raycast.store_path) or
-        std.mem.startsWith(u8, target, sc.prefix) or std.mem.eql(u8, target, sc.folder_path);
+    return std.mem.startsWith(u8, target, sc.prefix) or std.mem.eql(u8, target, sc.folder_path);
 }
 
-/// Sets up the runner: Node and the host found once, the panel told.
+/// Sets up the script runner and the panel's command screen.
 pub fn init(l: *Live, env: *const std.process.Environ.Map) void {
     const gpa = l.app.gpa;
     l.ext_ui = .{ .gpa = gpa, .back = &l.s.query };
-    l.runner = .{ .gpa = gpa, .io = l.app.io, .ext = &l.ext_ui, .hooks = hooks(l), .node = raycast.findNode(gpa, env) };
-    // The host is written out only where Node can run it.
-    if (l.runner.node != null) l.runner.host = raycast.findHost(gpa, env);
     l.scripts = .{ .gpa = gpa, .io = l.app.io, .ext = &l.ext_ui, .hooks = .{ .ctx = l, .hide = hide, .redraw = redraw, .copy = copy, .footer = footer } };
     l.s.ext = &l.ext_ui;
     l.env = env;
@@ -34,10 +29,6 @@ fn footer(ctx: *anyopaque, text: []const u8) void {
 
 pub fn deinit(l: *Live) void {
     l.scripts.deinit();
-    l.runner.stop();
-    if (l.runner.node) |n| l.app.gpa.free(n);
-    if (l.runner.host) |h| l.app.gpa.free(h);
-    l.runner.line.deinit(l.app.gpa);
     l.ext_ui.deinit();
 }
 
@@ -52,7 +43,7 @@ pub fn start(l: *Live, target: []const u8) void {
     }
     l.keep_open = true;
     const ix = l.s.index;
-    var title: []const u8 = "Raycast";
+    var title: []const u8 = "Script";
     var png: ?[]const u8 = null;
     for (ix.apps.items, 0..) |a, i| if (std.mem.eql(u8, a.path, target)) {
         title = a.name;
@@ -60,36 +51,15 @@ pub fn start(l: *Live, target: []const u8) void {
         break;
     };
     l.s.query.clear();
-    // The other kind's command, if one runs, ends.
-    if (std.mem.startsWith(u8, target, sc.prefix)) {
-        l.runner.stop();
-        return l.scripts.start(target, title, png);
-    }
-    l.scripts.stop();
-    l.runner.start(target, title, png);
-}
-
-fn hooks(l: *Live) raycast.Hooks {
-    return .{ .ctx = l, .open = open, .copy = copy, .read_clipboard = readClipboard, .hide = hide, .redraw = redraw, .rescan = rescan };
+    l.scripts.start(target, title, png);
 }
 
 fn live(ctx: *anyopaque) *Live {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn open(ctx: *anyopaque, target: []const u8) void {
-    const l = live(ctx);
-    if (apps.isUrl(target)) {
-        _ = nanoui.shell.openUrl(target);
-    } else _ = apps.launch(l.app.io, target);
-}
-
 fn copy(_: *anyopaque, text: []const u8) void {
     nanoui.clipboard.writeText(text);
-}
-
-fn readClipboard(_: *anyopaque, gpa: std.mem.Allocator) ?[]u8 {
-    return nanoui.clipboard.readText(gpa) catch null;
 }
 
 fn hide(ctx: *anyopaque) void {
@@ -102,7 +72,7 @@ fn redraw(ctx: *anyopaque) void {
     if (l.window) |w| w.redraw();
 }
 
-/// The apps and installed commands found again, their counts kept.
+/// The apps and script commands found again, their counts kept.
 pub fn rescan(ctx: *anyopaque) void {
     const l = live(ctx);
     const env = l.env orelse return;
@@ -129,9 +99,6 @@ pub fn refresh(ctx: *anyopaque) void {
 
 fn fill(l: *Live, ix: *apps.Index, env: *const std.process.Environ.Map) void {
     apps.scanSystem(ix, l.app.io, env);
-    // TypeScript extensions only where Node is (the user's own; none is
-    // shipped); script commands everywhere.
-    if (l.runner.node != null) raycast.scan(ix, l.app.gpa);
     sc.scan(ix, l.app.gpa);
     ix.sort();
     ix.load(l.kv);
