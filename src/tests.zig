@@ -20,6 +20,7 @@ test {
     _ = @import("apps.zig");
     _ = @import("shortcut.zig");
     _ = @import("settings_panes.zig");
+    _ = @import("commands.zig");
     _ = @import("raycast_model.zig");
     _ = @import("raycast_view.zig");
     _ = @import("script_commands.zig");

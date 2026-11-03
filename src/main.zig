@@ -35,6 +35,7 @@ const rc = @import("script_live.zig");
 const settings_mod = @import("settings.zig");
 const Settings = settings_mod.Settings;
 const config = @import("config.zig");
+const commands = @import("commands.zig");
 /// A Nix build: no updater and no login-item UI; the modules own both.
 const nix_managed = @import("build_options").nix_managed;
 
@@ -96,13 +97,15 @@ pub const Live = struct {
     /// (`setQuicklinks`).
     ql_custom: []const settings_mod.Quicklink = &.{},
     ql_arena: ?*std.heap.ArenaAllocator = null,
+    /// System commands, run by Nanolight itself (commands.zig).
+    cmds: commands.Runner = undefined,
     /// The next `hide` is skipped: a command just took the panel.
     keep_open: bool = false,
 
     fn host(l: *Live) view.Host {
         const bind = @import("settings_bind.zig");
         bind.box.ctx = l;
-        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .preview = if (mac) showPage else null, .settings = &bind.box };
+        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .preview = if (mac) showPage else null, .settings = &bind.box, .command = runCommand };
     }
 
     fn open(ctx: *anyopaque, target: []const u8) void {
@@ -125,6 +128,22 @@ pub const Live = struct {
             // Its count went up: the other Macs suggest it too.
             if (l.acct) |*a| a.changed();
         }
+    }
+
+    fn runCommand(ctx: *anyopaque, i: usize) void {
+        const l: *Live = @ptrCast(@alignCast(ctx));
+        l.s.note = "";
+        l.cmds.start(i);
+    }
+
+    fn commandFooter(ctx: *anyopaque, text: []const u8) void {
+        const l: *Live = @ptrCast(@alignCast(ctx));
+        l.s.note = text;
+        if (l.window) |w| w.redraw();
+    }
+
+    fn commandDone(ctx: *anyopaque) void {
+        hide(ctx);
     }
 
     // ----- sync (account.zig) -----
@@ -601,6 +620,9 @@ pub fn main(init: std.process.Init) !void {
     // machine's).
     rc.init(&live, init.environ_map);
     defer rc.deinit(&live);
+    commands.init(init.io, init.environ_map);
+    live.cmds = .{ .io = app.io, .hooks = .{ .ctx = &live, .footer = Live.commandFooter, .done = Live.commandDone } };
+    defer live.cmds.deinit();
     rc.rescan(&live);
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
     if (single.claim(.{ .ctx = &live, .func = Live.command }) > 0) std.log.info("nanolight: asked an older copy to quit", .{});

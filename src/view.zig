@@ -14,6 +14,7 @@ const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Row = results.Row;
 const settings = @import("settings.zig");
+const commands = @import("commands.zig");
 
 /// What the panel asks of whatever shows it (the window, or the film).
 pub const Host = struct {
@@ -32,6 +33,8 @@ pub const Host = struct {
     /// Settings (the shortcut, login, sync, updates). Without it the
     /// screen still draws, and changes nothing the app keeps.
     settings: ?*const SettingsHost = null,
+    /// Runs system command `i` (commands.zig). Without it, nothing runs.
+    command: ?*const fn (ctx: *anyopaque, i: usize) void = null,
 };
 
 pub const width: f32 = 680;
@@ -380,6 +383,7 @@ pub const Nanolight = struct {
             const same_row = now.kind == r.kind and switch (r.kind) {
                 .app => now.app == r.app,
                 .quicklink => now.ql == r.ql,
+                .pane, .command => now.app == r.app,
                 .suggest => suggest.same(s.web.get(now.web), was_text[0..was_len]),
                 else => true,
             };
@@ -444,6 +448,10 @@ pub const Nanolight = struct {
                 ui.richText(c, pane.name, s.highlight(i, r, p), .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) });
                 ui.text(c, "System Settings", .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
+            .command => {
+                ui.richText(c, commands.all[r.app].name, s.highlight(i, r, p), .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) });
+                ui.text(c, "System Command", .{ .size = 12, .color = p.sub.alpha(0.8) });
+            },
             .settings => {
                 ui.text(c, "Nanolight Settings", .{ .size = 13.5, .weight = .medium, .color = p.text });
                 ui.text(c, "Shortcut, sync, updates", .{ .size = 12, .color = p.sub.alpha(0.8) });
@@ -460,7 +468,11 @@ pub const Nanolight = struct {
         }
         ui.spacer(c);
         if (i == s.sel) {
-            ui.text(c, if (r.kind == .app or r.kind == .settings or r.kind == .pane) "Open" else "Go", .{ .size = 12, .weight = .medium, .color = p.sub });
+            ui.text(c, switch (r.kind) {
+                .app, .settings, .pane => "Open",
+                .command => "Run",
+                else => "Go",
+            }, .{ .size = 12, .weight = .medium, .color = p.sub });
             ui.kbd(c, "↩");
         } else if (i < 9) ui.textf(c, .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.5), .tabular = true }, "{s}{d}", .{ results.mod, i + 1 });
     }
@@ -488,6 +500,7 @@ pub const Nanolight = struct {
             .quicklink => "globe",
             .suggest => "magnifyingglass",
             .settings => "gearshape",
+            .command => "terminal",
             else => "app.dashed",
         }, .{ .size = if (big) 16 else 13, .weight = .medium, .color = p.text });
     }
@@ -570,6 +583,7 @@ pub const Nanolight = struct {
             .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), !s.searches_out),
             .settings => s.openSettings(),
             .pane => s.go(@import("settings_panes.zig").urls[r.app]),
+            .command => if (s.host) |h| if (h.command) |run| run(h.ctx, r.app),
             .suggest => {
                 // Its words fill the field, as a search box's would.
                 s.query.set(s.web.get(r.web));

@@ -10,6 +10,7 @@ const std = @import("std");
 const search = @import("search.zig");
 const calc = @import("calc.zig");
 const panes = @import("settings_panes.zig");
+const commands = @import("commands.zig");
 const mac = @import("builtin").os.tag == .macos;
 const Index = @import("apps.zig").Index;
 pub const Quicklink = @import("settings.zig").Quicklink;
@@ -30,6 +31,8 @@ pub const Kind = enum {
     settings,
     /// A pane of System Settings (`Row.app` its place in settings_panes.zig).
     pane,
+    /// A system command (`Row.app` its place in commands.zig).
+    command,
 
     /// The row's kind as its trailing label shows it.
     pub fn label(k: Kind) []const u8 {
@@ -38,6 +41,7 @@ pub const Kind = enum {
             .app => "Application",
             .settings => "Nanolight",
             .pane => "System Settings",
+            .command => "Command",
             .quicklink, .suggest => "Web",
         };
     }
@@ -49,6 +53,7 @@ pub const Kind = enum {
             .app => "Open Application",
             .settings => "Open Settings",
             .pane => "Open in System Settings",
+            .command => "Run Command",
             .quicklink => "Search",
             .suggest => "Search Google",
         };
@@ -60,6 +65,7 @@ pub const Kind = enum {
             .app => if (suggested) "Suggestions" else "Applications",
             .settings => "Nanolight",
             .pane => "System Settings",
+            .command => "Commands",
             .quicklink, .suggest => unreachable,
         };
     }
@@ -80,6 +86,9 @@ pub const Row = struct {
 pub const max_apps = 6;
 /// System Settings' panes, under the apps (the Mac's).
 pub const max_panes = 3;
+/// System commands, under the panes: they never take a row from an app, a
+/// quicklink or the header of another section.
+pub const max_commands = 3;
 /// Google's completions fill what room is left, up to four.
 pub const max_web = 4;
 /// The quicklinks listed under the apps; later ones answer to their keyword.
@@ -180,16 +189,22 @@ pub const Results = struct {
         var pane_rows: [max_panes]search.Ranked = undefined;
         const np = if (isSettings(query)) 0 else panes.rank(query, &pane_rows);
         for (pane_rows[0..np]) |x| r.push(.{ .kind = .pane, .app = x.index, .match = x.match });
+        const key = keyed(ql, query);
+        // System commands take what room the apps, panes and quicklinks leave.
+        const shown = @min(ql.len, max_quicklink_rows);
+        var cmd_rows: [max_commands]search.Ranked = undefined;
+        const cmd_room = @min(max_commands, max_rows -| r.n -| shown -| 1 -| @intFromBool(np > 0));
+        const nc = if (key != null or isSettings(query)) 0 else commands.rank(query, cmd_rows[0..cmd_room]);
+        for (cmd_rows[0..nc]) |x| r.push(.{ .kind = .command, .app = x.index, .match = x.match });
         // A keyword sends the rest of the query to its quicklink alone.
-        if (keyed(ql, query)) |k| {
+        if (key) |k| {
             r.keyed = k;
             r.push(.{ .kind = .quicklink, .ql = k.ql });
             return;
         }
         // The quicklinks, the first a search for what was typed, Google's
         // completions (as many as leave room for the rest) under Google's.
-        const shown = @min(ql.len, max_quicklink_rows);
-        const room = max_rows -| r.n -| shown -| @intFromBool(np > 0);
+        const room = max_rows -| r.n -| shown -| @intFromBool(np > 0) -| @intFromBool(nc > 0);
         r.google = google(ql);
         for (0..shown) |i| {
             r.push(.{ .kind = .quicklink, .ql = @intCast(i) });
@@ -388,4 +403,47 @@ test "System Settings' panes come under the apps and keep the panel's height (#1
     // Math lists no panes.
     r.build("2+2", &ix, &.{}, &.{}, defaults);
     try t.expectEqual(@as(usize, 1), r.n);
+}
+
+test "system commands list under the apps without taking an app's, a quicklink's or a header's row" {
+    const t = std.testing;
+    commands.listForTests(true);
+    defer commands.listForTests(false);
+    var ix = try testIndex(t.allocator, &.{ "Sleep Aid", "Sleepy", "Sleeper", "Sleeping", "Sleep Cycle", "Sleep Timer", "Sleep Log" });
+    defer ix.deinit();
+    var r: Results = .{};
+    // Every app row stays, and so does every quicklink.
+    r.build("sleep", &ix, &.{}, &.{ "sleep a", "sleep b", "sleep c", "sleep d" }, defaults);
+    for (r.rows[0..max_apps]) |row| try t.expectEqual(Kind.app, row.kind);
+    var cmds: usize = 0;
+    var links: usize = 0;
+    for (r.slice()) |row| {
+        if (row.kind == .command) cmds += 1;
+        if (row.kind == .quicklink) links += 1;
+    }
+    try t.expect(cmds <= max_commands);
+    try t.expectEqual(@as(usize, 5), links);
+    try t.expect(r.n + @intFromBool(cmds > 0) <= max_rows);
+    // Alone, the command has its own section, after the apps.
+    var few = try testIndex(t.allocator, &.{"Safari"});
+    defer few.deinit();
+    r.build("sleep", &few, &.{}, &.{}, defaults);
+    const at = for (r.slice(), 0..) |row, i| {
+        if (row.kind == .command) break i;
+    } else return error.NoCommand;
+    try t.expectEqualStrings("Sleep", commands.all[r.rows[at].app].name);
+    try t.expectEqualStrings("Commands", r.section(at).?);
+    try t.expectEqual(Kind.quicklink, r.rows[at + 1].kind);
+    r.build("sa", &few, &.{}, &.{}, defaults);
+    try t.expectEqual(Kind.app, r.rows[0].kind);
+    // Not with a keyword, math, or the words for Nanolight's Settings.
+    r.build("ddg sleep", &few, &.{}, &.{}, defaults);
+    try t.expectEqual(@as(usize, 1), r.n);
+    try t.expectEqual(Kind.quicklink, r.rows[0].kind);
+    r.build("2+2", &few, &.{}, &.{}, defaults);
+    try t.expectEqual(@as(usize, 1), r.n);
+    // Unlisted (their program missing), they are not rows.
+    commands.listForTests(false);
+    r.build("sleep", &few, &.{}, &.{}, defaults);
+    for (r.slice()) |row| try t.expect(row.kind != .command);
 }

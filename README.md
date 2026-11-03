@@ -14,6 +14,10 @@ Apps, math, quicklinks (Google, Claude, Grok, X...) and Raycast script commands:
 
 - **Finds apps as you type**: whole names, starts of words, initials (`ss` is System Settings), letters in order, and typos (`chorme` is Chrome). What you open often climbs.
 - **System Settings panes** (Mac): "login items", "wifi" or "dark mode" lists the pane, under the apps, and Return opens System Settings right at it.
+- **System commands**: "sleep", "lock", "volume 50" or "dark mode" lists the command under the apps (up to three, in their own section, and never in place of an app or a quicklink); Return runs it, and a failure's message goes in the footer. They are fixed argument lists run without a shell, and a command whose program is not on the `PATH` is not listed.
+  - Mac: Toggle Dark Mode, Set Volume to 0/25/50/75/100%, Mute, Unmute, Sleep (`pmset sleepnow`), Lock Screen (`pmset displaysleepnow`, which locks when System Settings requires the password immediately), Empty Trash. They use `osascript` and `pmset`; the first use of Dark Mode or Empty Trash asks for permission to control System Events or Finder.
+  - Linux: volume and mute through `wpctl`, or `pactl` when there is no `wpctl`; Sleep (`systemctl suspend`); Lock Screen (`loginctl lock-session`); Dark Mode and Light Mode (`gsettings`, GNOME's `color-scheme`).
+  - Windows: Sleep (`rundll32 powrprof.dll,SetSuspendState 0,1,0`, which hibernates instead when hibernation is on) and Lock Screen (`rundll32 user32.dll,LockWorkStation`). There is no volume: Windows has no built-in command for it without a third-party tool.
 - **Completes inline**: the rest of the top app's name, or of Google's top suggestion, is drawn faintly after the caret. Tab or → takes it; Return never does.
 - **Does math**: `2^10 * 3` answers 3,072 (and `0xC00`). Return copies it.
 - **Google suggestions**: up to four, under the apps, the words you add in bold. Nothing that reads as an address (a dot, a slash, an @) is sent.
@@ -229,6 +233,7 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 | `src/server.zig`, `src/settings.zig` | `nanolight-server`: the protocol as a pure function, tokens, atomic records; and the record both sides merge |
 | `src/raycast_model.zig`, `src/raycast_view.zig` | The panel's command screen (a script's output, arguments) |
 | `src/script_commands.zig`, `src/script_run.zig` | Raycast script commands, run in Zig |
+| `src/commands.zig` | System commands: each OS's table, the `PATH` check, ranking, the runner |
 | `src/toml.zig`, `src/config.zig` | `config.toml`: the TOML subset parser, the typed schema and loader, and how the file seeds settings |
 | `src/onboard.zig`, `src/shortcut.zig`, `src/recorder.zig` | The welcome, which key is free, recording one's own |
 | `flake.nix`, `nix/` | The packages, the NixOS, nix-darwin and home-manager modules, the server module, and the flake's checks |
