@@ -9,6 +9,7 @@
 const std = @import("std");
 const search = @import("search.zig");
 const calc = @import("calc.zig");
+const convert = @import("convert.zig");
 const panes = @import("settings_panes.zig");
 const commands = @import("commands.zig");
 const mac = @import("builtin").os.tag == .macos;
@@ -139,6 +140,19 @@ pub const Results = struct {
     /// A whole answer in hexadecimal too ("0xC00"), else empty.
     hex_buf: [24]u8 = undefined,
     hex: []const u8 = "",
+    /// A conversion: what Return copies, the expression as the card shows
+    /// it, and the line under the answer (the rate and its day).
+    copy_buf: [64]u8 = undefined,
+    copy: []const u8 = "",
+    expr_buf: [64]u8 = undefined,
+    expr: []const u8 = "",
+    note_buf: [96]u8 = undefined,
+    note: []const u8 = "",
+    /// Currency rates, when in hand, and whether fetching them failed.
+    rates: ?*const convert.Rates = null,
+    rates_failed: bool = false,
+    /// The query is a currency conversion: rates are needed (or may be stale).
+    need_rates: bool = false,
     /// The quicklink holding Google's completions, when listed.
     google: ?u16 = null,
     /// The query went to one quicklink by its keyword.
@@ -162,6 +176,10 @@ pub const Results = struct {
         r.n = 0;
         r.google = null;
         r.keyed = null;
+        r.copy = "";
+        r.expr = "";
+        r.note = "";
+        r.need_rates = false;
         const query = std.mem.trim(u8, query_in, " ");
         r.suggested = query.len == 0;
         if (query.len == 0) {
@@ -174,6 +192,9 @@ pub const Results = struct {
                 std.fmt.bufPrint(&r.hex_buf, "0x{X}", .{@as(u64, @intFromFloat(v))}) catch ""
             else
                 "";
+            r.push(.{ .kind = .calc });
+        } else if (convert.answer(query, r.rates)) |a| {
+            r.convertRow(a);
             r.push(.{ .kind = .calc });
         }
         var ranked: [max_apps]search.Ranked = undefined;
@@ -209,6 +230,29 @@ pub const Results = struct {
         for (0..shown) |i| {
             r.push(.{ .kind = .quicklink, .ql = @intCast(i) });
             if (r.google == @as(u16, @intCast(i))) for (0..@min(web.len, max_web, room)) |j| r.push(.{ .kind = .suggest, .web = @intCast(j) });
+        }
+    }
+
+    fn convertRow(r: *Results, a: convert.Answer) void {
+        r.hex = "";
+        var nb: [32]u8 = undefined;
+        switch (a) {
+            .unit => |u| {
+                r.answer = convert.formatUnit(&r.answer_buf, u, true);
+                r.copy = calc.format(&r.copy_buf, u.value, false);
+                r.expr = std.fmt.bufPrint(&r.expr_buf, "{s} {s}", .{ calc.format(&nb, u.amount, true), u.from }) catch "";
+            },
+            .money => |m| {
+                r.need_rates = true;
+                r.answer = std.fmt.bufPrint(&r.answer_buf, "{s} {s}", .{ convert.formatMoney(&nb, m.value, true), m.to }) catch "";
+                r.copy = convert.formatMoney(&r.copy_buf, m.value, false);
+                r.expr = std.fmt.bufPrint(&r.expr_buf, "{s} {s}", .{ calc.format(&nb, m.amount, true), m.from }) catch "";
+                r.note = convert.rateLine(&r.note_buf, m);
+            },
+            .pending => {
+                r.need_rates = true;
+                r.answer = if (r.rates_failed) "Rates unavailable" else "Loading rates…";
+            },
         }
     }
 
@@ -403,6 +447,42 @@ test "System Settings' panes come under the apps and keep the panel's height (#1
     // Math lists no panes.
     r.build("2+2", &ix, &.{}, &.{}, defaults);
     try t.expectEqual(@as(usize, 1), r.n);
+}
+
+test "a conversion is answered like math, with the rate under a currency's" {
+    const t = std.testing;
+    var ix = try testIndex(t.allocator, &.{"Safari"});
+    defer ix.deinit();
+    var r: Results = .{};
+    r.build("10 km to mi", &ix, &.{}, &.{}, defaults);
+    try t.expectEqual(Kind.calc, r.rows[0].kind);
+    try t.expectEqualStrings("6.2137119224 mi", r.answer);
+    try t.expectEqualStrings("6.2137119224", r.copy);
+    try t.expectEqualStrings("10 km", r.expr);
+    try t.expect(!r.need_rates);
+    r.build("10 m to min", &ix, &.{}, &.{}, defaults);
+    try t.expect(r.n == 0 or r.rows[0].kind != .calc);
+    // No rates yet: it says so, and asks for them.
+    r.build("100 usd to ttd", &ix, &.{}, &.{}, defaults);
+    try t.expectEqualStrings("Loading rates…", r.answer);
+    try t.expect(r.need_rates);
+    try t.expectEqualStrings("", r.copy);
+    r.rates_failed = true;
+    r.build("100 usd to ttd", &ix, &.{}, &.{}, defaults);
+    try t.expectEqualStrings("Rates unavailable", r.answer);
+    var rates = convert.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}").?;
+    defer rates.deinit();
+    r.rates = &rates;
+    r.build("100 USD in TTD", &ix, &.{}, &.{}, defaults);
+    try t.expectEqualStrings("678.50 TTD", r.answer);
+    try t.expectEqualStrings("678.50", r.copy);
+    try t.expectEqualStrings("100 USD", r.expr);
+    try t.expectEqualStrings("1 USD = 6.785 TTD · 2026-11-03", r.note);
+    try t.expectEqualStrings("", r.hex);
+    // Math after a conversion forgets its note and copy.
+    r.build("2+2", &ix, &.{}, &.{}, defaults);
+    try t.expectEqualStrings("", r.note);
+    try t.expectEqualStrings("", r.copy);
 }
 
 test "system commands list under the apps without taking an app's, a quicklink's or a header's row" {

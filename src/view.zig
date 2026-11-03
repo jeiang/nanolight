@@ -9,6 +9,7 @@ const motion = ui.motion;
 const Index = @import("apps.zig").Index;
 const results = @import("results.zig");
 const suggest = @import("suggest.zig");
+const convert = @import("convert.zig");
 const text = @import("text.zig");
 const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
@@ -33,6 +34,10 @@ pub const Host = struct {
     /// Settings (the shortcut, login, sync, updates). Without it the
     /// screen still draws, and changes nothing the app keeps.
     settings: ?*const SettingsHost = null,
+    /// A currency conversion is listed: fetch the rates unless they are
+    /// fresh, and answer with `Nanolight.ratesLanded`. Without it, none are
+    /// fetched.
+    rates: ?*const fn (ctx: *anyopaque) void = null,
     /// Runs system command `i` (commands.zig). Without it, nothing runs.
     command: ?*const fn (ctx: *anyopaque, i: usize) void = null,
 };
@@ -108,6 +113,10 @@ pub const Nanolight = struct {
     quicklinks: []const settings.Quicklink = &settings.default_quicklinks,
     web: suggest.List = .{},
     cache: suggest.Cache = .{},
+    /// Currency rates, once fetched or read from the cache, and whether
+    /// fetching them failed.
+    rates: ?*const convert.Rates = null,
+    rates_failed: bool = false,
     /// A search's page is in the panel, for the query as it was then.
     previewing: bool = false,
     preview_q: u64 = 0,
@@ -344,10 +353,11 @@ pub const Nanolight = struct {
         s.built = h;
         s.web.n = 0;
         const asks = results.google(s.quicklinks) != null and results.keyed(s.quicklinks, std.mem.trim(u8, q, " ")) == null;
-        if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null) {
+        if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null and convert.parse(q) == null) {
             if (!s.cache.lookup(q, &s.web)) ask(host.ctx, q);
         };
         s.fill();
+        if (s.res.need_rates) if (s.host) |host| if (host.rates) |get| get(host.ctx);
         // The first row: an app, the answer, or the search for what was
         // typed; never a completion nobody picked (they come after it).
         s.sel = 0;
@@ -357,7 +367,16 @@ pub const Nanolight = struct {
         var sug: [results.max_apps]u32 = undefined;
         const ns = s.index.suggestions(&sug);
         var web: [suggest.max_rows][]const u8 = undefined;
+        s.res.rates = s.rates;
+        s.res.rates_failed = s.rates_failed;
         s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web), s.quicklinks);
+    }
+
+    /// The rates arrived (or could not be had): the conversion listed, if
+    /// any, is redone. The selection stays where it was.
+    pub fn ratesLanded(s: *Nanolight) void {
+        s.fill();
+        if (s.sel >= s.res.n) s.sel = 0;
     }
 
     /// Google's completions of `typed` (what `Host.suggest` asked): kept,
@@ -478,7 +497,7 @@ pub const Nanolight = struct {
     }
 
     fn calcCard(s: *Nanolight, c: *ui.Context, p: Palette) void {
-        @import("calc_card.zig").draw(c, p, s.query.text(), s.res.answer, s.res.hex, c.time - s.copied_at < 1.4);
+        @import("calc_card.zig").draw(c, p, if (s.res.expr.len > 0) s.res.expr else s.query.text(), s.res.answer, s.res.hex, s.res.note, c.time - s.copied_at < 1.4);
     }
 
     /// The row's picture: the app's icon, or a symbol on a quiet tile.
@@ -571,8 +590,10 @@ pub const Nanolight = struct {
         switch (r.kind) {
             .calc => {
                 var buf: [64]u8 = undefined;
-                const v = @import("calc.zig").eval(s.query.text()) orelse return;
-                c.clipboard.write(c.clipboard.ctx, @import("calc.zig").format(&buf, v, false));
+                if (s.res.copy.len > 0) c.clipboard.write(c.clipboard.ctx, s.res.copy) else {
+                    const v = @import("calc.zig").eval(s.query.text()) orelse return;
+                    c.clipboard.write(c.clipboard.ctx, @import("calc.zig").format(&buf, v, false));
+                }
                 s.copied_at = c.time;
                 return;
             },

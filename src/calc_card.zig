@@ -1,5 +1,6 @@
 //! The math row: the expression, an arrow, the answer, each over a small
-//! label; the answer's says Copied once it is.
+//! label; the answer's says Copied once it is, and a conversion's names
+//! its rate.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -7,7 +8,7 @@ const ui = nanoui.ui;
 const width: f32 = 680;
 const list_pad: f32 = 6;
 
-pub fn draw(c: *ui.Context, p: anytype, query: []const u8, answer: []const u8, hex: []const u8, copied: bool) void {
+pub fn draw(c: *ui.Context, p: anytype, query: []const u8, answer: []const u8, hex: []const u8, note: []const u8, copied: bool) void {
     const half = (width - list_pad * 2 - 20 - 32 - 24) / 2;
     {
         const l = ui.div(c).column().w(half).itemsCenter().gap(6);
@@ -26,7 +27,7 @@ pub fn draw(c: *ui.Context, p: anytype, query: []const u8, answer: []const u8, h
     if (copied) {
         c.animationFrame();
         chip(c, p, "Copied", c.theme.success);
-    } else chip(c, p, if (hex.len > 0) c.print("Result · {s}", .{hex}) else "Result", null);
+    } else chip(c, p, if (note.len > 0) note else if (hex.len > 0) c.print("Result · {s}", .{hex}) else "Result", null);
 }
 
 fn chip(c: *ui.Context, p: anytype, str: []const u8, tone: ?ui.Color) void {

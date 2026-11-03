@@ -9,6 +9,7 @@ const view = @import("view.zig");
 test {
     _ = @import("search.zig");
     _ = @import("calc.zig");
+    _ = @import("convert.zig");
     _ = @import("results.zig");
     _ = @import("suggest.zig");
     _ = @import("promo_camera.zig");

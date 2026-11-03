@@ -22,6 +22,7 @@ const hotkey = @import("hotkey.zig");
 const shortcut = @import("shortcut.zig");
 const Onboard = @import("onboard.zig").Onboard;
 const suggest = @import("suggest.zig");
+const convert = @import("convert.zig");
 /// The panel's window, the page in it and clicks through it: the Mac's own,
 /// or Windows' and Linux's (panel_pc.zig, pc_stubs.zig).
 const panel = if (mac) @import("panel_mac.zig") else @import("panel_pc.zig");
@@ -58,6 +59,7 @@ pub fn loginItem(ctx: *anyopaque, set: ?bool) bool {
 /// themselves (nanoui's updater does it now, `autoRestart`).
 pub const updated_key = "nanolight.updated";
 const sync_at_key = config.sync_at_key;
+const rates_at_key = "nanolight.rates.at";
 
 /// The app around the panel: its window, shown and hidden (panel_mac.zig,
 /// panel_pc.zig), its key, its menu, its updates and its account.
@@ -99,13 +101,21 @@ pub const Live = struct {
     ql_arena: ?*std.heap.ArenaAllocator = null,
     /// System commands, run by Nanolight itself (commands.zig).
     cmds: commands.Runner = undefined,
+    /// Currency rates (convert.zig): the table, when the cache or a fetch
+    /// gave one, when it was fetched, and when a fetch last began (Unix
+    /// seconds; 0 never). `rates_busy` while one is out.
+    rates: ?convert.Rates = null,
+    rates_at: i64 = 0,
+    rates_tried: i64 = 0,
+    rates_busy: bool = false,
+    rates_cache_read: bool = false,
     /// The next `hide` is skipped: a command just took the panel.
     keep_open: bool = false,
 
     fn host(l: *Live) view.Host {
         const bind = @import("settings_bind.zig");
         bind.box.ctx = l;
-        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .preview = if (mac) showPage else null, .settings = &bind.box, .command = runCommand };
+        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .preview = if (mac) showPage else null, .settings = &bind.box, .command = runCommand, .rates = needRates };
     }
 
     fn open(ctx: *anyopaque, target: []const u8) void {
@@ -274,6 +284,59 @@ pub const Live = struct {
             .headers = &.{.{ .name = "Accept", .value = "application/json" }},
             .timeout = 4,
         }, a, Ask.done);
+    }
+
+    fn ratesPath(l: *Live) ?[]u8 {
+        const data = nanoui.path(l.app.gpa, .data, "Nanolight") catch return null;
+        defer l.app.gpa.free(data);
+        std.Io.Dir.cwd().createDirPath(l.app.io, data) catch {};
+        return std.fs.path.join(l.app.gpa, &.{ data, "rates.json" }) catch null;
+    }
+
+    /// A conversion is listed: the cached table on the first call, then a
+    /// fetch when none is in hand or it is a day old (`convert.due`).
+    fn needRates(ctx: *anyopaque) void {
+        const l: *Live = @ptrCast(@alignCast(ctx));
+        const gpa = l.app.gpa;
+        if (!l.rates_cache_read) {
+            l.rates_cache_read = true;
+            if (l.kv.get(gpa, rates_at_key) catch null) |v| {
+                defer gpa.free(v);
+                l.rates_at = std.fmt.parseInt(i64, v, 10) catch 0;
+            }
+            if (l.ratesPath()) |path| {
+                defer gpa.free(path);
+                if (std.Io.Dir.cwd().readFileAlloc(l.app.io, path, gpa, .limited(convert.max_bytes)) catch null) |body| {
+                    defer gpa.free(body);
+                    if (convert.Rates.parse(gpa, body)) |r| l.useRates(r);
+                }
+            }
+        }
+        if (l.rates_busy or !convert.due(l.rates != null, l.rates_at, l.rates_tried, account.now())) return;
+        l.rates_busy = true;
+        l.rates_tried = account.now();
+        l.fetchRates(0);
+    }
+
+    fn fetchRates(l: *Live, which: usize) void {
+        const a = l.app.gpa.create(RatesAsk) catch {
+            l.rates_busy = false;
+            return;
+        };
+        a.* = .{ .live = l, .which = which };
+        nanoui.http.fetch(l.app.gpa, .{
+            .url = convert.urls[which],
+            .headers = &.{.{ .name = "Accept", .value = "application/json" }},
+            .timeout = 10,
+        }, a, RatesAsk.done);
+    }
+
+    /// Makes `r` the table in use and the panel's.
+    fn useRates(l: *Live, r: convert.Rates) void {
+        var old = l.rates;
+        l.rates = r;
+        l.s.rates = &l.rates.?;
+        if (old) |*o| o.deinit();
     }
 
     /// A search's page in the panel, or (null) not.
@@ -540,6 +603,38 @@ const Ask = struct {
     }
 };
 
+/// A fetch of the rates on its way: which of `convert.urls` it asked.
+const RatesAsk = struct {
+    live: *Live,
+    which: usize,
+
+    fn done(a: *RatesAsk, r: nanoui.http.Response) void {
+        const l = a.live;
+        const gpa = l.app.gpa;
+        defer gpa.destroy(a);
+        const table = if (r.status == 200) convert.Rates.parse(gpa, r.body) else null;
+        if (table) |t| {
+            l.rates_busy = false;
+            l.rates_at = account.now();
+            var at: [24]u8 = undefined;
+            l.kv.set(rates_at_key, std.fmt.bufPrint(&at, "{d}", .{l.rates_at}) catch "0") catch {};
+            if (l.ratesPath()) |path| {
+                defer gpa.free(path);
+                std.Io.Dir.cwd().writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch {};
+            }
+            l.useRates(t);
+            l.s.rates_failed = false;
+        } else if (a.which + 1 < convert.urls.len) {
+            return l.fetchRates(a.which + 1);
+        } else {
+            l.rates_busy = false;
+            l.s.rates_failed = l.rates == null;
+        }
+        l.s.ratesLanded();
+        if (l.window) |w| w.redraw();
+    }
+};
+
 /// This platform's archive in each release (macos/package.sh, pc/package.sh).
 const asset = switch (builtin.os.tag) {
     .macos => "nanolight-macos-arm64.zip",
@@ -587,6 +682,7 @@ pub fn main(init: std.process.Init) !void {
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
     defer s.query.deinit();
     var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa), .cfg = cfg };
+    defer if (live.rates) |*r| r.deinit();
     defer if (live.ql_arena) |a| {
         a.deinit();
         init.gpa.destroy(a);
