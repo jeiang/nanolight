@@ -205,6 +205,7 @@ fn serveOne(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, state: Io.Dir
     } else {
         var body: []const u8 = "";
         if (req.head.method.requestHasBody() and length > 0) {
+            req.writeExpectContinue() catch return;
             var chunk: [1024]u8 = undefined;
             const reader = req.readerExpectNone(&chunk);
             body = reader.readAlloc(arena, @intCast(length)) catch return;
