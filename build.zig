@@ -53,6 +53,15 @@ pub fn build(b: *std.Build) void {
         else => {},
     }
     b.installArtifact(exe);
+    // `zig build check`: compiles without linking, so a machine without the
+    // target's SDK still type-checks it. `-Dsdk=<dir>` points at stub
+    // frameworks and libraries (`<dir>/System/Library/Frameworks`, `<dir>/usr/lib`).
+    const chk = b.addObject(.{ .name = "nanolight-check", .root_module = exe.root_module });
+    if (b.option([]const u8, "sdk", "SDK root whose frameworks and libraries satisfy `check` (any target)")) |sdk| {
+        exe.root_module.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sdk}) });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib", .{sdk}) });
+    }
+    b.step("check", "Type-check without linking").dependOn(&chk.step);
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     b.step("run", "Run Nanolight (⌘Space)").dependOn(&run.step);
