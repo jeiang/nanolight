@@ -43,6 +43,15 @@ pub fn scanSystem(ix: *Index, io: std.Io, env: *const std.process.Environ.Map) v
     ix.sort();
 }
 
+/// Apps in the folders config.toml names, found as this OS finds its own.
+pub fn scanExtra(ix: *Index, io: std.Io, dirs: []const []const u8) void {
+    for (dirs) |d| switch (builtin.os.tag) {
+        .macos => ix.scanDir(io, d, 1),
+        .windows => @import("apps_win.zig").scanDir(ix, io, d, 1),
+        else => @import("apps_linux.zig").scanDir(ix, io, d, 1),
+    };
+}
+
 /// An address for the browser or the system (a pane of System Settings),
 /// not a file to open.
 pub fn isUrl(target: []const u8) bool {

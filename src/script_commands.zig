@@ -95,13 +95,15 @@ pub fn dir(gpa: std.mem.Allocator) ![]u8 {
     return d;
 }
 
-/// Adds each script command in the folder (and a folder down) to `ix`,
-/// and the row that opens the folder.
-pub fn scan(ix: *Index, gpa: std.mem.Allocator) void {
+/// Adds each script command in the folder and in `extra` (a folder down
+/// too) to `ix`, and the row that opens the folder.
+pub fn scan(ix: *Index, gpa: std.mem.Allocator, extra: []const []const u8) void {
     ix.addIn("Script Commands Folder", folder_path, "Raycast") catch {};
-    const root = dir(gpa) catch return;
-    defer gpa.free(root);
-    scanDir(ix, gpa, root, 1);
+    if (dir(gpa)) |root| {
+        defer gpa.free(root);
+        scanDir(ix, gpa, root, 1);
+    } else |_| {}
+    for (extra) |d| scanDir(ix, gpa, d, 1);
 }
 
 fn scanDir(ix: *Index, gpa: std.mem.Allocator, path: []const u8, depth: u8) void {
@@ -227,4 +229,19 @@ test "a script command's header" {
     try std.testing.expectEqualStrings(if (windows) "sh" else "/bin/sh", command("echo", "x", &out)[0]);
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("a%20b%26c", encode(&buf, "a b&c"));
+}
+
+test "a folder named in config.toml is scanned for script commands" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(t.io, .{ .sub_path = "hello.sh", .data = "#!/bin/sh\n# @raycast.schemaVersion 1\n# @raycast.title Say Hello\n# @raycast.mode silent\necho hi\n" });
+    try tmp.dir.writeFile(t.io, .{ .sub_path = "plain.sh", .data = "#!/bin/sh\necho no header\n" });
+    var buf: [128]u8 = undefined;
+    const path = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var ix: Index = .init(t.allocator);
+    defer ix.deinit();
+    scanDir(&ix, t.allocator, path, 1);
+    try t.expectEqual(@as(usize, 1), ix.apps.items.len);
+    try t.expectEqualStrings("Say Hello", ix.apps.items[0].name);
 }

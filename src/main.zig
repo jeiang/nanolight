@@ -33,12 +33,13 @@ const Recorder = if (mac) @import("recorder.zig").Recorder else @import("pc_stub
 const account = @import("account.zig");
 const rc = @import("script_live.zig");
 const Settings = @import("settings.zig").Settings;
+const config = @import("config.zig");
+/// A Nix build: no updater and no login-item UI; the modules own both.
+const nix_managed = @import("build_options").nix_managed;
 
-const suggest_key = "nanolight.suggest";
-/// "1": Return opens searches in the browser (issue #10).
-const searches_out_key = "nanolight.searches_out";
-/// "0": no menu bar icon (issue #8).
-const menu_bar_key = "nanolight.menu_bar";
+const suggest_key = config.suggest_key;
+const searches_out_key = config.searches_out_key;
+const menu_bar_key = config.menu_bar_key;
 
 pub fn applyChoice(ctx: *anyopaque, choice: shortcut.Choice) void {
     Live.apply(ctx, choice);
@@ -54,8 +55,7 @@ pub fn loginItem(ctx: *anyopaque, set: ?bool) bool {
 /// The version 0.1.6 and before left when they restarted into an update
 /// themselves (nanoui's updater does it now, `autoRestart`).
 pub const updated_key = "nanolight.updated";
-/// When this Mac last changed its key or suggestions (settings.zig's `at`).
-const sync_at_key = "nanolight.sync.at";
+const sync_at_key = config.sync_at_key;
 
 /// The app around the panel: its window, shown and hidden (panel_mac.zig,
 /// panel_pc.zig), its key, its menu, its updates and its account.
@@ -90,6 +90,8 @@ pub const Live = struct {
     /// Raycast script commands, run by Nanolight itself (script_run.zig).
     scripts: @import("script_run.zig").Runner = undefined,
     env: ?*const std.process.Environ.Map = null,
+    /// config.toml, as read at launch (strings live in main's arena).
+    cfg: config.Config = .{},
     /// The next `hide` is skipped: a command just took the panel.
     keep_open: bool = false,
 
@@ -283,7 +285,9 @@ pub const Live = struct {
         const ready = if (l.updater) |u| u.ready() else null;
         const label = if (ready) |v| std.fmt.bufPrint(&l.update_label, "Restart to Update to {s}", .{v}) catch "Restart to Update" else "Check for Updates";
         const acc = l.accountItems();
-        t.setMenu("Nanolight", &.{
+        const Item = nanoui.menu.MenuItem;
+        const update = if (nix_managed) [_]Item{} else [_]Item{.{ .label = label, .disabled = l.updater == null, .click = .of(l, Live.updateNow) }};
+        t.setMenu("Nanolight", &([_]Item{
             .{ .label = "Settings…", .accelerator = "Cmd+,", .click = .of(l, Live.menuSettings) },
             .{ .label = "Open Nanolight", .click = .of(l, Live.menuShow) },
             .{ .label = "Welcome…", .click = .of(l, Live.welcome) },
@@ -292,9 +296,7 @@ pub const Live = struct {
             acc[0],
             acc[1],
             .separator,
-            .{ .label = label, .disabled = l.updater == null, .click = .of(l, Live.updateNow) },
-            .{ .label = "Quit Nanolight", .role = .quit },
-        }) catch {};
+        } ++ update ++ [_]Item{.{ .label = "Quit Nanolight", .role = .quit }})) catch {};
     }
 
     fn updateNow(l: *Live, _: *nanoui.menu.Item) void {
@@ -362,7 +364,7 @@ pub const Live = struct {
     }
 
     fn hooks(l: *Live) @import("onboard.zig").Hooks {
-        return .{ .ctx = l, .apply = apply, .fix = fix, .login = login, .done = done };
+        return .{ .ctx = l, .apply = apply, .fix = fix, .login = if (l.o.skip_key) null else login, .done = done };
     }
 
     fn useKey(l: *Live, choice: shortcut.Choice) void {
@@ -517,10 +519,16 @@ pub fn main(init: std.process.Init) !void {
     apps.scanSystem(&index, init.io, init.environ_map);
     const kv = nanoui.kv.standard();
     index.load(kv);
-    var o: Onboard = .{};
+    // A headless run is no one's: neither their config nor their settings.
+    var cfg_arena: std.heap.ArenaAllocator = .init(init.gpa);
+    defer cfg_arena.deinit();
+    const cfg: config.Config = if (app.flags.hidden) .{} else config.load(cfg_arena.allocator(), init.io, init.environ_map);
+    if (!app.flags.hidden) config.seed(kv, init.gpa, cfg, account.now());
+    // The key is the config's or the Nix module's: the welcome does not ask.
+    var o: Onboard = .{ .skip_key = nix_managed or cfg.hotkey != null };
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
     defer s.query.deinit();
-    var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa) };
+    var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa), .cfg = cfg };
     s.host = live.host();
     // Google's completions are on unless turned off in Settings.
     if (kv.get(init.gpa, suggest_key) catch null) |v| {
@@ -565,8 +573,9 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, v, "0")) _ = live.menuBar(false);
     }
     // A release build checks its GitHub releases; one run from zig-out
-    // can't replace itself, and leaves the item off.
-    const updater = nanoui.Updater.start(init, .{
+    // can't replace itself, and leaves the item off. A Nix build never
+    // updates itself.
+    const updater = if (nix_managed) null else nanoui.Updater.start(init, .{
         .repo = "jeiang/nanolight",
         .asset = asset,
         .version = version,

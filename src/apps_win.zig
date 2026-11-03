@@ -22,7 +22,7 @@ pub fn scan(ix: *Index, io: std.Io, env: *const std.process.Environ.Map) void {
     ix.addIn("Calculator", "calculator:", "Windows") catch {};
 }
 
-fn scanDir(ix: *Index, io: std.Io, path: []const u8, depth: u8) void {
+pub fn scanDir(ix: *Index, io: std.Io, path: []const u8, depth: u8) void {
     var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return;
     defer dir.close(io);
     var it = dir.iterate();

@@ -99,7 +99,8 @@ pub fn refresh(ctx: *anyopaque) void {
 
 fn fill(l: *Live, ix: *apps.Index, env: *const std.process.Environ.Map) void {
     apps.scanSystem(ix, l.app.io, env);
-    sc.scan(ix, l.app.gpa);
+    apps.scanExtra(ix, l.app.io, l.cfg.extra_app_dirs);
+    sc.scan(ix, l.app.gpa, l.cfg.script_command_dirs);
     ix.sort();
     ix.load(l.kv);
 }

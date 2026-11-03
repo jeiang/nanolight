@@ -15,6 +15,8 @@ const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Choice = shortcut.Choice;
 const Palette = panel.Palette;
 const mac = @import("builtin").os.tag == .macos;
+/// A Nix build: the Nix modules own startup and updates.
+const nix = @import("build_options").nix_managed;
 
 const RowKind = enum { choice, suggest, browser, login, menu_bar, sync, terms, updates, welcome, quit };
 
@@ -105,13 +107,15 @@ pub const Settings = struct {
         label(c, p, "Search");
         s.switchRow(c, n, p, rows, .suggest, "Google Suggestions");
         if (mac) s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
-        label(c, p, "This " ++ @import("results.zig").machine);
-        s.switchRow(c, n, p, rows, .login, "Open at Login");
+        if (mac or !nix) label(c, p, "This " ++ @import("results.zig").machine);
+        if (!nix) s.switchRow(c, n, p, rows, .login, "Open at Login");
         if (mac) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
         label(c, p, if (@import("builtin").os.tag == .macos) "Sync Across Macs" else "Sync Across Computers");
         s.sync(c, n, p, rows);
-        label(c, p, "Updates");
-        s.updates(c, n, p, rows);
+        if (!nix) {
+            label(c, p, "Updates");
+            s.updates(c, n, p, rows);
+        }
         s.button(c, n, p, rows, .welcome, "Show Welcome Again");
         s.button(c, n, p, rows, .quit, "Quit Nanolight");
     }
@@ -361,12 +365,42 @@ pub const Settings = struct {
 
 fn rowList(state: account.State) []const RowKind {
     return switch (state) {
-        .signed_out, .starting => if (mac) &.{ .choice, .suggest, .browser, .login, .menu_bar, .sync, .terms, .updates, .welcome, .quit } else &.{ .choice, .suggest, .login, .sync, .terms, .updates, .welcome, .quit },
-        .waiting, .signed_in => if (mac) &.{ .choice, .suggest, .browser, .login, .menu_bar, .sync, .updates, .welcome, .quit } else &.{ .choice, .suggest, .login, .sync, .updates, .welcome, .quit },
+        .signed_out, .starting => visibleRows(true),
+        .waiting, .signed_in => visibleRows(false),
     };
+}
+
+/// The rows this build and sign-in state show, in order.
+fn visibleRows(comptime terms: bool) []const RowKind {
+    const out = comptime blk: {
+        var list: [10]RowKind = undefined;
+        var n: usize = 0;
+        for ([_]RowKind{ .choice, .suggest, .browser, .login, .menu_bar, .sync, .terms, .updates, .welcome, .quit }) |k| {
+            if (!mac and (k == .browser or k == .menu_bar)) continue;
+            if (!terms and k == .terms) continue;
+            if (nix and (k == .login or k == .updates)) continue;
+            list[n] = k;
+            n += 1;
+        }
+        break :blk list[0..n].*;
+    };
+    return &out;
 }
 
 fn isSel(rows: []const RowKind, sel: usize, kind: RowKind) bool {
     if (sel >= rows.len) return false;
     return rows[sel] == kind;
+}
+
+test "a Nix build's Settings has no login or updates row" {
+    for ([_]account.State{ .signed_out, .signed_in }) |state| {
+        var login = false;
+        var updates = false;
+        for (rowList(state)) |k| {
+            login = login or k == .login;
+            updates = updates or k == .updates;
+        }
+        try @import("std").testing.expectEqual(!nix, login);
+        try @import("std").testing.expectEqual(!nix, updates);
+    }
 }

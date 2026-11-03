@@ -14,6 +14,7 @@ test {
     _ = @import("promo_camera.zig");
     _ = @import("settings.zig");
     _ = @import("toml.zig");
+    _ = @import("config.zig");
     _ = @import("apps.zig");
     _ = @import("shortcut.zig");
     _ = @import("settings_panes.zig");
@@ -278,6 +279,7 @@ test "Google's completions land below, and a search shows in the panel" {
 
 const onboard = @import("onboard.zig");
 const shortcut = @import("shortcut.zig");
+const nix = @import("build_options").nix_managed;
 
 const Steps = struct {
     applied: ?shortcut.Choice = null,
@@ -465,10 +467,10 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     t.settle(1);
     try std.testing.expect(s.settings_ui.open);
     try std.testing.expect(t.hasText("Google Suggestions"));
-    try std.testing.expect(t.hasText("Open at Login"));
+    try std.testing.expect(t.hasText("Open at Login") != nix);
     try std.testing.expect(t.hasText("Sign In with Codegraff"));
     try std.testing.expect(t.hasText("Terms & Privacy"));
-    try std.testing.expect(t.hasText("Check for Updates"));
+    try std.testing.expect(t.hasText("Check for Updates") != nix);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     t.settle(1);
     try std.testing.expect(!s.settings_ui.open);
@@ -578,7 +580,34 @@ test "on a PC the panel's keys are Ctrl's, and Settings says so" {
     try std.testing.expect(t.shortcut(.{ .key = ',', .ctrl = true }));
     t.settle(1);
     try std.testing.expect(s.settings_ui.open);
-    try std.testing.expect(t.hasText("This PC"));
+    try std.testing.expect(t.hasText("This PC") != nix);
     try std.testing.expect(t.hasText("Alt Space"));
     try std.testing.expect(t.hasText("Sync Across Computers"));
+}
+
+test "a welcome whose key is set elsewhere skips the key step, in two steps" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    ix.starters = &mac_starters;
+    try ix.add("Safari", "/Applications/Safari.app");
+    var o: onboard.Onboard = .{ .skip_key = true };
+    o.start(.cmd_space);
+    try std.testing.expectEqual(onboard.Step.try_it, o.step);
+    var s: view.Nanolight = .{ .index = &ix, .onboard = &o };
+    defer s.query.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = 480, .dark = true });
+    defer t.deinit();
+    t.settle(1);
+    try std.testing.expect(!t.containsText("Open it with"));
+    try std.testing.expect(t.containsText("1 of 2"));
+    o.pressed(true);
+    o.pressed(false);
+    t.settle(2);
+    try std.testing.expect(t.hasText("You're set."));
+    try std.testing.expect(t.containsText("2 of 2"));
+    // Showing it again starts at the same step.
+    o.start(.cmd_space);
+    try std.testing.expectEqual(onboard.Step.try_it, o.step);
 }

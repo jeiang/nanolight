@@ -7,6 +7,8 @@
 //!   zig build test           its search, math, suggestions and panel
 //!   zig build film           the walkthrough's renderer (tools/film.sh)
 //!   zig build promo          the promo's renderer (tools/promo.sh)
+//!   -Dnix=true               a Nix build: Nix owns updates and startup, so
+//!                            no updater and no login-item UI
 //!
 //! Release packages (the signed app, its disk image and the update feed)
 //! are macos/package.sh's; Windows' zip and Linux's tarball, pc/package.sh's.
@@ -21,6 +23,7 @@ pub fn build(b: *std.Build) void {
     // The version, for `--version` and the updater off the Mac (no bundle there).
     const opts = b.addOptions();
     opts.addOption([]const u8, "version", version);
+    opts.addOption(bool, "nix_managed", b.option(bool, "nix", "A Nix build: the Nix modules own updates and startup (no updater, no login-item UI)") orelse false);
 
     const exe = b.addExecutable(.{ .name = "nanolight", .root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -89,6 +92,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
+    film.root_module.addOptions("build_options", opts);
     b.step("film", "Build the walkthrough's renderer (zig-out/bin/nanolight-film)").dependOn(&b.addInstallArtifact(film, .{}).step);
 
     // The promo's shots, rendered offscreen (src/promo.zig, tools/promo.sh).
@@ -98,6 +102,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
+    promo.root_module.addOptions("build_options", opts);
     b.step("promo", "Build the promo's renderer (zig-out/bin/nanolight-promo)").dependOn(&b.addInstallArtifact(promo, .{}).step);
 }
 
