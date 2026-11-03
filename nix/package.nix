@@ -4,6 +4,7 @@
   callPackage,
   zig_0_17,
   wrapGAppsHook3,
+  patchelf,
   gtk3,
   gdk-pixbuf,
   glib,
@@ -25,7 +26,7 @@ in
 
     nativeBuildInputs =
       [zig_0_17.hook]
-      ++ lib.optionals stdenv.hostPlatform.isLinux [wrapGAppsHook3];
+      ++ lib.optionals stdenv.hostPlatform.isLinux [wrapGAppsHook3 patchelf];
     buildInputs = lib.optionals stdenv.hostPlatform.isLinux dlopened;
 
     zigBuildFlags = ["-Dnix=true" "-Dversion=${source.version}"];
@@ -34,8 +35,10 @@ in
 
     postConfigure = source.seedZigDeps;
 
-    preFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
-      gappsWrapperArgs+=(--prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath dlopened})
+    # An rpath, not LD_LIBRARY_PATH: the launcher's children must not inherit the store's libraries.
+    # It is added after fixup, whose patchelf pass would shrink it away, and onto the wrapped binary.
+    postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
+      patchelf --add-rpath ${lib.makeLibraryPath dlopened} $out/bin/.nanolight-wrapped
     '';
 
     postInstall = lib.optionalString stdenv.hostPlatform.isDarwin ''

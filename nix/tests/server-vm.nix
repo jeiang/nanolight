@@ -2,7 +2,7 @@
   self,
   pkgs,
 }: let
-  record = ''{"v":2,"hotkey":"cmd_space","suggest":true,"at":100,"launches":[],"quicklinks":[]}'';
+  record = pkgs.writeText "record.json" ''{"v":2,"hotkey":"cmd_space","suggest":true,"at":100,"launches":[],"quicklinks":[]}'';
 in
   pkgs.testers.runNixOSTest {
     name = "nanolight-server";
@@ -27,7 +27,7 @@ in
       assert server.succeed(code + " -H 'Authorization: Bearer alice-token'") == "404", "nothing stored yet"
 
       auth = "-H 'Authorization: Bearer alice-token'"
-      server.succeed(f"curl -sf {auth} -X PUT --data '${record}' http://127.0.0.1:8890/v1/sync")
+      server.succeed(f"curl -sf {auth} -X PUT --data @${record} http://127.0.0.1:8890/v1/sync")
       body = server.succeed(f"curl -sf {auth} http://127.0.0.1:8890/v1/sync")
       assert '"hotkey":"cmd_space"' in body, body
       server.succeed("test -s /var/lib/private/nanolight/alice.json")
