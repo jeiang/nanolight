@@ -157,7 +157,7 @@ Every client module takes the same options: `programs.nanolight.enable`, `.packa
     enable = true;
     settings.sync = {
       url = "http://100.64.0.3:8890";
-      token_file = config.sops.secrets.nanolight-token.path;
+      token_file = config.sops.secrets.nanolight-token.path;  # needs sops.secrets.nanolight-token.owner = config.system.primaryUser
     };
     # codesignIdentity = "Apple Development: Jane Doe (ABCDE12345)";  # see below
   };
@@ -175,7 +175,7 @@ Pasting into another app needs the Accessibility grant (System Settings → Priv
   imports = [inputs.nanolight.nixosModules.default];
   programs.nanolight = {
     enable = true;
-    settings.hotkey = "alt_space";
+    settings.hotkey = "opt_space";
   };
 }
 ```
@@ -212,7 +212,7 @@ nix run github:jeiang/nanolight#nanolight-server -- hash-token "$token"   # prin
 
 Put `me:<sha256>` (replace `ACCOUNT`; `[a-z0-9_-]`, up to 64) on a line of the file `tokensFile` names, a sops-nix secret for instance, and the bare token in the file that each client's `sync.token_file` names. Only the hash is on the server.
 
-The flake commits no `flake.lock`: run `nix flake lock` once (CI needs the committed lock, and fails without it). Hosts need `nix-command flakes`. `nix flake check` builds the app (running `zig build test`), the server and a NixOS VM test of the server, and evaluates a NixOS configuration with both modules; the nix-darwin and home-manager modules are evaluated against stand-ins for the options they set.
+The flake commits its `flake.lock`. Hosts need `nix-command flakes`. `nix flake check` builds the app (running `zig build test`), the server and a NixOS VM test of the server, and evaluates a NixOS configuration with both modules; the nix-darwin and home-manager modules are evaluated against stand-ins for the options they set.
 
 ## Build
 
