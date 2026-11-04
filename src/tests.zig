@@ -23,6 +23,7 @@ test {
     _ = @import("settings_panes.zig");
     _ = @import("commands.zig");
     _ = @import("clipboard.zig");
+    _ = @import("clipboard_win.zig");
     _ = @import("tests_clipboard.zig");
     _ = @import("raycast_model.zig");
     _ = @import("raycast_view.zig");
