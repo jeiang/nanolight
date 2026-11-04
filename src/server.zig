@@ -261,8 +261,15 @@ pub fn main(init: std.process.Init) !void {
         return fatalf("nanolight-server: {s}:{d}: {t}\n", .{ tokens_file, line, e });
     if (tokens.len == 0) return fatalf("nanolight-server: {s} has no tokens\n", .{tokens_file});
 
-    try Io.Dir.cwd().createDirPath(init.io, state_dir);
-    const state = try Io.Dir.cwd().openDir(init.io, state_dir, .{});
+    // Opened before any create: under systemd's DynamicUser the state
+    // directory is a symlink, which createDirPath rejects as NotDir.
+    const state = Io.Dir.cwd().openDir(init.io, state_dir, .{}) catch |e| switch (e) {
+        error.FileNotFound => blk: {
+            Io.Dir.cwd().createDirPath(init.io, state_dir) catch |ce| return fatalf("nanolight-server: {s}: {t}\n", .{ state_dir, ce });
+            break :blk Io.Dir.cwd().openDir(init.io, state_dir, .{}) catch |oe| return fatalf("nanolight-server: {s}: {t}\n", .{ state_dir, oe });
+        },
+        else => return fatalf("nanolight-server: {s}: {t}\n", .{ state_dir, e }),
+    };
     const addr = Io.net.IpAddress.parseLiteral(listen) catch return fatalf("nanolight-server: bad --listen {s}\n", .{listen});
     var server = try addr.listen(init.io, .{ .reuse_address = true });
     defer server.deinit(init.io);
