@@ -186,7 +186,23 @@ test "every pane's extension is on this Mac's macOS, or is known not to be" {
         const i = for (all, 0..) |p, k| {
             if (std.mem.eql(u8, p.name, want)) break k;
         } else return error.NoPane;
-        if (!present(i)) std.debug.print("pane not on this Mac: {s} ({s})\n", .{ want, urls[i] });
+        if (!present(i)) {
+            std.debug.print("pane not on this Mac: {s} ({s}.appex)\n", .{ want, all[i].appex });
+            listLike(want);
+        }
         try std.testing.expect(present(i));
+    }
+}
+
+/// Prints the extensions whose bundle name holds `want`'s first word, so a
+/// failing run shows what this macOS calls the pane.
+fn listLike(want: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const word = want[0 .. std.mem.indexOfAny(u8, want, " -&") orelse want.len];
+    var dir = std.Io.Dir.cwd().openDir(io, "/System/Library/ExtensionKit/Extensions", .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (it.next(io) catch null) |e| {
+        if (std.ascii.findIgnoreCase(e.name, word) != null) std.debug.print("  on this Mac: {s}\n", .{e.name});
     }
 }
