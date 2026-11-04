@@ -19,7 +19,7 @@
         programs.nanolight = {
           enable = true;
           settings = {
-            hotkey = "alt_space";
+            hotkey = "opt_space";
             quicklinks = [
               {
                 name = "DuckDuckGo";
@@ -97,6 +97,8 @@
 
   agent = darwin.config.launchd.user.agents.nanolight.serviceConfig;
   facts = {
+    nixosUnitKeepsSessionPath = !(nixos.config.systemd.user.services.nanolight.environment ? PATH);
+    serverRetriesPastStartLimit = nixos.config.systemd.services.nanolight-server.startLimitIntervalSec == 0;
     nixosUnit = nixos.config.systemd.user.services.nanolight.environment.NANOLIGHT_CONFIG == "/etc/nanolight/config.toml";
     serverUnit = nixos.config.systemd.services.nanolight-server.serviceConfig.DynamicUser;
     firewall = lib.elem 8890 nixos.config.networking.firewall.allowedTCPPorts;

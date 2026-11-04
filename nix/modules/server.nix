@@ -50,6 +50,8 @@ in {
       description = "Nanolight sync server";
       wantedBy = ["multi-user.target"];
       after = ["network.target"];
+      # A mesh address may appear well after network.target; keep retrying instead of hitting the start limit.
+      startLimitIntervalSec = 0;
       serviceConfig = {
         ExecStart = "${lib.getExe cfg.package} serve --listen ${host}:${toString cfg.port} --state %S/nanolight --tokens %d/tokens";
         LoadCredential = "tokens:${cfg.tokensFile}";
@@ -57,6 +59,7 @@ in {
         StateDirectory = "nanolight";
         StateDirectoryMode = "0700";
         Restart = "on-failure";
+        RestartSec = "5s";
 
         CapabilityBoundingSet = "";
         LockPersonality = true;

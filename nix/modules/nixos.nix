@@ -18,6 +18,8 @@ in {
       wantedBy = ["graphical-session.target"];
       partOf = ["graphical-session.target"];
       after = ["graphical-session.target"];
+      # The default path would pin PATH to coreutils and friends; the unit must see the session PATH.
+      path = lib.mkForce [];
       environment.NANOLIGHT_CONFIG = configFile;
       serviceConfig = {
         ExecStart = lib.getExe cfg.package;
