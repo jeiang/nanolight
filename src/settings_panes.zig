@@ -11,7 +11,9 @@ pub const Pane = struct {
     name: []const u8,
     /// The extension's bundle id: its address is `url_prefix ++ id`.
     id: []const u8,
-    /// Its bundle in /System/Library/ExtensionKit/Extensions, without `.appex`.
+    /// Its bundle in /System/Library/ExtensionKit/Extensions, without `.appex`;
+    /// empty for a pane System Settings always has (General is built into the
+    /// app on macOS 15, not an extension).
     appex: []const u8,
     keywords: []const []const u8 = &.{},
 
@@ -31,7 +33,7 @@ pub const all = [_]Pane{
     .{ .name = "Sound", .id = "com.apple.Sound-Settings.extension", .appex = "Sound", .keywords = &.{ "volume", "audio", "speakers", "microphone", "output", "input" } },
     .{ .name = "Focus", .id = "com.apple.Focus-Settings.extension", .appex = "FocusSettingsExtension", .keywords = &.{ "do not disturb", "dnd" } },
     .{ .name = "Screen Time", .id = "com.apple.Screen-Time-Settings.extension", .appex = "ScreenTimePreferencesExtension", .keywords = &.{ "parental controls", "app limits" } },
-    .{ .name = "General", .id = "com.apple.systempreferences.GeneralSettings", .appex = "GeneralSettings" },
+    .{ .name = "General", .id = "com.apple.systempreferences.GeneralSettings", .appex = "" },
     .{ .name = "About", .id = "com.apple.SystemProfiler.AboutExtension", .appex = "AboutExtension", .keywords = &.{ "about this mac", "serial number", "macos version" } },
     .{ .name = "Software Update", .id = "com.apple.Software-Update-Settings.extension", .appex = "SoftwareUpdateSettingsExtension", .keywords = &.{ "update macos", "upgrade" } },
     .{ .name = "Storage", .id = "com.apple.settings.Storage", .appex = "Storage", .keywords = &.{ "disk space", "free space" } },
@@ -86,6 +88,10 @@ fn present(i: usize) bool {
         const io = std.Io.Threaded.global_single_threaded.io();
         var buf: [256]u8 = undefined;
         for (all, 0..) |p, k| {
+            if (p.appex.len == 0) {
+                have[k] = true;
+                continue;
+            }
             const path = std.fmt.bufPrint(&buf, "/System/Library/ExtensionKit/Extensions/{s}.appex", .{p.appex}) catch {
                 have[k] = false;
                 continue;
