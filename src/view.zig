@@ -369,7 +369,7 @@ pub const Nanolight = struct {
         if (s.res.need_rates) if (s.host) |host| if (host.rates) |get| get(host.ctx);
         // The first row: an app, the answer, or the search for what was
         // typed; never a completion nobody picked (they come after it).
-        s.sel = 0;
+        s.sel = s.res.actionable(0);
     }
 
     fn fill(s: *Nanolight) void {
@@ -385,8 +385,10 @@ pub const Nanolight = struct {
     /// The rates arrived (or could not be had): the conversion listed, if
     /// any, is redone. The selection stays where it was.
     pub fn ratesLanded(s: *Nanolight) void {
+        const was_pending = s.res.pending;
         s.fill();
-        if (s.sel >= s.res.n) s.sel = 0;
+        // The card is the answer now, and the first row again.
+        if (s.sel >= s.res.n or was_pending) s.sel = 0;
     }
 
     /// Google's completions of `typed` (what `Host.suggest` asked): kept,
@@ -587,7 +589,7 @@ pub const Nanolight = struct {
             return;
         }
         if (s.res.n == 0) return;
-        const sel = s.res.rows[@min(s.sel, s.res.n - 1)];
+        const sel = s.res.rows[s.res.actionable(s.sel)];
         if (sel.kind == .quicklink)
             ui.textf(c, .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85), .truncate = .ellipsis }, "Search {s}", .{s.quicklinks[sel.ql].name})
         else
@@ -601,7 +603,7 @@ pub const Nanolight = struct {
     /// Return on the selected row.
     pub fn activate(s: *Nanolight, c: *ui.Context) void {
         if (s.res.n == 0) return;
-        const r = s.res.rows[@min(s.sel, s.res.n - 1)];
+        const r = s.res.rows[s.res.actionable(s.sel)];
         switch (r.kind) {
             .calc => {
                 var buf: [64]u8 = undefined;
@@ -632,7 +634,7 @@ pub const Nanolight = struct {
     /// ⌘↩ on the selected row: a search goes where Return doesn't send it.
     fn activateOut(s: *Nanolight, c: *ui.Context) void {
         if (s.res.n == 0) return;
-        const r = s.res.rows[@min(s.sel, s.res.n - 1)];
+        const r = s.res.rows[s.res.actionable(s.sel)];
         switch (r.kind) {
             .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), s.searches_out),
             .suggest => s.searchWith(s.res.google orelse return, s.web.get(r.web), s.searches_out),

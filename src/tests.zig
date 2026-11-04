@@ -162,6 +162,7 @@ test "the panel finds, moves, answers and hands off" {
 
 const suggest = @import("suggest.zig");
 const results = @import("results.zig");
+const convert = @import("convert.zig");
 
 /// A host that answers for Google and shows pages: what was asked, shown.
 pub const Web = struct {
@@ -197,6 +198,40 @@ pub const Web = struct {
         w.page_len = u.len;
     }
 };
+
+test "a pending currency card is not the default row, and Return acts on the search under it" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var web: Web = .{};
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = web.host();
+    s.reveal();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
+    defer t.deinit();
+    t.settle(1);
+    press(&t, &.{.{ .insert = "100 usd to ttd" }});
+    try std.testing.expect(s.res.pending);
+    try std.testing.expectEqual(@as(usize, 1), s.sel);
+    try std.testing.expect(onFirstQuicklink(&s));
+    try std.testing.expect(t.hasText("Search Google"));
+    try std.testing.expect(!t.hasText("Copy Answer"));
+    // Arrowing onto the card still leaves Return meaning the search.
+    _ = t.shortcut(.{ .key = ui.Shortcut.up });
+    try std.testing.expectEqual(@as(usize, 0), s.sel);
+    try std.testing.expect(t.hasText("Search Google"));
+    // The rates land: the card is the answer, and selected.
+    var rates = convert.Rates.parse(gpa, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}").?;
+    defer rates.deinit();
+    s.rates = &rates;
+    s.ratesLanded();
+    t.settle(1);
+    try std.testing.expect(!s.res.pending);
+    try std.testing.expectEqual(@as(usize, 0), s.sel);
+    try std.testing.expect(t.hasText("Copy Answer"));
+}
 
 test "Google's completions land below, and a search shows in the panel" {
     const gpa = std.testing.allocator;

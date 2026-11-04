@@ -158,6 +158,8 @@ pub const Results = struct {
     rates_failed: bool = false,
     /// The query is a currency conversion: rates are needed (or may be stale).
     need_rates: bool = false,
+    /// Row 0 is a currency card still waiting for rates: nothing to copy yet.
+    pending: bool = false,
     /// The quicklink holding Google's completions, when listed.
     google: ?u16 = null,
     /// The query went to one quicklink by its keyword.
@@ -187,13 +189,13 @@ pub const Results = struct {
         r.expr = "";
         r.note = "";
         r.need_rates = false;
+        r.pending = false;
         const query = std.mem.trim(u8, query_in, " ");
         r.suggested = query.len == 0;
         if (query.len == 0) {
             for (suggestions[0..@min(suggestions.len, max_apps)]) |i| r.push(.{ .kind = .app, .app = i });
             return;
         }
-        var pending = false;
         if (calc.eval(query)) |v| {
             r.answer = calc.format(&r.answer_buf, v, true);
             r.hex = if (v >= 0 and v < 1e15 and v == @round(v))
@@ -202,7 +204,7 @@ pub const Results = struct {
                 "";
             r.push(.{ .kind = .calc });
         } else if (convert.answer(query, r.rates)) |a| {
-            pending = a == .pending;
+            r.pending = a == .pending;
             r.convertRow(a);
             r.push(.{ .kind = .calc });
         }
@@ -214,7 +216,7 @@ pub const Results = struct {
         if (isSettings(query)) r.push(.{ .kind = .settings });
         const clip = r.clip_on and isClipboard(query);
         if (clip) r.push(.{ .kind = .clipboard });
-        if (r.n > 0 and r.rows[0].kind == .calc and !pending) return;
+        if (r.n > 0 and r.rows[0].kind == .calc and !r.pending) return;
         // System Settings' panes, in their own section. A section's header
         // is less than a row: one completion fewer pays for it, so the
         // panel never grows past its tallest (view.max_height).
@@ -242,6 +244,13 @@ pub const Results = struct {
             r.push(.{ .kind = .quicklink, .ql = @intCast(i) });
             if (r.google == @as(u16, @intCast(i))) for (0..@min(web.len, max_web, room)) |j| r.push(.{ .kind = .suggest, .web = @intCast(j) });
         }
+    }
+
+    /// The row Return acts on when `sel` is chosen: a pending card has no
+    /// action of its own, so the row under it stands in.
+    pub fn actionable(r: *const Results, sel: usize) usize {
+        if (r.pending and sel == 0 and r.n > 1) return 1;
+        return @min(sel, r.n -| 1);
     }
 
     fn convertRow(r: *Results, a: convert.Answer) void {
@@ -492,6 +501,9 @@ test "a conversion is answered like math, with the rate under a currency's" {
     var web_row = false;
     for (r.slice()) |row| web_row = web_row or row.kind == .quicklink;
     try t.expect(web_row);
+    try t.expect(r.pending);
+    try t.expectEqual(@as(usize, 1), r.actionable(0));
+    try t.expectEqual(Kind.quicklink, r.rows[r.actionable(0)].kind);
     var rates = convert.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}").?;
     defer rates.deinit();
     r.rates = &rates;
@@ -501,6 +513,8 @@ test "a conversion is answered like math, with the rate under a currency's" {
     try t.expectEqualStrings("100 USD", r.expr);
     try t.expectEqualStrings("1 USD = 6.785 TTD · 2026-11-03", r.note);
     try t.expectEqualStrings("", r.hex);
+    try t.expect(!r.pending);
+    try t.expectEqual(@as(usize, 0), r.actionable(0));
     // Math after a conversion forgets its note and copy.
     r.build("2+2", &ix, &.{}, &.{}, defaults);
     try t.expectEqualStrings("", r.note);
