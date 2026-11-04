@@ -1,8 +1,8 @@
-//! A Raycast extension's command, drawn in the panel in place of the rows
+//! A script command, drawn in the panel in place of the rows
 //! while it runs: its list (a search field over sections of items), its
 //! detail (markdown as text) or its form, with its actions in the footer
 //! (Return the first, ⌘↩/Ctrl+↩ the second, ⌘K/Ctrl+O all of them). What
-//! it shows comes from its host process (raycast.zig) as `View`s; keys and
+//! it shows comes from the script's output (script_run.zig) as `View`s; keys and
 //! choices go back as messages (raycast_model.zig's `say`).
 const std = @import("std");
 const nanoui = @import("nanoui");

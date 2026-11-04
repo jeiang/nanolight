@@ -161,7 +161,6 @@ pub const Nanolight = struct {
     pub fn reveal(s: *Nanolight) void {
         s.back();
         s.settings_ui.hide();
-        s.clip_ui.hide();
         s.shown +%= 1;
         // Suggestions follow what was opened since.
         s.built = 1;
@@ -221,7 +220,7 @@ pub const Nanolight = struct {
         };
         if (s.settings_ui.open) return s.settings_ui.inPanel(c, s, p);
         if (s.clip_ui.open) return s.clip_ui.inPanel(c, s, p);
-        // A Raycast extension's command, while it runs (raycast_view.zig).
+        // A script command's output, while it runs (raycast_view.zig).
         if (s.ext) |e| if (e.open) return e.panel(c, s, p);
 
         s.keys(c);
@@ -363,7 +362,7 @@ pub const Nanolight = struct {
         s.built = h;
         s.web.n = 0;
         const asks = results.google(s.quicklinks) != null and results.keyed(s.quicklinks, std.mem.trim(u8, q, " ")) == null;
-        if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null and convert.answer(q, null) == null) {
+        if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null and convert.answer(q, s.rates) == null) {
             if (!s.cache.lookup(q, &s.web)) ask(host.ctx, q);
         };
         s.fill();

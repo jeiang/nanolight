@@ -193,6 +193,7 @@ pub const Results = struct {
             for (suggestions[0..@min(suggestions.len, max_apps)]) |i| r.push(.{ .kind = .app, .app = i });
             return;
         }
+        var pending = false;
         if (calc.eval(query)) |v| {
             r.answer = calc.format(&r.answer_buf, v, true);
             r.hex = if (v >= 0 and v < 1e15 and v == @round(v))
@@ -201,6 +202,7 @@ pub const Results = struct {
                 "";
             r.push(.{ .kind = .calc });
         } else if (convert.answer(query, r.rates)) |a| {
+            pending = a == .pending;
             r.convertRow(a);
             r.push(.{ .kind = .calc });
         }
@@ -212,7 +214,7 @@ pub const Results = struct {
         if (isSettings(query)) r.push(.{ .kind = .settings });
         const clip = r.clip_on and isClipboard(query);
         if (clip) r.push(.{ .kind = .clipboard });
-        if (r.n > 0 and r.rows[0].kind == .calc) return;
+        if (r.n > 0 and r.rows[0].kind == .calc and !pending) return;
         // System Settings' panes, in their own section. A section's header
         // is less than a row: one completion fewer pays for it, so the
         // panel never grows past its tallest (view.max_height).
@@ -486,6 +488,10 @@ test "a conversion is answered like math, with the rate under a currency's" {
     r.rates_failed = true;
     r.build("100 usd to ttd", &ix, &.{}, &.{}, defaults);
     try t.expectEqualStrings("Rates unavailable", r.answer);
+    // The pending card does not drop the web search under it.
+    var web_row = false;
+    for (r.slice()) |row| web_row = web_row or row.kind == .quicklink;
+    try t.expect(web_row);
     var rates = convert.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}").?;
     defer rates.deinit();
     r.rates = &rates;
