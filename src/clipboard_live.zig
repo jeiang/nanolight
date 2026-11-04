@@ -90,7 +90,9 @@ pub fn clear(ctx: *anyopaque) void {
 /// Why the screen has nothing to show now, or null.
 fn status(ctx: *anyopaque) ?[]const u8 {
     if (!clipboard.Watcher.available) return clipboard.Watcher.unavailable_reason;
-    const store = live(ctx).clip orelse return null;
+    const l = live(ctx);
+    if (@hasField(clipboard.Watcher, "why")) if (l.clip_watcher.why) |why| return why;
+    const store = l.clip orelse return null;
     return if (store.cfg.enabled) null else "Clipboard history is off. Turn it on in Settings.";
 }
 

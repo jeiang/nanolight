@@ -6,6 +6,7 @@
 //!   zig build app            zig-out/Nanolight.app, for /Applications
 //!   zig build test           its search, math, suggestions and panel
 //!   zig build server         the sync server, zig-out/bin/nanolight-server
+//!   zig build clip-probe     the Linux clipboard watcher, run without the panel
 //!   zig build film           the walkthrough's renderer (tools/film.sh)
 //!   zig build promo          the promo's renderer (tools/promo.sh)
 //!   -Dnix=true               a Nix build: Nix owns updates and startup, so
@@ -96,6 +97,17 @@ pub fn build(b: *std.Build) void {
     }) });
     if (optimize != .debug) server.root_module.strip = true;
     b.step("server", "Build the sync server (zig-out/bin/nanolight-server)").dependOn(&b.addInstallArtifact(server, .{}).step);
+
+    // Runs the Linux clipboard watcher without the panel (src/clipboard_probe.zig).
+    if (os == .linux) {
+        const probe = b.addExecutable(.{ .name = "clip-probe", .root_module = b.createModule(.{
+            .root_source_file = b.path("src/clipboard_probe.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+        }) });
+        b.step("clip-probe", "Build the Linux clipboard probe (zig-out/bin/clip-probe)").dependOn(&b.addInstallArtifact(probe, .{}).step);
+    }
 
     // The walkthrough, rendered offscreen (src/film.zig, tools/film.sh).
     const film = b.addExecutable(.{ .name = "nanolight-film", .root_module = b.createModule(.{

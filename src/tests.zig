@@ -45,6 +45,9 @@ test {
         else => {
             _ = @import("apps_linux.zig");
             _ = @import("hotkey_x11.zig");
+            _ = @import("clipboard_linux.zig");
+            _ = @import("clipboard_x11.zig");
+            _ = @import("clipboard_wl.zig");
         },
     }
 }
