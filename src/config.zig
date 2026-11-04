@@ -2,8 +2,9 @@
 //! start with. The file seeds the app's own settings and in-app changes
 //! win: each key's last-applied file value is kept in the kv store, and
 //! only a file value that differs from it is applied again (`seed`).
-//! A missing file is the defaults; a broken one is logged and the
-//! defaults are used.
+//! A missing file is the defaults, unless one was applied before (then
+//! nothing is recorded or pruned until it is found); a broken one is
+//! logged and the defaults are used.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const toml = @import("toml.zig");
@@ -73,30 +74,53 @@ pub const sync_at_key = "nanolight.sync.at";
 
 const applied_prefix = "nanolight.config.";
 
-/// Reads the file at `NANOLIGHT_CONFIG`, else `<data dir>/config.toml`. Strings live as long as `arena`.
-/// A missing file is the defaults (`from_file` false); a file that cannot be read or is invalid is null.
-/// The caller seeds only a file it read.
-pub fn load(arena: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) ?Config {
-    const path = env.get("NANOLIGHT_CONFIG") orelse defaultPath(arena) orelse return .{};
-    const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch |e| {
-        if (e == error.FileNotFound) return .{};
-        std.log.warn("nanolight: {s}: {t}; using the defaults", .{ path, e });
-        return null;
-    };
-    var problem: Problem = .{};
-    return parse(arena, text, &problem) catch |e| {
-        if (e == error.OutOfMemory) return null;
-        if (problem.line > 0)
-            std.log.warn("nanolight: {s}:{d}: {s}; using the defaults", .{ path, problem.line, problem.msg })
-        else
-            std.log.warn("nanolight: {s}: {s}; using the defaults", .{ path, problem.msg });
-        return null;
-    };
+/// Set once a config file has been applied; a later launch that finds none must not fall back to defaults.
+const seen_key = "nanolight.config.seen";
+
+/// Reads the first config file `candidates` finds. Strings live as long as `arena`.
+/// No file is the defaults (`from_file` false). A file that cannot be read or is invalid is null,
+/// and so is no file on a machine where one was applied before: the caller seeds only a file it
+/// read, and treats null as "retention and exclude list unknown".
+pub fn load(arena: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map, kv: nanoui.kv.Store) ?Config {
+    const data = nanoui.path(arena, .data, "Nanolight") catch null;
+    return loadFrom(arena, io, candidates(arena, env, data) catch return null, kv);
 }
 
-fn defaultPath(arena: std.mem.Allocator) ?[]const u8 {
-    const data = nanoui.path(arena, .data, "Nanolight") catch return null;
-    return std.fs.path.join(arena, &.{ data, "config.toml" }) catch null;
+/// Where a config may live, first match wins: `NANOLIGHT_CONFIG`, the data dir, the XDG config dir
+/// (home-manager's `xdg.configFile`), then `/etc/nanolight` (the NixOS and nix-darwin modules).
+fn candidates(arena: std.mem.Allocator, env: *const std.process.Environ.Map, data_dir: ?[]const u8) std.mem.Allocator.Error![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    if (env.get("NANOLIGHT_CONFIG")) |p| try out.append(arena, p);
+    if (data_dir) |d| try out.append(arena, try std.fs.path.join(arena, &.{ d, "config.toml" }));
+    const xdg: ?[]const u8 = if (env.get("XDG_CONFIG_HOME")) |x| (if (x.len > 0) x else null) else null;
+    if (xdg orelse (if (env.get("HOME")) |h| try std.fs.path.join(arena, &.{ h, ".config" }) else null)) |c|
+        try out.append(arena, try std.fs.path.join(arena, &.{ c, "nanolight", "config.toml" }));
+    try out.append(arena, "/etc/nanolight/config.toml");
+    return out.items;
+}
+
+fn loadFrom(arena: std.mem.Allocator, io: std.Io, paths: []const []const u8, kv: nanoui.kv.Store) ?Config {
+    for (paths) |path| {
+        const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch |e| {
+            if (e == error.FileNotFound) continue;
+            std.log.warn("nanolight: {s}: {t}; using the defaults", .{ path, e });
+            return null;
+        };
+        var problem: Problem = .{};
+        return parse(arena, text, &problem) catch |e| {
+            if (e == error.OutOfMemory) return null;
+            if (problem.line > 0)
+                std.log.warn("nanolight: {s}:{d}: {s}; using the defaults", .{ path, problem.line, problem.msg })
+            else
+                std.log.warn("nanolight: {s}: {s}; using the defaults", .{ path, problem.msg });
+            return null;
+        };
+    }
+    if (kv.get(arena, seen_key) catch null) |_| {
+        warn("nanolight: no config.toml found, but one was applied before; clipboard history is paused until it is found", .{});
+        return null;
+    }
+    return .{};
 }
 
 pub fn parse(arena: std.mem.Allocator, text: []const u8, problem: *Problem) Error!Config {
@@ -276,6 +300,7 @@ pub fn saveQuicklinks(store: nanoui.kv.Store, gpa: std.mem.Allocator, list: []co
 /// it syncs.
 pub fn seed(store: nanoui.kv.Store, gpa: std.mem.Allocator, c: Config, now: i64) void {
     var synced = false;
+    store.set(seen_key, "1") catch {};
     if (c.hotkey) |h| {
         if (shortcut.Choice.parse(h)) |choice| {
             if (fresh(store, gpa, "hotkey", h)) {
@@ -564,12 +589,64 @@ test "a quicklink that is not http or https is dropped, the rest stay" {
 }
 
 test "a missing file is the defaults and is not from a file" {
-    var env: std.process.Environ.Map = .init(testing.allocator);
-    defer env.deinit();
-    try env.put("NANOLIGHT_CONFIG", "/nonexistent/nanolight/config.toml");
+    var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
+    defer m.deinit();
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const c = load(arena.allocator(), testing.io, &env).?;
+    const c = loadFrom(arena.allocator(), testing.io, &.{"/nonexistent/nanolight/config.toml"}, m.store()).?;
     try testing.expect(!c.from_file);
     try testing.expect((try parseOk(arena.allocator(), "")).from_file);
+}
+
+test "lookup order: env, data dir, XDG, /etc" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var env: std.process.Environ.Map = .init(testing.allocator);
+    defer env.deinit();
+    try env.put("NANOLIGHT_CONFIG", "/n/c.toml");
+    try env.put("XDG_CONFIG_HOME", "/x");
+    var got = try candidates(a, &env, "/d");
+    try testing.expectEqual(@as(usize, 4), got.len);
+    try testing.expectEqualStrings("/n/c.toml", got[0]);
+    try testing.expectEqualStrings("/d/config.toml", got[1]);
+    try testing.expectEqualStrings("/x/nanolight/config.toml", got[2]);
+    try testing.expectEqualStrings("/etc/nanolight/config.toml", got[3]);
+    var home: std.process.Environ.Map = .init(testing.allocator);
+    defer home.deinit();
+    try home.put("HOME", "/h");
+    got = try candidates(a, &home, "/d");
+    try testing.expectEqualStrings("/d/config.toml", got[0]);
+    try testing.expectEqualStrings("/h/.config/nanolight/config.toml", got[1]);
+}
+
+test "the first file that exists wins" {
+    var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
+    defer m.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "b.toml", .data = "suggestions = false\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "c.toml", .data = "suggestions = true\n" });
+    const a = arena.allocator();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
+    const paths = [_][]const u8{
+        try std.fs.path.join(a, &.{ dir, "a.toml" }),
+        try std.fs.path.join(a, &.{ dir, "b.toml" }),
+        try std.fs.path.join(a, &.{ dir, "c.toml" }),
+    };
+    const c = loadFrom(a, testing.io, &paths, m.store()).?;
+    try testing.expectEqual(false, c.suggestions.?);
+}
+
+test "no file after one was applied is a failed load, not the defaults" {
+    var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
+    defer m.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const none = [_][]const u8{"/nonexistent/nanolight/config.toml"};
+    try testing.expect(loadFrom(arena.allocator(), testing.io, &none, m.store()) != null);
+    seed(m.store(), testing.allocator, .{ .from_file = true }, 1);
+    try testing.expect(loadFrom(arena.allocator(), testing.io, &none, m.store()) == null);
 }

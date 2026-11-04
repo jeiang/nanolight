@@ -689,7 +689,7 @@ pub fn main(init: std.process.Init) !void {
     // A headless run is no one's: neither their config nor their settings.
     var cfg_arena: std.heap.ArenaAllocator = .init(init.gpa);
     defer cfg_arena.deinit();
-    const loaded: ?config.Config = if (app.flags.hidden) null else config.load(cfg_arena.allocator(), init.io, init.environ_map);
+    const loaded: ?config.Config = if (app.flags.hidden) null else config.load(cfg_arena.allocator(), init.io, init.environ_map, kv);
     const cfg: config.Config = loaded orelse .{};
     // A missing file seeds nothing: it would forget what the app applied.
     if (loaded) |c| if (c.from_file) config.seed(kv, init.gpa, c, account.now());
