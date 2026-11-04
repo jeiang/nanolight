@@ -30,6 +30,8 @@ pub const Sync = struct {
 
 /// A key left out of the file is null: the app's own value stands.
 pub const Config = struct {
+    /// Read from a file; false for the defaults of a missing one, which seed nothing.
+    from_file: bool = false,
     hotkey: ?[]const u8 = null,
     suggestions: ?bool = null,
     open_searches_in_browser: ?bool = null,
@@ -72,8 +74,8 @@ pub const sync_at_key = "nanolight.sync.at";
 const applied_prefix = "nanolight.config.";
 
 /// Reads the file at `NANOLIGHT_CONFIG`, else `<data dir>/config.toml`. Strings live as long as `arena`.
-/// A missing file is the defaults; a file that cannot be read or is invalid is null,
-/// so the caller does not seed it.
+/// A missing file is the defaults (`from_file` false); a file that cannot be read or is invalid is null.
+/// The caller seeds only a file it read.
 pub fn load(arena: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) ?Config {
     const path = env.get("NANOLIGHT_CONFIG") orelse defaultPath(arena) orelse return .{};
     const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch |e| {
@@ -107,7 +109,7 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8, problem: *Problem) Erro
         error.OutOfMemory => return error.OutOfMemory,
     };
     var r: Reader = .{ .a = arena, .problem = problem };
-    var c: Config = .{};
+    var c: Config = .{ .from_file = true };
     c.hotkey = try r.get([]const u8, root, "", "hotkey");
     c.suggestions = try r.get(bool, root, "", "suggestions");
     c.open_searches_in_browser = try r.get(bool, root, "", "open_searches_in_browser");
@@ -559,4 +561,15 @@ test "a quicklink that is not http or https is dropped, the rest stay" {
     );
     try testing.expectEqual(@as(usize, 1), c.quicklinks.len);
     try testing.expectEqualStrings("Ok", c.quicklinks[0].name);
+}
+
+test "a missing file is the defaults and is not from a file" {
+    var env: std.process.Environ.Map = .init(testing.allocator);
+    defer env.deinit();
+    try env.put("NANOLIGHT_CONFIG", "/nonexistent/nanolight/config.toml");
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const c = load(arena.allocator(), testing.io, &env).?;
+    try testing.expect(!c.from_file);
+    try testing.expect((try parseOk(arena.allocator(), "")).from_file);
 }

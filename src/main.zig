@@ -691,9 +691,10 @@ pub fn main(init: std.process.Init) !void {
     defer cfg_arena.deinit();
     const loaded: ?config.Config = if (app.flags.hidden) null else config.load(cfg_arena.allocator(), init.io, init.environ_map);
     const cfg: config.Config = loaded orelse .{};
-    if (loaded) |c| config.seed(kv, init.gpa, c, account.now());
+    // A missing file seeds nothing: it would forget what the app applied.
+    if (loaded) |c| if (c.from_file) config.seed(kv, init.gpa, c, account.now());
     // The key is the config's or the Nix module's: the welcome does not ask.
-    var o: Onboard = .{ .skip_key = nix_managed or cfg.hotkey != null };
+    var o: Onboard = .{ .skip_key = nix_managed or (if (cfg.hotkey) |h| shortcut.Choice.parse(h) != null else false) };
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
     defer s.query.deinit();
     var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa), .cfg = cfg };
@@ -738,9 +739,10 @@ pub fn main(init: std.process.Init) !void {
     var clip_dir = clipboard_live.openDir(init.gpa, init.io);
     defer if (clip_dir) |*d| d.close(init.io);
     var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, .{
-        .enabled = config.clipboardEnabled(kv, init.gpa, cfg.clipboard.enabled),
-        .retention_days = cfg.clipboard.retention_days,
-        .max_entries = cfg.clipboard.max_entries,
+        // A file that failed to load gives no retention or exclude list: record and prune nothing.
+        .enabled = loaded != null and config.clipboardEnabled(kv, init.gpa, cfg.clipboard.enabled),
+        .retention_days = if (loaded != null) cfg.clipboard.retention_days else 0,
+        .max_entries = if (loaded != null) cfg.clipboard.max_entries else 0,
         .exclude_apps = cfg.clipboard.exclude_apps,
     });
     defer clip_store.deinit();
