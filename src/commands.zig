@@ -68,9 +68,12 @@ pub const linux_table = volumes(linuxVolume) ++ [_]Command{
     .{ .name = "Light Mode", .keywords = &.{ "appearance", "theme" }, .runs = &.{&.{ "gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "default" }} },
 };
 
+/// Absolute, so a rundll32.bat in the working directory is never found first.
+const rundll32 = "C:\\Windows\\System32\\rundll32.exe";
+
 pub const windows_table = [_]Command{
-    .{ .name = "Sleep", .keywords = &.{ "suspend", "hibernate" }, .runs = &.{&.{ "rundll32", "powrprof.dll,SetSuspendState", "0,1,0" }} },
-    .{ .name = "Lock Screen", .keywords = &.{"lock"}, .runs = &.{&.{ "rundll32", "user32.dll,LockWorkStation" }} },
+    .{ .name = "Sleep", .keywords = &.{ "suspend", "hibernate" }, .runs = &.{&.{ rundll32, "powrprof.dll,SetSuspendState", "0,1,0" }} },
+    .{ .name = "Lock Screen", .keywords = &.{"lock"}, .runs = &.{&.{ rundll32, "user32.dll,LockWorkStation" }} },
 };
 
 /// This OS's commands.
@@ -95,6 +98,7 @@ pub fn init(io: std.Io, env: *const std.process.Environ.Map) void {
 }
 
 fn onPath(io: std.Io, path: []const u8, program: []const u8) bool {
+    if (std.fs.path.isAbsolute(program)) return if (std.Io.Dir.accessAbsolute(io, program, .{ .execute = !windows })) true else |_| false;
     var dirs = std.mem.tokenizeScalar(u8, path, if (windows) ';' else ':');
     var buf: [1024]u8 = undefined;
     while (dirs.next()) |dir| {

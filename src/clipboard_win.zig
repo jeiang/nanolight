@@ -384,7 +384,7 @@ pub const Watcher = struct {
         if (seq == w.last) return;
         w.last = seq;
         const sink = w.sink orelse return;
-        var name_buf: [1024]u8 = undefined;
+        var name_buf: [3 * 1024]u8 = undefined;
         var owner = processName(GetClipboardOwner(), &name_buf);
         if (owner.len == 0) owner = processName(GetForegroundWindow(), &name_buf);
         // Before the clipboard is opened at all.

@@ -212,27 +212,35 @@ pub const X11 = struct {
     // ----- reading what was copied -----
 
     /// The owner window's WM_CLASS (its class, else its name), in `source_buf`.
+    /// GTK3 and Qt owner windows have no WM_CLASS, only a WM_NAME (the program's
+    /// name, or "Qt Selection Owner for <name>"), which stands in for it.
     fn wmClass(x: *X11, owner: Window) []const u8 {
-        var kind: Atom = 0;
-        var format: c_int = 0;
-        var n: c_ulong = 0;
-        var left: c_ulong = 0;
-        var data: ?[*]u8 = null;
-        const before = x.trap();
-        const rc = x.xl.XGetWindowProperty(x.d.?, owner, x.atom("WM_CLASS"), 0, 64, 0, xa_string, &kind, &format, &n, &left, &data);
-        const ok = x.untrap(before) and rc == 0;
-        defer if (data) |p| {
-            _ = x.xl.XFree(p);
-        };
-        const bytes = (data orelse return "")[0..if (ok and format == 8) n else 0];
-        // "name\0class\0"
-        var it = std.mem.splitScalar(u8, bytes, 0);
-        const name = it.next() orelse "";
-        const class = it.next() orelse "";
-        const pick = if (class.len > 0) class else name;
-        const len = @min(pick.len, x.source_buf.len);
-        @memcpy(x.source_buf[0..len], pick[0..len]);
-        return x.source_buf[0..len];
+        const qt = "Qt Selection Owner for ";
+        for ([_][*:0]const u8{ "WM_CLASS", "WM_NAME" }) |prop| {
+            var kind: Atom = 0;
+            var format: c_int = 0;
+            var n: c_ulong = 0;
+            var left: c_ulong = 0;
+            var data: ?[*]u8 = null;
+            const before = x.trap();
+            const rc = x.xl.XGetWindowProperty(x.d.?, owner, x.atom(prop), 0, 64, 0, xa_string, &kind, &format, &n, &left, &data);
+            const ok = x.untrap(before) and rc == 0;
+            defer if (data) |p| {
+                _ = x.xl.XFree(p);
+            };
+            const bytes = (data orelse continue)[0..if (ok and format == 8) n else 0];
+            // "name\0class\0", or a bare name.
+            var it = std.mem.splitScalar(u8, bytes, 0);
+            const name = it.next() orelse "";
+            const class = it.next() orelse "";
+            var pick = if (class.len > 0) class else name;
+            if (std.mem.startsWith(u8, pick, qt)) pick = pick[qt.len..];
+            if (pick.len == 0) continue;
+            const len = @min(pick.len, x.source_buf.len);
+            @memcpy(x.source_buf[0..len], pick[0..len]);
+            return x.source_buf[0..len];
+        }
+        return "";
     }
 
     fn begin(x: *X11, owner: Window, time: c_ulong) void {
