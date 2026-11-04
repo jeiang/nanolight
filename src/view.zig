@@ -387,8 +387,10 @@ pub const Nanolight = struct {
     pub fn ratesLanded(s: *Nanolight) void {
         const was_pending = s.res.pending;
         s.fill();
-        // The card is the answer now, and the first row again.
-        if (s.sel >= s.res.n or was_pending) s.sel = 0;
+        // The card is the answer now, and the first row again; a card
+        // still pending (the fetch failed) keeps the selection off it.
+        if (was_pending and !s.res.pending) s.sel = 0;
+        if (s.sel >= s.res.n) s.sel = s.res.actionable(0);
     }
 
     /// Google's completions of `typed` (what `Host.suggest` asked): kept,

@@ -222,6 +222,14 @@ test "a pending currency card is not the default row, and Return acts on the sea
     _ = t.shortcut(.{ .key = ui.Shortcut.up });
     try std.testing.expectEqual(@as(usize, 0), s.sel);
     try std.testing.expect(t.hasText("Search Google"));
+    // The fetch fails: the card stays pending and the selection stays put.
+    _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    s.rates_failed = true;
+    s.ratesLanded();
+    t.settle(1);
+    try std.testing.expect(s.res.pending);
+    try std.testing.expectEqual(@as(usize, 1), s.sel);
+    s.rates_failed = false;
     // The rates land: the card is the answer, and selected.
     var rates = convert.Rates.parse(gpa, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}").?;
     defer rates.deinit();
