@@ -34,6 +34,8 @@ pub const Kind = enum {
     pane,
     /// A system command (`Row.app` its place in commands.zig).
     command,
+    /// Clipboard History, listed when the query asks for it.
+    clipboard,
 
     /// The row's kind as its trailing label shows it.
     pub fn label(k: Kind) []const u8 {
@@ -43,6 +45,7 @@ pub const Kind = enum {
             .settings => "Nanolight",
             .pane => "System Settings",
             .command => "Command",
+            .clipboard => "Nanolight",
             .quicklink, .suggest => "Web",
         };
     }
@@ -55,6 +58,7 @@ pub const Kind = enum {
             .settings => "Open Settings",
             .pane => "Open in System Settings",
             .command => "Run Command",
+            .clipboard => "Open Clipboard History",
             .quicklink => "Search",
             .suggest => "Search Google",
         };
@@ -67,6 +71,7 @@ pub const Kind = enum {
             .settings => "Nanolight",
             .pane => "System Settings",
             .command => "Commands",
+            .clipboard => "Nanolight",
             .quicklink, .suggest => unreachable,
         };
     }
@@ -157,6 +162,8 @@ pub const Results = struct {
     google: ?u16 = null,
     /// The query went to one quicklink by its keyword.
     keyed: ?Keyed = null,
+    /// Clipboard History can be opened (the host has it): it is listed for "clip".
+    clip_on: bool = false,
 
     /// What a quicklink row searches for: the words, past any keyword.
     pub fn argument(r: *const Results, query: []const u8) []const u8 {
@@ -203,19 +210,21 @@ pub const Results = struct {
         // "settings" / "preferences": Nanolight's own screen, right under
         // the apps: Return still opens System Settings, a key away from this.
         if (isSettings(query)) r.push(.{ .kind = .settings });
+        const clip = r.clip_on and isClipboard(query);
+        if (clip) r.push(.{ .kind = .clipboard });
         if (r.n > 0 and r.rows[0].kind == .calc) return;
         // System Settings' panes, in their own section. A section's header
         // is less than a row: one completion fewer pays for it, so the
         // panel never grows past its tallest (view.max_height).
         var pane_rows: [max_panes]search.Ranked = undefined;
-        const np = if (isSettings(query)) 0 else panes.rank(query, &pane_rows);
+        const np = if (isSettings(query) or clip) 0 else panes.rank(query, &pane_rows);
         for (pane_rows[0..np]) |x| r.push(.{ .kind = .pane, .app = x.index, .match = x.match });
         const key = keyed(ql, query);
         // System commands take what room the apps, panes and quicklinks leave.
         const shown = @min(ql.len, max_quicklink_rows);
         var cmd_rows: [max_commands]search.Ranked = undefined;
         const cmd_room = @min(max_commands, max_rows -| r.n -| shown -| 1 -| @intFromBool(np > 0));
-        const nc = if (key != null or isSettings(query)) 0 else commands.rank(query, cmd_rows[0..cmd_room]);
+        const nc = if (key != null or isSettings(query) or clip) 0 else commands.rank(query, cmd_rows[0..cmd_room]);
         for (cmd_rows[0..nc]) |x| r.push(.{ .kind = .command, .app = x.index, .match = x.match });
         // A keyword sends the rest of the query to its quicklink alone.
         if (key) |k| {
@@ -254,6 +263,13 @@ pub const Results = struct {
                 r.answer = if (r.rates_failed) "Rates unavailable" else "Loading rates…";
             },
         }
+    }
+
+    /// "clip", or a name's worth of "Clipboard History" (not a stray letter or two).
+    fn isClipboard(query: []const u8) bool {
+        if (std.ascii.eqlIgnoreCase(query, "clip")) return true;
+        const m = search.score(query, "Clipboard History") orelse return false;
+        return query.len >= 3 and m.score >= 500;
     }
 
     /// "settings" and "preferences", the words people type for this.

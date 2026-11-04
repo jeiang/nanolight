@@ -17,11 +17,15 @@ const mac = @import("builtin").os.tag == .macos;
 /// A Nix build: the Nix modules own startup and updates.
 const nix = @import("build_options").nix_managed;
 
-const RowKind = enum { choice, suggest, browser, login, menu_bar, updates, welcome, quit };
+const RowKind = enum { choice, suggest, browser, login, menu_bar, clipboard, clear_clipboard, updates, welcome, quit };
 
 /// As tall as its sections, never past the window. The Mac has two rows
 /// more: where searches open, and the menu bar icon.
-pub const height: f32 = 512 + if (mac) 2 * 46 else 0;
+const base_height: f32 = 512 + if (mac) 2 * 46 else 0;
+/// The clipboard's section: a heading, a switch and a button.
+const clip_height: f32 = 116;
+/// The tallest it gets (with the clipboard's section).
+pub const height: f32 = base_height + clip_height;
 
 pub const Settings = struct {
     open: bool = false,
@@ -40,6 +44,10 @@ pub const Settings = struct {
     browser: bool = false,
     login: bool = false,
     menu_bar: bool = true,
+    /// Clipboard history recording; `clip_here` is whether this system has it.
+    clip: bool = true,
+    clip_here: bool = false,
+    cleared: bool = false,
     sync: []const u8 = @import("account.zig").off_text,
     version: []const u8 = "0.1.0",
     ready: ?[]const u8 = null,
@@ -47,11 +55,22 @@ pub const Settings = struct {
     pub fn show(s: *Settings) void {
         s.open = true;
         s.sel = 0;
+        s.cleared = false;
+    }
+
+    /// The height now: the clipboard's section is there only where this system has it.
+    pub fn tall(s: *const Settings) f32 {
+        return if (s.clip_here) height else base_height;
     }
 
     pub fn hide(s: *Settings) void {
         s.open = false;
         s.recording = false;
+    }
+
+    /// The rows shown now: the clipboard's only where this system has it.
+    fn shown(s: *const Settings) []const RowKind {
+        return if (s.clip_here) visible(true) else visible(false);
     }
 
     fn hooks(s: *Settings, n: *panel.Nanolight) ?*const SettingsHost {
@@ -68,6 +87,8 @@ pub const Settings = struct {
         s.choice = h.choice(h.ctx);
         if (s.choice.preset() == null) s.custom = s.choice;
         s.login = h.login(h.ctx, null);
+        s.clip_here = h.clipboard_enabled(h.ctx, null) != null;
+        s.clip = h.clipboard_enabled(h.ctx, null) orelse false;
         s.sync = h.sync_status(h.ctx);
         s.version = h.version(h.ctx);
         s.ready = h.ready(h.ctx);
@@ -75,7 +96,7 @@ pub const Settings = struct {
 
     pub fn view(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
         s.pull(n);
-        const rows = visibleRows;
+        const rows = s.shown();
         if (s.sel >= rows.len) s.sel = rows.len - 1;
         s.keys(c, n, rows);
         ui.key(c, "settings");
@@ -107,6 +128,11 @@ pub const Settings = struct {
         if (mac or !nix) label(c, p, "This " ++ @import("results.zig").machine);
         if (!nix) s.switchRow(c, n, p, rows, .login, "Open at Login");
         if (mac) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
+        if (s.clip_here) {
+            label(c, p, "Clipboard History");
+            s.switchRow(c, n, p, rows, .clipboard, "Record Copied Items");
+            s.button(c, n, p, rows, .clear_clipboard, if (s.cleared) "Clipboard History Cleared" else "Clear History");
+        }
         label(c, p, if (@import("builtin").os.tag == .macos) "Sync Across Macs" else "Sync Across Computers");
         ui.text(c, s.sync, .{ .size = 12.5, .color = p.sub });
         if (!nix) {
@@ -188,6 +214,7 @@ pub const Settings = struct {
             .browser => s.browser,
             .login => s.login,
             .menu_bar => s.menu_bar,
+            .clipboard => s.clip,
             else => false,
         });
     }
@@ -225,6 +252,10 @@ pub const Settings = struct {
             .menu_bar => {
                 const next = !s.menu_bar;
                 s.menu_bar = if (h) |host| host.menu_bar(host.ctx, next) else next;
+            },
+            .clipboard => {
+                const next = !s.clip;
+                s.clip = if (h) |host| host.clipboard_enabled(host.ctx, next) orelse next else next;
             },
             else => {},
         }
@@ -281,7 +312,8 @@ pub const Settings = struct {
             s.took_return = true;
             s.activateSelected(n);
         }
-        const h = n.follow(c, height);
+        s.pull(n);
+        const h = n.follow(c, s.tall());
         const box = ui.div(c).column().wFull().h(h).clip();
         defer box.end();
         s.view(c, n, p);
@@ -297,7 +329,7 @@ pub const Settings = struct {
     /// Return on the selected row. The field would have taken it.
     pub fn activateSelected(s: *Settings, n: *panel.Nanolight) void {
         s.pull(n);
-        const rows = visibleRows;
+        const rows = s.shown();
         if (s.sel >= rows.len) return;
         s.activate(n, rows[s.sel]);
     }
@@ -311,8 +343,12 @@ pub const Settings = struct {
         const h = s.hooks(n);
         switch (kind) {
             // ←/→ step through the four; Return records one's own.
-            .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, visibleRows, 1),
-            .suggest, .browser, .login, .menu_bar => s.flip(n, kind),
+            .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, s.shown(), 1),
+            .suggest, .browser, .login, .menu_bar, .clipboard => s.flip(n, kind),
+            .clear_clipboard => {
+                if (h) |host| host.clipboard_clear(host.ctx);
+                s.cleared = true;
+            },
             .updates => if (h) |host| {
                 if (s.ready != null) host.restart(host.ctx) else host.check(host.ctx);
             },
@@ -325,19 +361,25 @@ pub const Settings = struct {
     }
 };
 
-/// The rows this build shows, in order.
-const visibleRows = blk: {
-    var list: [8]RowKind = undefined;
-    var n: usize = 0;
-    for ([_]RowKind{ .choice, .suggest, .browser, .login, .menu_bar, .updates, .welcome, .quit }) |k| {
-        if (!mac and (k == .browser or k == .menu_bar)) continue;
-        if (nix and (k == .login or k == .updates)) continue;
-        list[n] = k;
-        n += 1;
-    }
-    const out = list[0..n].*;
-    break :blk &out;
-};
+/// The rows this build shows, in order, with or without the clipboard's.
+fn visible(comptime clip: bool) []const RowKind {
+    const T = struct {
+        const rows = blk: {
+            var list: [10]RowKind = undefined;
+            var n: usize = 0;
+            for ([_]RowKind{ .choice, .suggest, .browser, .login, .menu_bar, .clipboard, .clear_clipboard, .updates, .welcome, .quit }) |k| {
+                if (!mac and (k == .browser or k == .menu_bar)) continue;
+                if (nix and (k == .login or k == .updates)) continue;
+                if (!clip and (k == .clipboard or k == .clear_clipboard)) continue;
+                list[n] = k;
+                n += 1;
+            }
+            const out = list[0..n].*;
+            break :blk out;
+        };
+    };
+    return &T.rows;
+}
 
 fn isSel(rows: []const RowKind, sel: usize, kind: RowKind) bool {
     if (sel >= rows.len) return false;
@@ -347,7 +389,7 @@ fn isSel(rows: []const RowKind, sel: usize, kind: RowKind) bool {
 test "a Nix build's Settings has no login or updates row" {
     var login = false;
     var updates = false;
-    for (visibleRows) |k| {
+    for (visible(true)) |k| {
         login = login or k == .login;
         updates = updates or k == .updates;
     }

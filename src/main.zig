@@ -37,6 +37,9 @@ const settings_mod = @import("settings.zig");
 const Settings = settings_mod.Settings;
 const config = @import("config.zig");
 const commands = @import("commands.zig");
+const clipboard = @import("clipboard.zig");
+const clipboard_view = @import("clipboard_view.zig");
+const clipboard_live = @import("clipboard_live.zig");
 /// A Nix build: no updater and no login-item UI; the modules own both.
 const nix_managed = @import("build_options").nix_managed;
 
@@ -111,6 +114,11 @@ pub const Live = struct {
     rates_cache_read: bool = false,
     /// The next `hide` is skipped: a command just took the panel.
     keep_open: bool = false,
+    /// Clipboard history (clipboard_live.zig): the store, null in headless runs
+    /// and without a data directory, and the OS's watcher.
+    clip: ?*clipboard.Store = null,
+    clip_watcher: clipboard.Watcher = .{},
+    clip_host: clipboard_view.Host = undefined,
 
     fn host(l: *Live) view.Host {
         const bind = @import("settings_bind.zig");
@@ -444,7 +452,7 @@ pub const Live = struct {
         if (!mac) @import("update_pc.zig").away(l);
     }
 
-    fn hide(ctx: *anyopaque) void {
+    pub fn hide(ctx: *anyopaque) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (l.keep_open) {
             l.keep_open = false;
@@ -472,6 +480,8 @@ pub const Live = struct {
             l.s.hid(account.now());
             return w.hide();
         }
+        // Where a paste from the clipboard history goes.
+        if (l.clip != null) l.clip_watcher.noteFrontmost();
         // Freed a key in System Settings, quit a launcher: look again.
         if (l.o.active) l.o.refresh();
         panel.place(w);
@@ -725,6 +735,18 @@ pub fn main(init: std.process.Init) !void {
     live.cmds = .{ .io = app.io, .hooks = .{ .ctx = &live, .footer = Live.commandFooter, .done = Live.commandDone } };
     defer live.cmds.deinit();
     rc.rescan(&live);
+    var clip_dir = clipboard_live.openDir(init.gpa, init.io);
+    defer if (clip_dir) |*d| d.close(init.io);
+    var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, .{
+        .enabled = config.clipboardEnabled(kv, init.gpa, cfg.clipboard.enabled),
+        .retention_days = cfg.clipboard.retention_days,
+        .max_entries = cfg.clipboard.max_entries,
+        .exclude_apps = cfg.clipboard.exclude_apps,
+    });
+    defer clip_store.deinit();
+    // No data directory, no history: nothing could be kept.
+    if (clip_dir != null) clipboard_live.init(&live, &clip_store);
+    defer clipboard_live.deinit(&live);
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
     if (single.claim(.{ .ctx = &live, .func = Live.command }) > 0) std.log.info("nanolight: asked an older copy to quit", .{});
     panel.setup(app, live.window.?, &s, if (o.active) o.height() else s.height());

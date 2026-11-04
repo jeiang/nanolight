@@ -16,6 +16,7 @@ const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Row = results.Row;
 const settings = @import("settings.zig");
 const commands = @import("commands.zig");
+const clipboard_view = @import("clipboard_view.zig");
 
 /// What the panel asks of whatever shows it (the window, or the film).
 pub const Host = struct {
@@ -40,6 +41,9 @@ pub const Host = struct {
     rates: ?*const fn (ctx: *anyopaque) void = null,
     /// Runs system command `i` (commands.zig). Without it, nothing runs.
     command: ?*const fn (ctx: *anyopaque, i: usize) void = null,
+    /// Clipboard history (clipboard_view.zig). Without it the "Clipboard
+    /// History" row is not listed.
+    clipboard: ?*const clipboard_view.Host = null,
 };
 
 pub const width: f32 = 680;
@@ -124,6 +128,8 @@ pub const Nanolight = struct {
     preview_url: []const u8 = "",
     /// Settings, drawn in the panel in place of the rows.
     settings_ui: settings_view.Settings = .{},
+    /// Clipboard History, drawn in the panel in place of the rows.
+    clip_ui: clipboard_view.Screen = .{},
     ext: ?*@import("raycast_view.zig").Ext = null,
     /// When the panel last went away (seconds), and how long it may be away
     /// before it reopens at the root; 0 is never.
@@ -148,12 +154,14 @@ pub const Nanolight = struct {
         s.sel = 0;
         s.back();
         s.settings_ui.hide();
+        s.clip_ui.hide();
     }
 
     /// Called as it is shown: the query selected, the keys its own.
     pub fn reveal(s: *Nanolight) void {
         s.back();
         s.settings_ui.hide();
+        s.clip_ui.hide();
         s.shown +%= 1;
         // Suggestions follow what was opened since.
         s.built = 1;
@@ -164,7 +172,8 @@ pub const Nanolight = struct {
 
     /// The panel's height for the rows it lists.
     pub fn height(s: *const Nanolight) f32 {
-        if (s.settings_ui.open) return settings_view.height;
+        if (s.settings_ui.open) return s.settings_ui.tall();
+        if (s.clip_ui.open) return clipboard_view.height;
         if (s.ext) |e| if (e.open) return e.height();
         if (s.previewing) return max_height;
         var h: f32 = header_h + footer_h + 1;
@@ -211,6 +220,7 @@ pub const Nanolight = struct {
             return;
         };
         if (s.settings_ui.open) return s.settings_ui.inPanel(c, s, p);
+        if (s.clip_ui.open) return s.clip_ui.inPanel(c, s, p);
         // A Raycast extension's command, while it runs (raycast_view.zig).
         if (s.ext) |e| if (e.open) return e.panel(c, s, p);
 
@@ -369,6 +379,7 @@ pub const Nanolight = struct {
         var web: [suggest.max_rows][]const u8 = undefined;
         s.res.rates = s.rates;
         s.res.rates_failed = s.rates_failed;
+        s.res.clip_on = if (s.host) |h| h.clipboard != null else false;
         s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web), s.quicklinks);
     }
 
@@ -471,6 +482,10 @@ pub const Nanolight = struct {
                 ui.richText(c, commands.all[r.app].name, s.highlight(i, r, p), .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) });
                 ui.text(c, "System Command", .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
+            .clipboard => {
+                ui.text(c, "Clipboard History", .{ .size = 13.5, .weight = .medium, .color = p.text });
+                ui.text(c, "Text, images and files you copied", .{ .size = 12, .color = p.sub.alpha(0.8) });
+            },
             .settings => {
                 ui.text(c, "Nanolight Settings", .{ .size = 13.5, .weight = .medium, .color = p.text });
                 ui.text(c, "Shortcut, sync, updates", .{ .size = 12, .color = p.sub.alpha(0.8) });
@@ -488,7 +503,7 @@ pub const Nanolight = struct {
         ui.spacer(c);
         if (i == s.sel) {
             ui.text(c, switch (r.kind) {
-                .app, .settings, .pane => "Open",
+                .app, .settings, .pane, .clipboard => "Open",
                 .command => "Run",
                 else => "Go",
             }, .{ .size = 12, .weight = .medium, .color = p.sub });
@@ -519,6 +534,7 @@ pub const Nanolight = struct {
             .quicklink => "globe",
             .suggest => "magnifyingglass",
             .settings => "gearshape",
+            .clipboard => "doc.on.doc",
             .command => "terminal",
             else => "app.dashed",
         }, .{ .size = if (big) 16 else 13, .weight = .medium, .color = p.text });
@@ -603,6 +619,7 @@ pub const Nanolight = struct {
             },
             .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), !s.searches_out),
             .settings => s.openSettings(),
+            .clipboard => s.openClipboard(),
             .pane => s.go(@import("settings_panes.zig").urls[r.app]),
             .command => if (s.host) |h| if (h.command) |run| run(h.ctx, r.app),
             .suggest => {
@@ -640,6 +657,12 @@ pub const Nanolight = struct {
     pub fn openSettings(s: *Nanolight) void {
         s.back();
         s.settings_ui.show();
+    }
+
+    /// Clipboard History in place of the rows.
+    pub fn openClipboard(s: *Nanolight) void {
+        s.back();
+        s.clip_ui.show(s);
     }
 
     /// The rows again, the page gone.

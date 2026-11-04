@@ -22,6 +22,8 @@ test {
     _ = @import("shortcut.zig");
     _ = @import("settings_panes.zig");
     _ = @import("commands.zig");
+    _ = @import("clipboard.zig");
+    _ = @import("tests_clipboard.zig");
     _ = @import("raycast_model.zig");
     _ = @import("raycast_view.zig");
     _ = @import("script_commands.zig");
@@ -371,6 +373,8 @@ pub const Prefs = struct {
     suggest_sets: u8 = 0,
     searches_out: ?bool = null,
     menu_bar_on: bool = true,
+    clip_on: ?bool = null,
+    clip_cleared: u8 = 0,
     box: SettingsHost = undefined,
 
     pub fn init(p: *Prefs) void {
@@ -383,6 +387,8 @@ pub const Prefs = struct {
             .suggest = suggestSet,
             .searches_out = searchesOut,
             .menu_bar = menuBar,
+            .clipboard_enabled = clipboardEnabled,
+            .clipboard_clear = clipboardClear,
             .sync_status = syncStatus,
             .version = ver,
             .ready = ready,
@@ -427,6 +433,14 @@ pub const Prefs = struct {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
         if (set) |on| p.menu_bar_on = on;
         return p.menu_bar_on;
+    }
+    fn clipboardEnabled(ctx: *anyopaque, set: ?bool) ?bool {
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        if (set) |on| p.clip_on = on;
+        return p.clip_on;
+    }
+    fn clipboardClear(ctx: *anyopaque) void {
+        @as(*Prefs, @ptrCast(@alignCast(ctx))).clip_cleared += 1;
     }
     fn syncStatus(_: *anyopaque) []const u8 {
         return @import("account.zig").off_text;

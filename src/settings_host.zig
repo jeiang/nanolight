@@ -19,6 +19,11 @@ pub const SettingsHost = struct {
     searches_out: *const fn (ctx: *anyopaque, on: bool) void,
     /// Whether the menu bar icon shows; `set` changes it first.
     menu_bar: *const fn (ctx: *anyopaque, set: ?bool) bool,
+    /// Whether clipboard history records; `set` changes it first. Null where
+    /// this system has no clipboard history (its rows are not shown).
+    clipboard_enabled: *const fn (ctx: *anyopaque, set: ?bool) ?bool,
+    /// Deletes every clipboard entry.
+    clipboard_clear: *const fn (ctx: *anyopaque) void,
     /// The sync line ("Sync: host, last synced 3 min ago"); valid until the next call.
     sync_status: *const fn (ctx: *anyopaque) []const u8,
     /// The version running, and a newer one waiting (else null).

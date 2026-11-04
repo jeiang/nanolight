@@ -41,6 +41,9 @@ pub fn build(b: *std.Build) void {
             exe.root_module.linkFramework("Carbon", .{});
             // Opening at login, from its welcome (SMAppService).
             exe.root_module.linkFramework("ServiceManagement", .{});
+            // Clipboard history's paste: the Accessibility check, and ⌘V sent as a key event.
+            exe.root_module.linkFramework("ApplicationServices", .{});
+            exe.root_module.linkFramework("CoreGraphics", .{});
         },
         .windows => {
             // A window app: no console. The hot key, the Start menu's icons,
@@ -80,6 +83,7 @@ pub fn build(b: *std.Build) void {
     }) });
     tests.root_module.addOptions("build_options", opts);
     if (os == .windows) for ([_][]const u8{ "user32", "gdi32", "shell32", "advapi32", "dwmapi", "ole32" }) |lib| tests.root_module.linkSystemLibrary(lib, .{});
+    if (os == .macos) tests.root_module.linkFramework("ApplicationServices", .{});
     // zig-out/bin/nanolight-tests: the tests, to run on another machine.
     b.step("test-bin", "Install the tests as zig-out/bin/nanolight-tests").dependOn(&b.addInstallArtifact(tests, .{ .dest_sub_path = if (os == .windows) "nanolight-tests.exe" else "nanolight-tests" }).step);
     b.step("test", "Test Nanolight's search, math, suggestions and panel").dependOn(&b.addRunArtifact(tests).step);

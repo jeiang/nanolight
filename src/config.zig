@@ -64,6 +64,8 @@ pub const searches_out_key = "nanolight.searches_out";
 pub const menu_bar_key = "nanolight.menu_bar";
 /// The quicklinks in use, as JSON: the config's, or what sync last brought.
 pub const quicklinks_key = "nanolight.quicklinks";
+/// "0": clipboard history is off (the app's own switch; the config's `[clipboard] enabled` seeds it).
+pub const clipboard_key = "nanolight.clipboard.enabled";
 /// When this machine last changed its key or suggestions (settings.zig's `at`).
 pub const sync_at_key = "nanolight.sync.at";
 
@@ -246,6 +248,13 @@ fn seedQuicklinks(store: nanoui.kv.Store, gpa: std.mem.Allocator, list: []const 
     synced.* = true;
 }
 
+/// Whether clipboard history records: the app's own switch, else the config's value.
+pub fn clipboardEnabled(store: nanoui.kv.Store, gpa: std.mem.Allocator, from_file: bool) bool {
+    const v = (store.get(gpa, clipboard_key) catch null) orelse return from_file;
+    defer gpa.free(v);
+    return !std.mem.eql(u8, v, "0");
+}
+
 /// The quicklinks kept by the file or by sync; empty means the built-in ones.
 pub fn loadQuicklinks(arena: std.mem.Allocator, store: nanoui.kv.Store) []const Quicklink {
     const text = (store.get(arena, quicklinks_key) catch return &.{}) orelse return &.{};
@@ -277,6 +286,7 @@ pub fn seed(store: nanoui.kv.Store, gpa: std.mem.Allocator, c: Config, now: i64)
     if (seedBool(store, gpa, "suggestions", suggest_key, c.suggestions)) synced = true;
     _ = seedBool(store, gpa, "open_searches_in_browser", searches_out_key, c.open_searches_in_browser);
     _ = seedBool(store, gpa, "show_in_menu_bar", menu_bar_key, c.show_in_menu_bar);
+    _ = seedBool(store, gpa, "clipboard.enabled", clipboard_key, c.clipboard.enabled);
     if (synced) {
         var buf: [24]u8 = undefined;
         store.set(sync_at_key, std.fmt.bufPrint(&buf, "{d}", .{now}) catch "0") catch {};
@@ -469,6 +479,27 @@ test "a key removed from the file applies again when it comes back" {
     seed(store, testing.allocator, .{ .suggestions = false }, 3);
     try expectKv(store, suggest_key, "0");
     try expectKv(store, sync_at_key, "3");
+}
+
+test "clipboard history's switch: the file seeds it, the app's choice wins, and it never syncs" {
+    var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
+    defer m.deinit();
+    const store = m.store();
+    try testing.expect(clipboardEnabled(store, testing.allocator, true));
+    try testing.expect(!clipboardEnabled(store, testing.allocator, false));
+    seed(store, testing.allocator, .{ .clipboard = .{ .enabled = false } }, 7);
+    try expectKv(store, clipboard_key, "0");
+    try testing.expect(!clipboardEnabled(store, testing.allocator, true));
+    try expectKv(store, sync_at_key, null);
+    // Turned on in the app; the same file leaves it on.
+    try store.set(clipboard_key, "1");
+    seed(store, testing.allocator, .{ .clipboard = .{ .enabled = false } }, 8);
+    try testing.expect(clipboardEnabled(store, testing.allocator, false));
+    // The file changes its mind: that applies.
+    seed(store, testing.allocator, .{ .clipboard = .{ .enabled = true } }, 9);
+    try expectKv(store, clipboard_key, "1");
+    seed(store, testing.allocator, .{ .clipboard = .{ .enabled = false } }, 10);
+    try expectKv(store, clipboard_key, "0");
 }
 
 test "a hotkey this system cannot use is ignored, and not recorded" {
