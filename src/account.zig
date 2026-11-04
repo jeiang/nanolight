@@ -108,7 +108,7 @@ pub const Account = struct {
     fn firstHere(a: *Account) bool {
         const have = a.kv.get(a.gpa, synced_key) catch return true;
         defer if (have) |h| a.gpa.free(h);
-        return !std.mem.eql(u8, have orelse return true, a.cfg.url);
+        return !sameServer(have orelse return true, a.cfg.url);
     }
 
     fn sync(a: *Account) void {
@@ -162,6 +162,11 @@ pub const Account = struct {
 fn baseUrl(url: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) return null;
     return std.mem.trimEnd(u8, url, "/");
+}
+
+/// The same server whatever the trailing slash.
+fn sameServer(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, std.mem.trimEnd(u8, a, "/"), std.mem.trimEnd(u8, b, "/"));
 }
 
 fn hostOf(url: []const u8) []const u8 {
@@ -226,4 +231,9 @@ test "the status line says when it last synced" {
     good.state = .ok;
     good.last_ok = now() - 400;
     try std.testing.expectEqualStrings("Sync: h:1, last synced 6 min ago", good.status(&line));
+}
+
+test "a trailing slash does not make a server a new one" {
+    try std.testing.expect(sameServer("http://100.64.0.3:8890", "http://100.64.0.3:8890/"));
+    try std.testing.expect(!sameServer("http://100.64.0.3:8890", "http://sync.host:8890"));
 }
