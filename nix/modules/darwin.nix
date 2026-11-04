@@ -59,7 +59,7 @@ in {
 
     system.activationScripts.postActivation.text = lib.concatStrings [
       (lib.optionalString signed ''
-        if [ "$(cat ${stamp} 2>/dev/null)" != "${storeApp}" ] || ! sudo -u ${user} codesign --verify ${installedApp} 2>/dev/null; then
+        if [ "$(cat ${stamp} 2>/dev/null)" != ${lib.escapeShellArg "${storeApp} ${cfg.codesignIdentity}"} ] || ! sudo -u ${user} codesign --verify ${installedApp} 2>/dev/null; then
           echo "signing ${installedApp} with ${cfg.codesignIdentity}..." >&2
           rm -rf ${installedApp}
           cp -R ${storeApp} ${installedApp}
@@ -67,7 +67,7 @@ in {
           chmod -R u+w ${installedApp}
           if sudo -u ${user} codesign --force --deep --sign ${lib.escapeShellArg cfg.codesignIdentity} ${installedApp}; then
             mkdir -p "$(dirname ${stamp})"
-            echo "${storeApp}" > ${stamp}
+            echo ${lib.escapeShellArg "${storeApp} ${cfg.codesignIdentity}"} > ${stamp}
             uid=$(id -u ${user})
             launchctl kickstart -k "gui/$uid/org.nixos.nanolight" 2>/dev/null || true
           else
