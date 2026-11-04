@@ -17,6 +17,11 @@ const search = @import("search.zig");
 
 pub const Kind = enum { text, image, file };
 
+/// User-only (0600 / 0700); Windows has no mode and keeps its profile's ACL.
+const Perm = Io.File.Permissions;
+pub const private_file: Perm = if (@hasDecl(Perm, "fromMode")) .fromMode(0o600) else .default_file;
+pub const private_dir: Perm = if (@hasDecl(Perm, "fromMode")) .fromMode(0o700) else .default_dir;
+
 /// Silent under test: the build fails a test run that writes to stderr.
 fn warn(comptime fmt: []const u8, args: anytype) void {
     if (!builtin.is_test) std.log.warn(fmt, args);
@@ -200,7 +205,7 @@ pub const Store = struct {
     fn writeBlob(s: *Store, e: Entry, bytes: []const u8) !void {
         const dir = s.dir orelse return;
         var buf: [48]u8 = undefined;
-        try dir.createDirPath(s.io, "blobs");
+        _ = try dir.createDirPathStatus(s.io, "blobs", private_dir);
         try writeAtomic(s.io, dir, blobFor(e, &buf).?, bytes);
     }
 
@@ -254,6 +259,8 @@ pub const Store = struct {
             s.free(e);
         }
         s.entries.clearRetainingCapacity();
+        s.sweep();
+        if (s.dir) |dir| dir.deleteFile(s.io, "index.json.corrupt") catch {};
         s.changed();
     }
 
@@ -347,8 +354,8 @@ pub const Store = struct {
     // ----- the files -----
 
     /// Reads `index.json`. A missing one is an empty history; one that does
-    /// not parse is set aside as `index.json.corrupt` and the history starts
-    /// empty, its blobs left alone (the sweep at the next start frees them).
+    /// not parse is deleted (its text must not outlive Clear History) and the
+    /// history starts empty, its blobs left alone (the sweep frees them).
     pub fn load(s: *Store, now: i64) void {
         const dir = s.dir orelse return;
         const bytes = dir.readFileAlloc(s.io, "index.json", s.gpa, .limited(256 << 20)) catch |e| {
@@ -357,8 +364,8 @@ pub const Store = struct {
         };
         defer s.gpa.free(bytes);
         const parsed = std.json.parseFromSlice(Disk, s.gpa, bytes, .{ .ignore_unknown_fields = true }) catch {
-            warn("nanolight: clipboard: index.json is damaged; moved to index.json.corrupt, starting empty", .{});
-            dir.rename("index.json", dir, "index.json.corrupt", s.io) catch {};
+            warn("nanolight: clipboard: index.json is damaged; deleted, starting empty", .{});
+            dir.deleteFile(s.io, "index.json") catch {};
             return;
         };
         defer parsed.deinit();
@@ -384,7 +391,8 @@ pub const Store = struct {
         return a.at > b.at;
     }
 
-    /// Deletes the blobs no entry names.
+    /// Deletes the blobs no entry names, and any other file in `blobs/`
+    /// (a leftover `.tmp`).
     fn sweep(s: *Store) void {
         const dir = s.dir orelse return;
         var blobs = dir.openDir(s.io, "blobs", .{ .iterate = true }) catch return;
@@ -392,7 +400,10 @@ pub const Store = struct {
         var it = blobs.iterate();
         while (it.next(s.io) catch null) |f| {
             const stem = std.fs.path.stem(f.name);
-            const h = std.fmt.parseInt(u64, stem, 16) catch continue;
+            const h = std.fmt.parseInt(u64, stem, 16) catch {
+                blobs.deleteFile(s.io, f.name) catch {};
+                continue;
+            };
             const keep = for (s.entries.items) |e| {
                 var buf: [48]u8 = undefined;
                 const name = blobFor(e, &buf) orelse continue;
@@ -441,7 +452,7 @@ fn writeAtomic(io: Io, dir: Io.Dir, name: []const u8, bytes: []const u8) !void {
     var buf: [80]u8 = undefined;
     const tmp = try std.fmt.bufPrint(&buf, "{s}.tmp", .{name});
     errdefer dir.deleteFile(io, tmp) catch {};
-    const f = try dir.createFile(io, tmp, .{ .truncate = true });
+    const f = try dir.createFile(io, tmp, .{ .truncate = true, .permissions = private_file });
     defer f.close(io);
     try f.writeStreamingAll(io, bytes);
     try f.sync(io);
@@ -740,7 +751,7 @@ test "the history survives a restart, newest first, and blobs nobody names are s
     try testing.expectEqualStrings("png1", bytes);
 }
 
-test "a corrupt index starts empty, is set aside, and its blobs are left alone" {
+test "a corrupt index starts empty, is deleted, and its blobs are left alone" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(testing.io, "blobs");
@@ -750,7 +761,7 @@ test "a corrupt index starts empty, is set aside, and its blobs are left alone" 
     defer s.deinit();
     s.load(1);
     try testing.expectEqual(@as(usize, 0), s.entries.items.len);
-    try tmp.dir.access(testing.io, "index.json.corrupt", .{});
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "index.json.corrupt", .{}));
     try tmp.dir.access(testing.io, "blobs/0000000000000001.png", .{});
     // And it works from there.
     try testing.expectEqual(Result.added, s.add(textItem("fresh", ""), 2));
@@ -775,8 +786,11 @@ test "clear forgets everything, blobs too" {
     defer s.deinit();
     _ = s.add(textItem("a", ""), 1);
     _ = s.add(.{ .kind = .image, .png = "p", .width = 1, .height = 1 }, 2);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "index.json.corrupt", .data = "secret" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "blobs/0000000000000009.png.tmp", .data = "x" });
     s.clear();
     try testing.expectEqual(@as(usize, 0), s.entries.items.len);
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "index.json.corrupt", .{}));
     var blobs = try tmp.dir.openDir(testing.io, "blobs", .{ .iterate = true });
     defer blobs.close(testing.io);
     var it = blobs.iterate();
@@ -785,6 +799,25 @@ test "clear forgets everything, blobs too" {
     defer again.deinit();
     again.load(3);
     try testing.expectEqual(@as(usize, 0), again.entries.items.len);
+}
+
+test "store files are user-only" {
+    if (!@hasDecl(Perm, "fromMode")) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{});
+    defer s.deinit();
+    _ = s.add(.{ .kind = .image, .png = "p", .width = 1, .height = 1 }, 1);
+    for ([_][]const u8{ "index.json", "blobs" }) |name| {
+        const st = try tmp.dir.statFile(testing.io, name, .{});
+        try testing.expectEqual(@as(u32, 0), @as(u32, @intCast(st.permissions.toMode())) & 0o077);
+    }
+    var it = try tmp.dir.openDir(testing.io, "blobs", .{ .iterate = true });
+    defer it.close(testing.io);
+    var walk = it.iterate();
+    const f = (try walk.next(testing.io)).?;
+    const st = try it.statFile(testing.io, f.name, .{});
+    try testing.expectEqual(@as(u32, 0), @as(u32, @intCast(st.permissions.toMode())) & 0o077);
 }
 
 test "how entries read" {

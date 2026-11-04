@@ -32,7 +32,8 @@ pub fn openDir(gpa: std.mem.Allocator, io: std.Io) ?std.Io.Dir {
     defer gpa.free(data);
     const path = std.fs.path.join(gpa, &.{ data, "clipboard" }) catch return null;
     defer gpa.free(path);
-    std.Io.Dir.cwd().createDirPath(io, path) catch return null;
+    _ = std.Io.Dir.cwd().createDirPathStatus(io, path, clipboard.private_dir) catch return null;
+    std.Io.Dir.cwd().setFilePermissions(io, path, clipboard.private_dir, .{}) catch {};
     return std.Io.Dir.cwd().openDir(io, path, .{}) catch null;
 }
 
