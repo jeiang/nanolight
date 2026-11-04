@@ -186,6 +186,7 @@ test "every pane's extension is on this Mac's macOS, or is known not to be" {
         const i = for (all, 0..) |p, k| {
             if (std.mem.eql(u8, p.name, want)) break k;
         } else return error.NoPane;
+        if (!present(i)) std.debug.print("pane not on this Mac: {s} ({s})\n", .{ want, urls[i] });
         try std.testing.expect(present(i));
     }
 }

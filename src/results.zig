@@ -549,7 +549,12 @@ test "system commands list under the apps without taking an app's, a quicklink's
     } else return error.NoCommand;
     try t.expectEqualStrings("Sleep", commands.all[r.rows[at].app].name);
     try t.expectEqualStrings("Commands", r.section(at).?);
-    try t.expectEqual(Kind.quicklink, r.rows[at + 1].kind);
+    // Other commands can match too (the Mac's Lock Screen says "sleep
+    // display"); the quicklinks follow them.
+    const after = for (r.slice()[at..], at..) |row, i| {
+        if (row.kind != .command) break i;
+    } else return error.NoQuicklink;
+    try t.expectEqual(Kind.quicklink, r.rows[after].kind);
     r.build("sa", &few, &.{}, &.{}, defaults);
     try t.expectEqual(Kind.app, r.rows[0].kind);
     // Not with a keyword, math, or the words for Nanolight's Settings.
