@@ -1,6 +1,5 @@
-//! What a Raycast extension's host (raycast/dist/host.js) says, one JSON
-//! object a line on its stdout (raycast/README.md, "Protocol"), and what
-//! Nanolight answers on its stdin. Parsed into an arena per message.
+//! What a script command's runner (script_run.zig) says, as one JSON
+//! object a line, and what the panel answers. Parsed into an arena per message.
 const std = @import("std");
 
 pub const Icon = struct {

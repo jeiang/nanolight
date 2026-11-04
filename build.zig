@@ -160,6 +160,7 @@ pub fn infoPlist(b: *std.Build, version: []const u8) []const u8 {
         \\  <key>LSUIElement</key><true/>
         \\  <key>NSPrincipalClass</key><string>NSApplication</string>
         \\  <key>NSHighResolutionCapable</key><true/>
+        \\  <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
         \\</dict>
         \\</plist>
         \\
