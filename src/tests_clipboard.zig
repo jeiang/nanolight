@@ -283,6 +283,34 @@ test "an empty history says why it is empty, and the panel reopens at the root" 
     try testing.expect(!s.clip_ui.open);
 }
 
+test "the screen survives a hide inside pop_to_root_seconds, search text included" {
+    const gpa = testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var f: Fake = .{};
+    f.init();
+    defer f.deinit();
+    f.fill();
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    var t: ui.Tester = undefined;
+    try rig(gpa, &ix, &f, &s, &t);
+    defer t.deinit();
+    opened(&t, &s);
+    s.query.set("acme");
+    s.hid(1000);
+    try testing.expect(!s.popDue(1000 + s.pop_after));
+    s.reveal();
+    try testing.expect(s.clip_ui.open);
+    // Other keys delete too: Ctrl+Backspace on GTK, Ctrl+D on Windows.
+    const before = f.store.entries.items.len;
+    s.query.clear();
+    t.settle(1);
+    try testing.expect(t.shortcut(.{ .key = 0x08, .cmd = true }));
+    try testing.expect(t.shortcut(.{ .key = 'd', .cmd = true }));
+    try testing.expectEqual(before - 2, f.store.entries.items.len);
+}
+
 test "an entry added while the screen is open appears at once" {
     const gpa = testing.allocator;
     var ix: Index = .init(gpa);

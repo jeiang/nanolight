@@ -1,7 +1,7 @@
 //! Clipboard History, in the panel in place of the rows: a search field, the
 //! entries newest first (type, source app, how long ago), and what the
 //! selected one holds. Return pastes it, ⌘↩ (Ctrl+Enter) only copies it,
-//! ⌘⌫ (Ctrl+Backspace) deletes it, Esc goes back. ↑ ↓, ^N ^P and ^J ^K move.
+//! ⌘⌫ (Ctrl+Backspace, or ⌘D / Ctrl+D) deletes it, Esc goes back. ↑ ↓, ^N ^P and ^J ^K move.
 //! The panel hides on a paste; a paste that could only copy says why in the
 //! footer.
 const std = @import("std");
@@ -138,7 +138,8 @@ pub const Screen = struct {
             if (s.n > 0) s.sel = (s.sel + s.n - 1) % s.n;
         }
         if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.copy(h);
-        if (c.shortcut(.{ .key = 0x7f, .cmd = true })) if (s.selected(h)) |e| {
+        // ⌫ is 0x7f on the Mac and 0x08 on GTK; Windows offers no key for it, so ⌘D / Ctrl+D too.
+        if (c.shortcut(.{ .key = 0x7f, .cmd = true }) or c.shortcut(.{ .key = 0x08, .cmd = true }) or c.shortcut(.{ .key = 'd', .cmd = true })) if (s.selected(h)) |e| {
             _ = h.store.remove(e.hash);
             s.note = "Deleted";
             s.refresh(n, h);
