@@ -541,6 +541,58 @@ test "a conversion is answered like math, with the rate under a currency's" {
     try t.expectEqualStrings("", r.copy);
 }
 
+test "math around a conversion: the card shows the amount worked out and copies the answer" {
+    const t = std.testing;
+    var ix = try testIndex(t.allocator, &.{"Safari"});
+    defer ix.deinit();
+    var r: Results = .{};
+    r.build("3 * 10 km to mi", &ix, &.{}, &.{}, defaults);
+    try t.expectEqual(Kind.calc, r.rows[0].kind);
+    try t.expectEqualStrings("30 km", r.expr);
+    try t.expectEqualStrings("18.6411357671 mi", r.answer);
+    try t.expectEqualStrings("18.6411357671", r.copy);
+    r.build("10 km to mi / 2", &ix, &.{}, &.{}, defaults);
+    try t.expectEqualStrings("10 km", r.expr);
+    try t.expectEqualStrings("3.1068559612 mi", r.answer);
+    try t.expectEqualStrings("3.1068559612", r.copy);
+    r.build("(2 + 3) * 2 km to m", &ix, &.{}, &.{}, defaults);
+    try t.expectEqualStrings("10 km", r.expr);
+    try t.expectEqualStrings("10,000 m", r.answer);
+    try t.expectEqualStrings("10000", r.copy);
+    // Math that doesn't compute is no card at all.
+    r.build("10 km to mi *", &ix, &.{}, &.{}, defaults);
+    try t.expect(r.n == 0 or r.rows[0].kind != .calc);
+    // No rates yet: still pending, nothing to copy; bad math is not.
+    r.build("12 ttd to usd * 12", &ix, &.{}, &.{}, defaults);
+    try t.expectEqual(Kind.calc, r.rows[0].kind);
+    try t.expect(r.pending);
+    try t.expect(r.need_rates);
+    try t.expectEqualStrings("Loading rates…", r.answer);
+    try t.expectEqualStrings("", r.copy);
+    r.build("12 ttd to usd /", &ix, &.{}, &.{}, defaults);
+    try t.expect(!r.pending);
+    try t.expect(r.n == 0 or r.rows[0].kind != .calc);
+    var rates = convert.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785,\"eur\":0.86}}").?;
+    defer rates.deinit();
+    r.rates = &rates;
+    r.build("35 * 7 ttd to usd", &ix, &.{}, &.{}, defaults);
+    try t.expect(!r.pending);
+    try t.expectEqualStrings("245 TTD", r.expr);
+    try t.expectEqualStrings("36.11 USD", r.answer);
+    try t.expectEqualStrings("36.11", r.copy);
+    try t.expectEqualStrings("1 TTD = 0.147384 USD · 2026-11-03", r.note);
+    r.build("12 ttd to usd * 12", &ix, &.{}, &.{}, defaults);
+    try t.expectEqualStrings("12 TTD", r.expr);
+    try t.expectEqualStrings("21.22 USD", r.answer);
+    try t.expectEqualStrings("21.22", r.copy);
+    try t.expectEqualStrings("1 TTD = 0.147384 USD · 2026-11-03", r.note);
+    r.build("$20 * 3 in eur", &ix, &.{}, &.{}, defaults);
+    try t.expectEqualStrings("60 USD", r.expr);
+    try t.expectEqualStrings("51.60 EUR", r.answer);
+    try t.expectEqualStrings("51.60", r.copy);
+    try t.expectEqualStrings("1 USD = 0.86 EUR · 2026-11-03", r.note);
+}
+
 test "system commands compete by match without taking a quicklink's row" {
     const t = std.testing;
     commands.listForTests(true);

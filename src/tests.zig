@@ -117,7 +117,8 @@ test "the panel finds, moves, answers and hands off" {
     try std.testing.expectEqualStrings("safari", s.query.text());
     press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
 
-    press(&t, &.{.{ .insert = "ss" }});
+    // An exact app name beats panes that may outrank its initials.
+    press(&t, &.{.{ .insert = "system settings" }});
     try std.testing.expect(t.hasText("System Settings"));
     try std.testing.expectEqual(@as(u32, ix.find("System Settings").?), s.res.rows[0].app);
     // Down and back up, then Return opens the first.
