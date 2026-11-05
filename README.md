@@ -104,7 +104,7 @@ pop_to_root_seconds = 90      # 0 = never
 extra_dirs = []               # scanned like /Applications (depth 1)
 
 [script_commands]
-dirs = []                     # in addition to <data dir>/script-commands
+dirs = []                     # in addition to <data dir>/script-commands; relative paths are relative to this file
 
 [[quicklinks]]                # if any are given, they replace the defaults
 name = "DuckDuckGo"
