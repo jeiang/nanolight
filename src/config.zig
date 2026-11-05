@@ -101,8 +101,8 @@ fn candidates(arena: std.mem.Allocator, env: *const std.process.Environ.Map, dat
 
 /// A script runs with its folder as the working directory, so a relative
 /// `[script_commands] dirs` entry is taken relative to the config file.
-fn absoluteScriptDirs(arena: std.mem.Allocator, c: *Config, config_path: []const u8) !Config {
-    const base = std.fs.path.dirname(config_path) orelse ".";
+fn absoluteScriptDirs(arena: std.mem.Allocator, io: std.Io, c: *Config, config_path: []const u8) !Config {
+    const base = try std.Io.Dir.cwd().realPathFileAlloc(io, std.fs.path.dirname(config_path) orelse ".", arena);
     const dirs = try arena.alloc([]const u8, c.script_command_dirs.len);
     for (c.script_command_dirs, dirs) |d, *out|
         out.* = if (std.fs.path.isAbsolute(d)) d else try std.fs.path.join(arena, &.{ base, d });
@@ -126,7 +126,7 @@ fn loadFrom(arena: std.mem.Allocator, io: std.Io, paths: []const []const u8, kv:
                 std.log.warn("nanolight: {s}: {s}; using the defaults", .{ path, problem.msg });
             return null;
         };
-        return absoluteScriptDirs(arena, &c, path) catch null;
+        return absoluteScriptDirs(arena, io, &c, path) catch null;
     }
     if (kv.get(arena, seen_key) catch null) |_| {
         warn("nanolight: no config.toml found, but one was applied before; clipboard history is paused until it is found", .{});
@@ -666,6 +666,21 @@ test "a relative script command dir is relative to the config file" {
     const c = loadFrom(a, testing.io, &paths, m.store()).?;
     try testing.expectEqualStrings(try std.fs.path.join(a, &.{ dir, "scripts" }), c.script_command_dirs[0]);
     try testing.expectEqualStrings("/abs", c.script_command_dirs[1]);
+}
+
+test "a relative config path still gives absolute script command dirs" {
+    var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
+    defer m.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.toml", .data = "[script_commands]\ndirs = [\"scripts\"]\n" });
+    const a = arena.allocator();
+    const paths = [_][]const u8{try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path, "a.toml" })};
+    const c = loadFrom(a, testing.io, &paths, m.store()).?;
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
+    try testing.expectEqualStrings(try std.fs.path.join(a, &.{ dir, "scripts" }), c.script_command_dirs[0]);
 }
 
 test "no file after one was applied is a failed load, not the defaults" {
