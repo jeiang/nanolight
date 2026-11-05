@@ -18,6 +18,7 @@ test {
     _ = @import("account.zig");
     _ = @import("toml.zig");
     _ = @import("config.zig");
+    _ = @import("palette.zig");
     _ = @import("apps.zig");
     _ = @import("shortcut.zig");
     _ = @import("settings_panes.zig");
@@ -31,6 +32,7 @@ test {
     _ = @import("script_run.zig");
     _ = @import("tests_ext.zig");
     _ = @import("tests_prefs.zig");
+    _ = @import("tests_files.zig");
     switch (@import("builtin").os.tag) {
         .macos => {
             _ = @import("single_mac.zig");
@@ -144,9 +146,10 @@ test "the panel finds, moves, answers and hands off" {
     press(&t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("3072", t.clipboard.items);
 
-    // Anything else: the quicklinks, Google first.
+    // Anything else: the quicklinks, Google first (Claude, Grok and X among them).
     press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "liquid glass" } });
     try std.testing.expect(t.containsText("Search Claude for"));
+    try std.testing.expect(t.containsText("Search X for"));
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     press(&t, &.{.{ .command = .insert_newline }});
@@ -420,6 +423,7 @@ pub const Prefs = struct {
     login_on: bool = false,
     suggest_sets: u8 = 0,
     searches_out: ?bool = null,
+    theme: ?@import("palette.zig").Theme = null,
     menu_bar_on: bool = true,
     clip_on: ?bool = null,
     clip_cleared: u8 = 0,
@@ -434,6 +438,7 @@ pub const Prefs = struct {
             .login = login,
             .suggest = suggestSet,
             .searches_out = searchesOut,
+            .theme = themeSet,
             .menu_bar = menuBar,
             .clipboard_enabled = clipboardEnabled,
             .clipboard_clear = clipboardClear,
@@ -476,6 +481,9 @@ pub const Prefs = struct {
     }
     fn searchesOut(ctx: *anyopaque, on: bool) void {
         @as(*Prefs, @ptrCast(@alignCast(ctx))).searches_out = on;
+    }
+    fn themeSet(ctx: *anyopaque, t: @import("palette.zig").Theme) void {
+        @as(*Prefs, @ptrCast(@alignCast(ctx))).theme = t;
     }
     fn menuBar(ctx: *anyopaque, set: ?bool) bool {
         const p: *Prefs = @ptrCast(@alignCast(ctx));

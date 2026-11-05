@@ -3,6 +3,15 @@
 # app's updater reads (manifest.json, each archive's sha256), to the GitHub
 # release of the tag that was pushed.
 #
+# The release starts as a prerelease: the updater and the "latest" download
+# links don't see one. verify-release.yml then checks the published files on
+# each macOS, launches them, and updates the release before to this one; only
+# if all that passes does it become the latest. A release that fails stays a
+# prerelease, and nobody gets it: fix it and push a new tag, or rerun the
+# failed jobs if Apple or GitHub was the trouble. If a pushed tag's run never
+# starts (GitHub has dropped the event), `gh workflow run release.yml --ref vX`
+# does the same.
+#
 # Signing and notarization use these repository secrets of jeiang/nanolight.
 # All are optional. With all five, the app and image are signed with
 # a Developer ID and notarized; without them, they are signed ad hoc
@@ -122,8 +131,35 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
           cd zig-out/package
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "Nanolight ${tag#v}" --notes "Nanolight ${tag#v} for macOS 14 and later (Apple silicon: open the disk image and drag Nanolight to Applications), Windows 10 and later (x86_64: unzip and run nanolight.exe) and Linux (x86_64, arm64; X11, GTK 3: unpack and run nanolight)."
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --prerelease --title "Nanolight ${tag#v}" --notes "Nanolight ${tag#v} for macOS 14 and later (Apple silicon: open the disk image and drag Nanolight to Applications), Windows 10 and later (x86_64: unzip and run nanolight.exe) and Linux (x86_64, arm64; X11, GTK 3: unpack and run nanolight)."
           gh release upload "$tag" nanolight-macos-arm64.dmg nanolight-macos-arm64.dmg.sha256 nanolight-macos-arm64.zip \
             nanolight-windows-x86_64.zip nanolight-linux-x86_64.tar.gz nanolight-linux-aarch64.tar.gz \
             nanolight-windows-x86_64.zip.sha256 nanolight-linux-x86_64.tar.gz.sha256 nanolight-linux-aarch64.tar.gz.sha256 \
             manifest.json --clobber
+
+  verify:
+    needs: macos
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/verify-release.yml
+    with:
+      tag: ${{ github.ref_name }}
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - name: The latest release, for everyone
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # GitHub answers 502 now and then, and may apply half of the edit: asks
+        # again until "latest" really is this release, which everyone follows.
+        run: |
+          for try in 1 2 3 4 5; do
+            if gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest &&
+              [ "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" -q .tag_name)" = "$GITHUB_REF_NAME" ]; then
+              exit 0
+            fi
+            echo "$GITHUB_REF_NAME isn't the latest yet (try $try); retrying" >&2
+            sleep $((try * ${RETRY_S:-20}))
+          done
+          exit 1

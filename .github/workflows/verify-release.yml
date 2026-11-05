@@ -1,0 +1,81 @@
+# Checks a published release end to end on each macOS it promises to run on
+# (macos/verify-release.sh: the files; macos/verify-update.sh: a real first
+# launch, a real update from the release before, and a lying feed refused).
+# release.yml calls this before a release reaches anyone; run it by hand on
+# any release, and a change to these checks proves itself on its pull request
+# against the newest release.
+name: Verify release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      from:
+        type: string
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release to check (default: the newest)"
+        required: false
+      from:
+        description: "The release that updates to it (default: the one before)"
+        required: false
+  pull_request:
+    paths:
+      - macos/verify-release.sh
+      - macos/verify-update.sh
+      - .github/workflows/verify-release.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    # GitHub has deprecated macos-14 and will take it away: its failure shows,
+    # but holds up no release. Read it before you ship; 15 and 26 must pass.
+    continue-on-error: ${{ matrix.os == 'macos-14' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which releases
+        id: which
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TO: ${{ inputs.tag }}
+          FROM: ${{ inputs.from }}
+        run: |
+          published=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" \
+            -q '.[] | select(.prerelease == false and .draft == false) | .tag_name')
+          to="${TO:-$(echo "$published" | head -1)}"
+          from="${FROM:-$(echo "$published" | grep -vx "$to" | head -1)}"
+          test -n "$to" && test -n "$from"
+          echo "$from -> $to"
+          echo "to=$to" >> "$GITHUB_OUTPUT"
+          echo "from=$from" >> "$GITHUB_OUTPUT"
+
+      - name: The published files
+        run: sh macos/verify-release.sh "${{ steps.which.outputs.to }}"
+
+      - name: First launch, update, refusals
+        env:
+          SHOTS: ${{ runner.temp }}/shots
+          # A pull request changes the checks, not the published build they
+          # run on: there the typing check reports, and a release must pass it.
+          TYPING_EXPECT: ${{ github.event_name == 'pull_request' && 'any' || 'clean' }}
+        run: sh macos/verify-update.sh "${{ steps.which.outputs.from }}" "${{ steps.which.outputs.to }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screens-${{ matrix.os }}
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore

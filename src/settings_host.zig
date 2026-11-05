@@ -3,6 +3,7 @@
 //! like the panel's other host callbacks: tests, the film and the promo
 //! draw Settings with defaults and call nothing.
 const shortcut = @import("shortcut.zig");
+const Theme = @import("palette.zig").Theme;
 
 pub const SettingsHost = struct {
     ctx: *anyopaque,
@@ -17,6 +18,8 @@ pub const SettingsHost = struct {
     suggest: *const fn (ctx: *anyopaque, on: bool) void,
     /// Return sends Google searches to the browser (on) or the panel.
     searches_out: *const fn (ctx: *anyopaque, on: bool) void,
+    /// The panel's tint, chosen in Settings: kept for the next launch.
+    theme: *const fn (ctx: *anyopaque, t: Theme) void,
     /// Whether the menu bar icon shows; `set` changes it first.
     menu_bar: *const fn (ctx: *anyopaque, set: ?bool) bool,
     /// Whether clipboard history records; `set` changes it first. Null where

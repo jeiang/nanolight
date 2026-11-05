@@ -277,8 +277,30 @@ pub fn systemKeys(buf: []SystemKey) []SystemKey {
     const pool = objc.Pool.push();
     defer pool.pop();
     const ud = objc.msg(objc.Object, objc.class("NSUserDefaults"), "standardUserDefaults", .{});
-    const domain = as(objc.msg(?objc.Object, ud, "persistentDomainForName:", .{objc.nsString("com.apple.symbolichotkeys")}), "NSDictionary") orelse return buf[0..0];
-    return readTable(objc.msg(?objc.Object, domain, "objectForKey:", .{objc.nsString("AppleSymbolicHotKeys")}), buf);
+    const domain = as(objc.msg(?objc.Object, ud, "persistentDomainForName:", .{objc.nsString("com.apple.symbolichotkeys")}), "NSDictionary");
+    const table = if (domain) |d| objc.msg(?objc.Object, d, "objectForKey:", .{objc.nsString("AppleSymbolicHotKeys")}) else null;
+    return withDefaults(readTable(table, buf), buf);
+}
+
+/// What holds these keys on a Mac whose table doesn't list them.
+const mac_defaults = [_]SystemKey{
+    .{ .id = 64, .enabled = true, .key = hotkey.space, .mods = ns_cmd },
+    .{ .id = 65, .enabled = true, .key = hotkey.space, .mods = ns_cmd | ns_opt },
+};
+
+/// macOS may list a shortcut only once it has been changed: on a clean Mac
+/// the table lacks Spotlight's, which holds ⌘Space all the same.
+fn withDefaults(found: []SystemKey, buf: []SystemKey) []SystemKey {
+    var n = found.len;
+    for (mac_defaults) |d| {
+        const listed = for (buf[0..n]) |k| {
+            if (k.id == d.id) break true;
+        } else false;
+        if (listed or n == buf.len) continue;
+        buf[n] = d;
+        n += 1;
+    }
+    return buf[0..n];
 }
 
 /// `obj` if it is a `cls`, else null. A defaults value can be any property
@@ -311,6 +333,13 @@ fn readTable(table_in: ?objc.Object, buf: []SystemKey) []SystemKey {
         if (as(k, "NSString") == null and as(k, "NSNumber") == null) continue;
         const entry = as(objc.msg(?objc.Object, table, "objectForKey:", .{k}), "NSDictionary") orelse continue;
         const enabled = field(entry, "enabled", "NSNumber") orelse continue;
+        const id: u32 = @intCast(std.math.clamp(objc.msg(objc.NSInteger, k, "integerValue", .{}), 0, std.math.maxInt(u32)));
+        // Turned off, it holds no key, and the entry may say no more than that.
+        if (!objc.msg(objc.BOOL, enabled, "boolValue", .{})) {
+            buf[n] = .{ .id = id, .enabled = false, .key = 0, .mods = 0 };
+            n += 1;
+            continue;
+        }
         const value = field(entry, "value", "NSDictionary") orelse continue;
         const params = field(value, "parameters", "NSArray") orelse continue;
         if (objc.msg(objc.NSUInteger, params, "count", .{}) < 3) continue;
@@ -319,8 +348,8 @@ fn readTable(table_in: ?objc.Object, buf: []SystemKey) []SystemKey {
         const key = objc.msg(objc.NSInteger, code, "integerValue", .{});
         if (key < 0 or key > 127) continue;
         buf[n] = .{
-            .id = @intCast(std.math.clamp(objc.msg(objc.NSInteger, k, "integerValue", .{}), 0, std.math.maxInt(u32))),
-            .enabled = objc.msg(objc.BOOL, enabled, "boolValue", .{}),
+            .id = id,
+            .enabled = true,
             .key = @intCast(key),
             .mods = @bitCast(@as(i64, objc.msg(objc.NSInteger, mods, "integerValue", .{}))),
         };
@@ -472,7 +501,7 @@ test "the system's shortcuts are read past entries of the wrong type (#14)" {
         \\<key>64</key><dict><key>enabled</key><true/><key>value</key><dict><key>parameters</key>
         \\<array><integer>32</integer><integer>49</integer><integer>1048576</integer></array></dict></dict>
         \\<key>65</key><true/>
-        \\<key>60</key><dict><key>enabled</key><false/><key>value</key><true/></dict>
+        \\<key>60</key><dict><key>enabled</key><true/><key>value</key><true/></dict>
         \\<key>61</key><dict><key>enabled</key><true/><key>value</key><dict><key>parameters</key><true/></dict></dict>
         \\<key>62</key><dict><key>enabled</key><true/><key>value</key><dict><key>parameters</key>
         \\<array><integer>32</integer><string>49</string><integer>0</integer></array></dict></dict>
@@ -488,4 +517,41 @@ test "the system's shortcuts are read past entries of the wrong type (#14)" {
     // The table itself the wrong type: nothing, no abort.
     const yes = objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{objc.YES});
     try std.testing.expectEqual(@as(usize, 0), readTable(yes, &buf).len);
+}
+
+test "Spotlight holds ⌘Space unless the system's table says otherwise" {
+    if (!mac) return error.SkipZigTest;
+    var buf: [4]SystemKey = undefined;
+    const none: Others = .{};
+    // A clean Mac: no entry for it.
+    const clean = withDefaults(buf[0..0], &buf);
+    try std.testing.expectEqualStrings("Spotlight", clash(.cmd_space, clean, &none).system.?);
+    try std.testing.expectEqualStrings("Finder's search window", clash(.opt_cmd_space, clean, &none).system.?);
+    try std.testing.expect(clash(.ctrl_space, clean, &none).clear());
+    // Turned off.
+    buf[0] = .{ .id = 64, .enabled = false, .key = 0, .mods = 0 };
+    try std.testing.expect(clash(.cmd_space, withDefaults(buf[0..1], &buf), &none).clear());
+    // Moved to another key.
+    buf[0] = .{ .id = 64, .enabled = true, .key = 49, .mods = ns_ctrl };
+    try std.testing.expect(clash(.cmd_space, withDefaults(buf[0..1], &buf), &none).clear());
+    // No room left: what's found is kept.
+    var one: [1]SystemKey = undefined;
+    one[0] = .{ .id = 33, .enabled = true, .key = 7, .mods = ns_opt };
+    try std.testing.expectEqual(@as(usize, 1), withDefaults(one[0..1], &one).len);
+}
+
+test "a shortcut turned off is read, whatever else its entry lacks" {
+    if (!mac) return error.SkipZigTest;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const xml =
+        \\<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
+        \\<key>64</key><dict><key>enabled</key><false/></dict>
+        \\</dict></plist>
+    ;
+    const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ @as(*const anyopaque, xml.ptr), @as(objc.NSUInteger, xml.len) });
+    const table = objc.msg(?objc.Object, objc.class("NSPropertyListSerialization"), "propertyListWithData:options:format:error:", .{ data, @as(objc.NSUInteger, 0), @as(?*anyopaque, null), @as(?*anyopaque, null) });
+    var buf: [4]SystemKey = undefined;
+    const found = withDefaults(readTable(table, &buf), &buf);
+    try std.testing.expect(clash(.cmd_space, found, &.{}).clear());
 }

@@ -6,10 +6,7 @@
 //! results in the panel (preview.zig). Its panel is the system's vibrancy
 //! (NSVisualEffectView, as launchers use), nanoui drawing on it.
 //! It lives in the menu bar: no Dock icon, nothing drawn while idle.
-//!
-//! `zig build run`, or `zig build app` and open zig-out/Nanolight.app
-//! (its icon, icon.png, is drawn by tools/icon.py).
-//! The walkthrough film, rendered offscreen: `tools/film.sh` (film.zig).
+//! `zig build run`, or `zig build app` and open zig-out/Nanolight.app.
 const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
@@ -83,6 +80,7 @@ pub const Live = struct {
     asking: [suggest.max_len]u8 = undefined,
     asking_len: usize = 0,
     waiting: u32 = 0,
+    files: @import("files_live.zig").State = .{},
     /// Updates from GitHub's releases (a signed build only), and the menu
     /// bar icon whose menu offers one once it's ready.
     updater: ?*nanoui.Updater = null,
@@ -123,7 +121,7 @@ pub const Live = struct {
     fn host(l: *Live) view.Host {
         const bind = @import("settings_bind.zig");
         bind.box.ctx = l;
-        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .preview = if (mac) showPage else null, .settings = &bind.box, .command = runCommand, .rates = needRates };
+        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .files = if (mac) @import("files_live.zig").askFiles else null, .preview = if (mac) showPage else null, .settings = &bind.box, .command = runCommand, .rates = needRates };
     }
 
     fn open(ctx: *anyopaque, target: []const u8) void {
@@ -266,7 +264,7 @@ pub const Live = struct {
     fn ask(ctx: *anyopaque, query: []const u8) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         const q = std.mem.trim(u8, query, " ");
-        if (q.len > suggest.max_len) return;
+        if (q.len > suggest.max_len) return l.s.unanswered(q);
         @memcpy(l.asking[0..q.len], q);
         l.asking_len = q.len;
         l.waiting += 1;
@@ -282,8 +280,8 @@ pub const Live = struct {
     fn send(l: *Live) void {
         const q = l.asking[0..l.asking_len];
         // Typed on, or turned off, while it waited.
-        if (!l.s.suggest_on or !suggest.same(q, l.s.query.text())) return;
-        const a = l.app.gpa.create(Ask) catch return;
+        if (!l.s.suggest_on or !suggest.same(q, l.s.query.text())) return l.s.unanswered(q);
+        const a = l.app.gpa.create(Ask) catch return l.s.unanswered(q);
         a.* = .{ .live = l, .len = q.len };
         @memcpy(a.text[0..q.len], q);
         var buf: [512]u8 = undefined;
@@ -608,13 +606,12 @@ const Ask = struct {
     fn done(a: *Ask, r: nanoui.http.Response) void {
         const l = a.live;
         defer l.app.gpa.destroy(a);
-        if (r.status != 200) return;
+        defer if (l.window) |w| w.redraw();
         var arena: std.heap.ArenaAllocator = .init(l.app.gpa);
         defer arena.deinit();
         var list: suggest.List = .{};
-        if (!suggest.decode(arena.allocator(), r.body, a.text[0..a.len], &list)) return;
+        if (r.status != 200 or !suggest.decode(arena.allocator(), r.body, a.text[0..a.len], &list)) return l.s.unanswered(a.text[0..a.len]);
         l.s.answered(a.text[0..a.len], &list);
-        if (l.window) |w| w.redraw();
     }
 };
 
@@ -697,6 +694,7 @@ pub fn main(init: std.process.Init) !void {
     var o: Onboard = .{ .skip_key = nix_managed or (if (cfg.hotkey) |h| shortcut.Choice.parse(h) != null else false) };
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
     defer s.query.deinit();
+    defer s.found.deinit();
     var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa), .cfg = cfg };
     defer if (live.rates) |*r| r.deinit();
     defer if (live.ql_arena) |a| {
@@ -706,6 +704,7 @@ pub fn main(init: std.process.Init) !void {
     s.host = live.host();
     s.pop_after = cfg.pop_to_root_seconds;
     if (!app.flags.hidden) _ = live.setQuicklinks(config.loadQuicklinks(cfg_arena.allocator(), kv));
+    @import("files_live.zig").load(&live);
     // Google's completions are on unless turned off in Settings.
     if (kv.get(init.gpa, suggest_key) catch null) |v| {
         defer init.gpa.free(v);
@@ -715,6 +714,7 @@ pub fn main(init: std.process.Init) !void {
         defer init.gpa.free(v);
         s.searches_out = std.mem.eql(u8, v, "1");
     }
+    s.theme = @import("settings_bind.zig").loadTheme(kv, init.gpa);
     s.reveal();
     // The rows first, so a snapshot is as tall as the panel.
     s.rebuild();

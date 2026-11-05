@@ -19,7 +19,7 @@ const mask = mouse_moved | left_dragged;
 
 pub const ClickThrough = struct {
     window: ?*nanoui.Window = null,
-    /// The panel's height as drawn now (it springs).
+    /// The panel's height as drawn now.
     height: ?*const f32 = null,
     global: ?objc.Object = null,
     local: ?objc.Object = null,

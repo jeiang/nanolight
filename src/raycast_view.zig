@@ -176,7 +176,7 @@ pub const Ext = struct {
 
     /// The command in the panel (Nanolight.panel calls it while `open`).
     pub fn panel(e: *Ext, c: *ui.Context, n: *pview.Nanolight, p: Palette) void {
-        const h = n.follow(c, e.height());
+        const h = n.follow(e.height());
         const body = ui.div(c).column().wFull().h(h).clip();
         defer body.end();
         const v = e.view;

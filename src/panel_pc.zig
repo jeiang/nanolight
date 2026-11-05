@@ -79,7 +79,12 @@ pub fn place(w: *nanoui.Window) void {
 }
 
 pub fn resize(w: *nanoui.Window, h: f32) void {
-    w.setSize(view.width, @ceil(h));
+    const height = @ceil(h);
+    // Linux: GTK 3 under Wayland can keep a borderless window at its old
+    // size after `gtk_window_resize`, and the bottom of the panel is cut
+    // off. A size request of the new height makes it take it.
+    if (!windows) w.setMinSize(view.width, height);
+    w.setSize(view.width, height);
 }
 
 /// After `show`: on X11 the window manager is given the hot key's time, or

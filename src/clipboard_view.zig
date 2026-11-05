@@ -104,7 +104,7 @@ pub const Screen = struct {
 
     /// The screen in place of the rows, the panel's height following it.
     pub fn inPanel(s: *Screen, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
-        const h = n.follow(c, height);
+        const h = n.follow(height);
         const box = ui.div(c).column().wFull().h(h).clip();
         defer box.end();
         const hh = host(n);
