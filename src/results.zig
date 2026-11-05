@@ -551,7 +551,7 @@ test "system commands list under the apps without taking an app's, a quicklink's
     } else return error.NoCommand;
     try t.expectEqualStrings("Sleep", commands.all[r.rows[at].app].name);
     try t.expectEqualStrings("Commands", r.section(at).?);
-    // Other commands can match too (the Mac's Lock Screen says "sleep
+    // Other commands can match too (the Mac's Sleep Display says "sleep
     // display"); the quicklinks follow them.
     const after = for (r.slice()[at..], at..) |row, i| {
         if (row.kind != .command) break i;

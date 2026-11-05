@@ -49,7 +49,7 @@ pub const mac_table = volumes(macVolume) ++ [_]Command{
     .{ .name = "Mute", .keywords = &.{ "volume", "audio", "sound" }, .runs = &.{&.{ "osascript", "-e", "set volume output muted true" }} },
     .{ .name = "Unmute", .keywords = &.{ "volume", "audio", "sound" }, .runs = &.{&.{ "osascript", "-e", "set volume output muted false" }} },
     .{ .name = "Sleep", .keywords = &.{"suspend"}, .runs = &.{&.{ "pmset", "sleepnow" }} },
-    .{ .name = "Lock Screen", .keywords = &.{ "lock", "sleep display" }, .runs = &.{&.{ "pmset", "displaysleepnow" }} },
+    .{ .name = "Sleep Display", .keywords = &.{ "display off", "screen off" }, .runs = &.{&.{ "pmset", "displaysleepnow" }} },
     .{ .name = "Empty Trash", .keywords = &.{ "bin", "delete" }, .runs = &.{&.{ "osascript", "-e", "tell application \"Finder\" to empty trash" }} },
 };
 
@@ -288,7 +288,7 @@ test "tables hold what the spec lists for each OS" {
             return false;
         }
     }.has;
-    for ([_][]const u8{ "Toggle Dark Mode", "Set Volume to 0%", "Set Volume to 25%", "Set Volume to 50%", "Set Volume to 75%", "Set Volume to 100%", "Mute", "Unmute", "Sleep", "Lock Screen", "Empty Trash" }) |n| try t.expect(names(&mac_table, n));
+    for ([_][]const u8{ "Toggle Dark Mode", "Set Volume to 0%", "Set Volume to 25%", "Set Volume to 50%", "Set Volume to 75%", "Set Volume to 100%", "Mute", "Unmute", "Sleep", "Sleep Display", "Empty Trash" }) |n| try t.expect(names(&mac_table, n));
     for ([_][]const u8{ "Set Volume to 50%", "Mute", "Unmute", "Sleep", "Lock Screen", "Dark Mode", "Light Mode" }) |n| try t.expect(names(&linux_table, n));
     // Volume falls back from wpctl to pactl.
     try t.expectEqualStrings("wpctl", linux_table[2].runs[0][0]);
@@ -317,8 +317,14 @@ test "commands are ranked like apps, only when listed, and capped by the room gi
     }.of;
     try t.expect(rank("sleep", &out) > 0);
     try t.expectEqualStrings("Sleep", name(out[0]));
-    try t.expect(rank("lock", &out) > 0);
-    try t.expectEqualStrings("Lock Screen", name(out[0]));
+    if (builtin.os.tag == .macos) {
+        try t.expectEqual(@as(usize, 0), rank("lock", &out));
+        try t.expect(rank("sleep display", &out) > 0);
+        try t.expectEqualStrings("Sleep Display", name(out[0]));
+    } else {
+        try t.expect(rank("lock", &out) > 0);
+        try t.expectEqualStrings("Lock Screen", name(out[0]));
+    }
     try t.expectEqual(@as(usize, 0), rank("volume", out[0..0]));
     // Windows has no volume.
     if (!windows) {
