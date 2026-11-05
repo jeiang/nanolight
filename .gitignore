@@ -2,6 +2,5 @@
 zig-out/
 zig-pkg/
 .DS_Store
-raycast/node_modules/
-raycast/var/
-raycast/test-out.txt
+result
+result-*

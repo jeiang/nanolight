@@ -18,10 +18,13 @@ jobs:
         with:
           version: 0.17.0
       - run: zig build test
+      - run: zig build test -Dnix=true
       - run: zig build app
+      - run: zig build server
       - run: zig build -Dtarget=x86_64-windows-gnu --prefix zig-out/windows
       - run: zig build -Dtarget=x86_64-linux-gnu --prefix zig-out/linux
-      - run: cd raycast && npm ci && npm test
+      - run: zig build app -Dnix=true --prefix zig-out/nix-app
+      - run: zig build -Dnix=true -Dtarget=x86_64-windows-gnu --prefix zig-out/nix-windows
 
   # The tests on Linux, where they draw with nanoui's own text and renderer.
   linux:
@@ -32,3 +35,13 @@ jobs:
         with:
           version: 0.17.0
       - run: zig build test
+      - run: zig build test -Dnix=true
+      - run: zig build server
+
+  # Needs a committed flake.lock (`nix flake lock`).
+  nix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix flake check -L

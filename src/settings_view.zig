@@ -1,6 +1,6 @@
 //! Settings, in the panel itself: the shortcut, Google's suggestions and
-//! where searches open, opening at login, the menu bar icon, syncing
-//! across Macs, updates. The same glass, the
+//! where searches open, opening at login, the menu bar icon, the sync
+//! status, updates. The same glass, the
 //! same rows. Esc goes back to search; ↑/↓ move, Return and Space do the
 //! row. The shortcut is one of four, or any key recorded with ⌘, ⌥ or ⌃
 //! (the last chip). Without a host (tests, the film) it still draws, and changes
@@ -10,17 +10,22 @@ const ui = nanoui.ui;
 const motion = ui.motion;
 const panel = @import("view.zig");
 const shortcut = @import("shortcut.zig");
-const account = @import("account.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Choice = shortcut.Choice;
 const Palette = panel.Palette;
 const mac = @import("builtin").os.tag == .macos;
+/// A Nix build: the Nix modules own startup and updates.
+const nix = @import("build_options").nix_managed;
 
-const RowKind = enum { choice, suggest, browser, login, menu_bar, sync, terms, updates, welcome, quit };
+const RowKind = enum { choice, suggest, browser, login, menu_bar, clipboard, clear_clipboard, updates, welcome, quit };
 
 /// As tall as its sections, never past the window. The Mac has two rows
 /// more: where searches open, and the menu bar icon.
-pub const height: f32 = 560 + if (mac) 2 * 46 else 0;
+const base_height: f32 = 512 + if (mac) 2 * 46 else 0;
+/// The clipboard's section: a heading, a switch and a button.
+const clip_height: f32 = 116;
+/// The tallest it gets (with the clipboard's section).
+pub const height: f32 = base_height + clip_height;
 
 pub const Settings = struct {
     open: bool = false,
@@ -39,19 +44,33 @@ pub const Settings = struct {
     browser: bool = false,
     login: bool = false,
     menu_bar: bool = true,
-    account: account.State = .signed_out,
-    email: []const u8 = "",
+    /// Clipboard history recording; `clip_here` is whether this system has it.
+    clip: bool = true,
+    clip_here: bool = false,
+    cleared: bool = false,
+    sync: []const u8 = @import("account.zig").off_text,
     version: []const u8 = "0.1.0",
     ready: ?[]const u8 = null,
 
     pub fn show(s: *Settings) void {
         s.open = true;
         s.sel = 0;
+        s.cleared = false;
+    }
+
+    /// The height now: the clipboard's section is there only where this system has it.
+    pub fn tall(s: *const Settings) f32 {
+        return if (s.clip_here) height else base_height;
     }
 
     pub fn hide(s: *Settings) void {
         s.open = false;
         s.recording = false;
+    }
+
+    /// The rows shown now: the clipboard's only where this system has it.
+    fn shown(s: *const Settings) []const RowKind {
+        return if (s.clip_here) visible(true) else visible(false);
     }
 
     fn hooks(s: *Settings, n: *panel.Nanolight) ?*const SettingsHost {
@@ -68,15 +87,16 @@ pub const Settings = struct {
         s.choice = h.choice(h.ctx);
         if (s.choice.preset() == null) s.custom = s.choice;
         s.login = h.login(h.ctx, null);
-        s.account = h.account(h.ctx);
-        s.email = h.email(h.ctx);
+        s.clip_here = h.clipboard_enabled(h.ctx, null) != null;
+        s.clip = h.clipboard_enabled(h.ctx, null) orelse false;
+        s.sync = h.sync_status(h.ctx);
         s.version = h.version(h.ctx);
         s.ready = h.ready(h.ctx);
     }
 
     pub fn view(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
         s.pull(n);
-        const rows = rowList(s.account);
+        const rows = s.shown();
         if (s.sel >= rows.len) s.sel = rows.len - 1;
         s.keys(c, n, rows);
         ui.key(c, "settings");
@@ -105,13 +125,20 @@ pub const Settings = struct {
         label(c, p, "Search");
         s.switchRow(c, n, p, rows, .suggest, "Google Suggestions");
         if (mac) s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
-        label(c, p, "This " ++ @import("results.zig").machine);
-        s.switchRow(c, n, p, rows, .login, "Open at Login");
+        if (mac or !nix) label(c, p, "This " ++ @import("results.zig").machine);
+        if (!nix) s.switchRow(c, n, p, rows, .login, "Open at Login");
         if (mac) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
+        if (s.clip_here) {
+            label(c, p, "Clipboard History");
+            s.switchRow(c, n, p, rows, .clipboard, "Record Copied Items");
+            s.button(c, n, p, rows, .clear_clipboard, if (s.cleared) "Clipboard History Cleared" else "Clear History");
+        }
         label(c, p, if (@import("builtin").os.tag == .macos) "Sync Across Macs" else "Sync Across Computers");
-        s.sync(c, n, p, rows);
-        label(c, p, "Updates");
-        s.updates(c, n, p, rows);
+        ui.text(c, s.sync, .{ .size = 12.5, .color = p.sub });
+        if (!nix) {
+            label(c, p, "Updates");
+            s.updates(c, n, p, rows);
+        }
         s.button(c, n, p, rows, .welcome, "Show Welcome Again");
         s.button(c, n, p, rows, .quit, "Quit Nanolight");
     }
@@ -187,6 +214,7 @@ pub const Settings = struct {
             .browser => s.browser,
             .login => s.login,
             .menu_bar => s.menu_bar,
+            .clipboard => s.clip,
             else => false,
         });
     }
@@ -225,37 +253,12 @@ pub const Settings = struct {
                 const next = !s.menu_bar;
                 s.menu_bar = if (h) |host| host.menu_bar(host.ctx, next) else next;
             },
+            .clipboard => {
+                const next = !s.clip;
+                s.clip = if (h) |host| host.clipboard_enabled(host.ctx, next) orelse next else next;
+            },
             else => {},
         }
-    }
-
-    fn sync(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
-        switch (s.account) {
-            .signed_out, .starting => {
-                s.button(c, n, p, rows, .sync, if (s.account == .starting) "Signing In…" else "Sign In with Codegraff");
-                s.termsLine(c, n, p, rows);
-            },
-            .waiting => {
-                ui.text(c, "Approve in your browser…", .{ .size = 13.5, .weight = .medium, .color = p.text });
-                s.button(c, n, p, rows, .sync, "Cancel");
-            },
-            .signed_in => {
-                const who = if (s.email.len > 0) s.email else "your Codegraff account";
-                ui.textf(c, .{ .size = 13.5, .weight = .medium, .color = p.text }, "Synced as {s}", .{who});
-                s.button(c, n, p, rows, .sync, "Sign Out");
-            },
-        }
-    }
-
-    fn termsLine(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
-        const on = isSel(rows, s.sel, .terms);
-        ui.key(c, "terms");
-        const line = ui.div(c).row().wFull().h(28).px(4).gap(4).itemsCenter().rounded(8).control().bg(if (on) p.sel else p.fill.alpha(0));
-        defer line.end();
-        if (line.clicked()) s.activate(n, .terms);
-        ui.text(c, "Uses your Codegraff account; Codegraff's", .{ .size = 11.5, .color = p.sub.alpha(0.75) });
-        ui.text(c, "Terms & Privacy", .{ .size = 11.5, .weight = .medium, .color = p.text.alpha(0.9) });
-        ui.text(c, "apply", .{ .size = 11.5, .color = p.sub.alpha(0.75) });
     }
 
     fn updates(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
@@ -292,8 +295,8 @@ pub const Settings = struct {
             return;
         }
         if (!s.returned(c)) s.took_return = false;
-        if (c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true })) s.sel = (s.sel + 1) % rows.len;
-        if (c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true })) s.sel = (s.sel + rows.len - 1) % rows.len;
+        if (panel.Nanolight.moveDown(c)) s.sel = (s.sel + 1) % rows.len;
+        if (panel.Nanolight.moveUp(c)) s.sel = (s.sel + rows.len - 1) % rows.len;
         if (c.shortcut(.{ .key = S.left })) s.nudge(n, rows, -1);
         if (c.shortcut(.{ .key = S.right })) s.nudge(n, rows, 1);
         // Space is also typed into the field once Settings closes; only
@@ -309,7 +312,8 @@ pub const Settings = struct {
             s.took_return = true;
             s.activateSelected(n);
         }
-        const h = n.follow(c, height);
+        s.pull(n);
+        const h = n.follow(c, s.tall());
         const box = ui.div(c).column().wFull().h(h).clip();
         defer box.end();
         s.view(c, n, p);
@@ -325,7 +329,7 @@ pub const Settings = struct {
     /// Return on the selected row. The field would have taken it.
     pub fn activateSelected(s: *Settings, n: *panel.Nanolight) void {
         s.pull(n);
-        const rows = rowList(s.account);
+        const rows = s.shown();
         if (s.sel >= rows.len) return;
         s.activate(n, rows[s.sel]);
     }
@@ -339,14 +343,12 @@ pub const Settings = struct {
         const h = s.hooks(n);
         switch (kind) {
             // ←/→ step through the four; Return records one's own.
-            .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, rowList(s.account), 1),
-            .suggest, .browser, .login, .menu_bar => s.flip(n, kind),
-            .sync => if (h) |host| switch (s.account) {
-                .signed_out => host.sign_in(host.ctx),
-                .waiting, .signed_in => host.sign_out(host.ctx),
-                .starting => {},
+            .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, s.shown(), 1),
+            .suggest, .browser, .login, .menu_bar, .clipboard => s.flip(n, kind),
+            .clear_clipboard => {
+                if (h) |host| host.clipboard_clear(host.ctx);
+                s.cleared = true;
             },
-            .terms => if (h) |host| host.terms(host.ctx),
             .updates => if (h) |host| {
                 if (s.ready != null) host.restart(host.ctx) else host.check(host.ctx);
             },
@@ -359,14 +361,38 @@ pub const Settings = struct {
     }
 };
 
-fn rowList(state: account.State) []const RowKind {
-    return switch (state) {
-        .signed_out, .starting => if (mac) &.{ .choice, .suggest, .browser, .login, .menu_bar, .sync, .terms, .updates, .welcome, .quit } else &.{ .choice, .suggest, .login, .sync, .terms, .updates, .welcome, .quit },
-        .waiting, .signed_in => if (mac) &.{ .choice, .suggest, .browser, .login, .menu_bar, .sync, .updates, .welcome, .quit } else &.{ .choice, .suggest, .login, .sync, .updates, .welcome, .quit },
+/// The rows this build shows, in order, with or without the clipboard's.
+fn visible(comptime clip: bool) []const RowKind {
+    const T = struct {
+        const rows = blk: {
+            var list: [10]RowKind = undefined;
+            var n: usize = 0;
+            for ([_]RowKind{ .choice, .suggest, .browser, .login, .menu_bar, .clipboard, .clear_clipboard, .updates, .welcome, .quit }) |k| {
+                if (!mac and (k == .browser or k == .menu_bar)) continue;
+                if (nix and (k == .login or k == .updates)) continue;
+                if (!clip and (k == .clipboard or k == .clear_clipboard)) continue;
+                list[n] = k;
+                n += 1;
+            }
+            const out = list[0..n].*;
+            break :blk out;
+        };
     };
+    return &T.rows;
 }
 
 fn isSel(rows: []const RowKind, sel: usize, kind: RowKind) bool {
     if (sel >= rows.len) return false;
     return rows[sel] == kind;
+}
+
+test "a Nix build's Settings has no login or updates row" {
+    var login = false;
+    var updates = false;
+    for (visible(true)) |k| {
+        login = login or k == .login;
+        updates = updates or k == .updates;
+    }
+    try @import("std").testing.expectEqual(!nix, login);
+    try @import("std").testing.expectEqual(!nix, updates);
 }

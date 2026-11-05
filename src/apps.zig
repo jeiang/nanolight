@@ -43,6 +43,15 @@ pub fn scanSystem(ix: *Index, io: std.Io, env: *const std.process.Environ.Map) v
     ix.sort();
 }
 
+/// Apps in the folders config.toml names, found as this OS finds its own.
+pub fn scanExtra(ix: *Index, io: std.Io, dirs: []const []const u8) void {
+    for (dirs) |d| switch (builtin.os.tag) {
+        .macos => ix.scanDir(io, d, 1),
+        .windows => @import("apps_win.zig").scanDir(ix, io, d, 1),
+        else => @import("apps_linux.zig").scanDir(ix, io, d, 1),
+    };
+}
+
 /// An address for the browser or the system (a pane of System Settings),
 /// not a file to open.
 pub fn isUrl(target: []const u8) bool {
@@ -162,7 +171,7 @@ pub const Index = struct {
     }
 
     /// Whether `other` lists the same apps and commands, at the same
-    /// paths: a rescan that found nothing new (raycast_live.zig `refresh`).
+    /// paths: a rescan that found nothing new (script_live.zig `refresh`).
     pub fn same(ix: *const Index, other: *const Index) bool {
         if (ix.apps.items.len != other.apps.items.len) return false;
         for (ix.apps.items, other.apps.items) |a, b| {
@@ -244,7 +253,7 @@ pub const Index = struct {
     pub fn icon(ix: *Index, i: u32) ?[]const u8 {
         if (ix.icons.get(i)) |cached| return if (cached) |c| c.png else null;
         const path = ix.apps.items[i].path;
-        const png = if (std.mem.startsWith(u8, path, "raycast")) @import("raycast.zig").icon(ix.gpa, path) else switch (builtin.os.tag) {
+        const png = switch (builtin.os.tag) {
             .macos => iconPng(ix.gpa, path),
             .windows => @import("apps_win.zig").icon(ix.gpa, path),
             else => @import("apps_linux.zig").icon(ix.gpa, std.Io.Threaded.global_single_threaded.io(), path),

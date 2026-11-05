@@ -1,8 +1,8 @@
-//! A Raycast extension's command, drawn in the panel in place of the rows
+//! A script command, drawn in the panel in place of the rows
 //! while it runs: its list (a search field over sections of items), its
 //! detail (markdown as text) or its form, with its actions in the footer
-//! (Return the first, ⌘↩/Ctrl+↩ the second, ⌘K/Ctrl+K all of them). What
-//! it shows comes from its host process (raycast.zig) as `View`s; keys and
+//! (Return the first, ⌘↩/Ctrl+↩ the second, ⌘K/Ctrl+O all of them). What
+//! it shows comes from the script's output (script_run.zig) as `View`s; keys and
 //! choices go back as messages (raycast_model.zig's `say`).
 const std = @import("std");
 const nanoui = @import("nanoui");
@@ -10,6 +10,10 @@ const ui = nanoui.ui;
 const model = @import("raycast_model.zig");
 const pview = @import("view.zig");
 const results = @import("results.zig");
+
+/// ⌘K on the Mac; Ctrl+K moves up on a PC, so the actions are on Ctrl+O.
+pub const actions_key: ui.Shortcut = if (@import("builtin").os.tag == .macos) .{ .key = 'k', .cmd = true } else .{ .key = 'o', .ctrl = true };
+const actions_hint = if (@import("builtin").os.tag == .macos) "⌘K" else "Ctrl+O";
 const Palette = pview.Palette;
 
 const row_h: f32 = 44;
@@ -200,14 +204,14 @@ pub const Ext = struct {
         const n = if (e.actions_open) acts.len else if (v) |vv| (if (vv.isList()) vv.count() else 0) else 0;
         const sel = if (e.actions_open) &e.act_sel else &e.sel;
         const before = e.sel;
-        if (c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true })) {
+        if (pview.Nanolight.moveDown(c)) {
             if (n > 0) sel.* = (sel.* + 1) % n;
         }
-        if (c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true })) {
+        if (pview.Nanolight.moveUp(c)) {
             if (n > 0) sel.* = (sel.* + n - 1) % n;
         }
         if (!e.actions_open and e.sel != before) if (v) |vv| if (vv.item(e.sel)) |it| e.say("select", "id", it.id);
-        if (c.shortcut(.{ .key = 'k', .cmd = true })) {
+        if (c.shortcut(actions_key)) {
             e.actions_open = !e.actions_open and acts.len > 0;
             e.act_sel = 0;
         }
@@ -507,7 +511,7 @@ pub const Ext = struct {
         if (acts.len > 1) {
             ui.div(c).w(1).h(14).bg(p.hair).end();
             ui.text(c, "Actions", .{ .size = 12, .color = p.sub.alpha(0.8) });
-            ui.kbd(c, results.mod ++ "K");
+            ui.kbd(c, actions_hint);
         }
     }
 };

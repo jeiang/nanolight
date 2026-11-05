@@ -3,10 +3,12 @@
 # app's updater reads (manifest.json, each archive's sha256), to the GitHub
 # release of the tag that was pushed.
 #
-# Signing and notarization use these repository secrets, the same names as
-# nanoterm's and Harness's. With all five, the app and image are signed with
+# Signing and notarization use these repository secrets of jeiang/nanolight.
+# All are optional. With all five, the app and image are signed with
 # a Developer ID and notarized; without them, they are signed ad hoc
-# (Gatekeeper asks once, and the app can't update itself).
+# (Gatekeeper asks once, and the app can't update itself): the Signing
+# identity and Notary credentials steps are skipped when MACOS_CERT_P12 is
+# empty, and macos/package.sh then signs with "codesign --sign -".
 #   MACOS_CERT_P12       base64 of a "Developer ID Application" .p12
 #   MACOS_CERT_PASSWORD  its password
 #   AC_API_KEY_P8        an App Store Connect API key (the .p8's contents)

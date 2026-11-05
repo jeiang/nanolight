@@ -2,7 +2,7 @@
 //! ⌘Space, or the key picked in its welcome (onboard.zig), or from its
 //! menu bar icon; finds apps as you type (initials
 //! too: "ss" is System Settings), answers math, and hands anything else to
-//! Grok, X or Google, with Google's completions of it (suggest.zig) and its
+//! your quicklinks (Google, Claude, Grok...), with Google's completions of it (suggest.zig) and its
 //! results in the panel (preview.zig). Its panel is the system's vibrancy
 //! (NSVisualEffectView, as launchers use), nanoui drawing on it.
 //! It lives in the menu bar: no Dock icon, nothing drawn while idle.
@@ -22,6 +22,7 @@ const hotkey = @import("hotkey.zig");
 const shortcut = @import("shortcut.zig");
 const Onboard = @import("onboard.zig").Onboard;
 const suggest = @import("suggest.zig");
+const convert = @import("convert.zig");
 /// The panel's window, the page in it and clicks through it: the Mac's own,
 /// or Windows' and Linux's (panel_pc.zig, pc_stubs.zig).
 const panel = if (mac) @import("panel_mac.zig") else @import("panel_pc.zig");
@@ -31,14 +32,20 @@ const single = @import("single.zig");
 const ClickThrough = if (mac) @import("clickthrough.zig").ClickThrough else @import("pc_stubs.zig").ClickThrough;
 const Recorder = if (mac) @import("recorder.zig").Recorder else @import("pc_stubs.zig").Recorder;
 const account = @import("account.zig");
-const rc = @import("raycast_live.zig");
-const Settings = @import("settings.zig").Settings;
+const rc = @import("script_live.zig");
+const settings_mod = @import("settings.zig");
+const Settings = settings_mod.Settings;
+const config = @import("config.zig");
+const commands = @import("commands.zig");
+const clipboard = @import("clipboard.zig");
+const clipboard_view = @import("clipboard_view.zig");
+const clipboard_live = @import("clipboard_live.zig");
+/// A Nix build: no updater and no login-item UI; the modules own both.
+const nix_managed = @import("build_options").nix_managed;
 
-const suggest_key = "nanolight.suggest";
-/// "1": Return opens searches in the browser (issue #10).
-const searches_out_key = "nanolight.searches_out";
-/// "0": no menu bar icon (issue #8).
-const menu_bar_key = "nanolight.menu_bar";
+const suggest_key = config.suggest_key;
+const searches_out_key = config.searches_out_key;
+const menu_bar_key = config.menu_bar_key;
 
 pub fn applyChoice(ctx: *anyopaque, choice: shortcut.Choice) void {
     Live.apply(ctx, choice);
@@ -54,8 +61,8 @@ pub fn loginItem(ctx: *anyopaque, set: ?bool) bool {
 /// The version 0.1.6 and before left when they restarted into an update
 /// themselves (nanoui's updater does it now, `autoRestart`).
 pub const updated_key = "nanolight.updated";
-/// When this Mac last changed its key or suggestions (settings.zig's `at`).
-const sync_at_key = "nanolight.sync.at";
+const sync_at_key = config.sync_at_key;
+const rates_at_key = "nanolight.rates.at";
 
 /// The app around the panel: its window, shown and hidden (panel_mac.zig,
 /// panel_pc.zig), its key, its menu, its updates and its account.
@@ -81,23 +88,42 @@ pub const Live = struct {
     updater: ?*nanoui.Updater = null,
     tray: ?*nanoui.Tray = null,
     update_label: [64]u8 = undefined,
-    /// Signed in to Codegraff, settings synced between Macs (account.zig).
-    /// Null in headless runs.
+    /// Settings synced through a nanolight-server (account.zig). Null in headless runs.
     acct: ?account.Account = null,
     account_label: [192]u8 = undefined,
-    /// Raycast extensions: the command running in the panel (raycast_live.zig).
+    /// The script command running in the panel (script_live.zig).
     ext_ui: @import("raycast_view.zig").Ext = undefined,
-    runner: @import("raycast.zig").Runner = undefined,
     /// Raycast script commands, run by Nanolight itself (script_run.zig).
     scripts: @import("script_run.zig").Runner = undefined,
     env: ?*const std.process.Environ.Map = null,
+    /// config.toml, as read at launch (strings live in main's arena).
+    cfg: config.Config = .{},
+    /// The quicklinks from the config or sync, empty for the built-in ones
+    /// (`setQuicklinks`).
+    ql_custom: []const settings_mod.Quicklink = &.{},
+    ql_arena: ?*std.heap.ArenaAllocator = null,
+    /// System commands, run by Nanolight itself (commands.zig).
+    cmds: commands.Runner = undefined,
+    /// Currency rates (convert.zig): the table, when the cache or a fetch
+    /// gave one, when it was fetched, and when a fetch last began (Unix
+    /// seconds; 0 never). `rates_busy` while one is out.
+    rates: ?convert.Rates = null,
+    rates_at: i64 = 0,
+    rates_tried: i64 = 0,
+    rates_busy: bool = false,
+    rates_cache_read: bool = false,
     /// The next `hide` is skipped: a command just took the panel.
     keep_open: bool = false,
+    /// Clipboard history (clipboard_live.zig): the store, null in headless runs
+    /// and without a data directory, and the OS's watcher.
+    clip: ?*clipboard.Store = null,
+    clip_watcher: clipboard.Watcher = .{},
+    clip_host: clipboard_view.Host = undefined,
 
     fn host(l: *Live) view.Host {
         const bind = @import("settings_bind.zig");
         bind.box.ctx = l;
-        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .preview = if (mac) showPage else null, .settings = &bind.box };
+        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .preview = if (mac) showPage else null, .settings = &bind.box, .command = runCommand, .rates = needRates };
     }
 
     fn open(ctx: *anyopaque, target: []const u8) void {
@@ -122,6 +148,22 @@ pub const Live = struct {
         }
     }
 
+    fn runCommand(ctx: *anyopaque, i: usize) void {
+        const l: *Live = @ptrCast(@alignCast(ctx));
+        l.s.note = "";
+        l.cmds.start(i);
+    }
+
+    fn commandFooter(ctx: *anyopaque, text: []const u8) void {
+        const l: *Live = @ptrCast(@alignCast(ctx));
+        l.s.note = text;
+        if (l.window) |w| w.redraw();
+    }
+
+    fn commandDone(ctx: *anyopaque) void {
+        hide(ctx);
+    }
+
     // ----- sync (account.zig) -----
 
     fn accountHooks(l: *Live) account.Hooks {
@@ -135,11 +177,45 @@ pub const Live = struct {
         for (ix.apps.items, ix.launches.items) |a, n| if (n > 0) list.append(arena, .{ .name = a.name, .path = a.path, .count = n }) catch break;
         var at: i64 = 0;
         if (l.kv.get(arena, sync_at_key) catch null) |v| at = std.fmt.parseInt(i64, v, 10) catch 0;
-        const name = arena.create([32]u8) catch return .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at, .launches = list.items };
-        return .{ .hotkey = l.choice.name(name), .suggest = l.s.suggest_on, .at = at, .launches = list.items };
+        const name = arena.create([32]u8) catch return .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.ql_custom };
+        return .{ .hotkey = l.choice.name(name), .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.ql_custom };
     }
 
-    /// The account's settings, merged: the key, the suggestions, the counts.
+    /// Lists `list` (those with an http or https address) in the panel, or
+    /// the built-in quicklinks when none. False when nothing changed.
+    fn setQuicklinks(l: *Live, list: []const settings_mod.Quicklink) bool {
+        const arena = l.app.gpa.create(std.heap.ArenaAllocator) catch return false;
+        arena.* = .init(l.app.gpa);
+        var keep: std.ArrayList(settings_mod.Quicklink) = .empty;
+        for (list) |q| {
+            if (!settings_mod.webUrl(q.url)) {
+                std.log.warn("nanolight: quicklink \"{s}\": only http and https addresses work; ignored", .{q.name});
+                continue;
+            }
+            const copy: settings_mod.Quicklink = .{
+                .name = arena.allocator().dupe(u8, q.name) catch break,
+                .url = arena.allocator().dupe(u8, q.url) catch break,
+                .keyword = arena.allocator().dupe(u8, q.keyword) catch break,
+            };
+            keep.append(arena.allocator(), copy) catch break;
+        }
+        if (settings_mod.sameQuicklinks(keep.items, l.ql_custom)) {
+            arena.deinit();
+            l.app.gpa.destroy(arena);
+            return false;
+        }
+        if (l.ql_arena) |old| {
+            old.deinit();
+            l.app.gpa.destroy(old);
+        }
+        l.ql_arena = arena;
+        l.ql_custom = keep.items;
+        l.s.quicklinks = if (keep.items.len > 0) keep.items else &settings_mod.default_quicklinks;
+        l.s.built = 1;
+        return true;
+    }
+
+    /// The account's settings, merged: the key, the suggestions, the quicklinks, the counts.
     fn applySynced(ctx: *anyopaque, st: Settings) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         var at: [24]u8 = undefined;
@@ -152,6 +228,7 @@ pub const Live = struct {
             l.s.suggest_on = st.suggest;
             l.kv.set(suggest_key, if (st.suggest) "1" else "0") catch {};
         }
+        if (l.setQuicklinks(st.quicklinks)) config.saveQuicklinks(l.kv, l.app.gpa, l.ql_custom);
         const ix = l.s.index;
         for (st.launches) |la| {
             const i = if (la.path.len > 0)
@@ -177,21 +254,12 @@ pub const Live = struct {
         if (l.acct) |*a| a.changed();
     }
 
-    fn accountClick(l: *Live, _: *nanoui.menu.Item) void {
-        const a = if (l.acct) |*x| x else return;
-        switch (a.state) {
-            .signed_out => a.signIn(),
-            .starting => {},
-            .waiting, .signed_in => a.signOut(),
-        }
+    fn accountItem(l: *Live) nanoui.menu.MenuItem {
+        return @import("account_menu.zig").item(if (l.acct) |*x| x else null, &l.account_label);
     }
 
-    fn openTerms(_: *Live, _: *nanoui.menu.Item) void {
-        _ = nanoui.shell.openUrl(account.terms_url);
-    }
-
-    fn accountItems(l: *Live) [2]nanoui.menu.MenuItem {
-        return @import("account_menu.zig").items(if (l.acct) |*x| x else null, &l.account_label, .of(l, Live.accountClick), .of(l, Live.openTerms));
+    pub fn syncStatus(l: *Live) []const u8 {
+        return if (l.acct) |*a| a.status(&l.account_label) else account.off_text;
     }
 
     /// Google is asked once typing pauses (`suggest.pause_ms`).
@@ -224,6 +292,64 @@ pub const Live = struct {
             .headers = &.{.{ .name = "Accept", .value = "application/json" }},
             .timeout = 4,
         }, a, Ask.done);
+    }
+
+    fn ratesPath(l: *Live) ?[]u8 {
+        const data = nanoui.path(l.app.gpa, .data, "Nanolight") catch return null;
+        defer l.app.gpa.free(data);
+        std.Io.Dir.cwd().createDirPath(l.app.io, data) catch {};
+        return std.fs.path.join(l.app.gpa, &.{ data, "rates.json" }) catch null;
+    }
+
+    /// A conversion is listed: the cached table on the first call, then a
+    /// fetch when none is in hand or it is a day old (`convert.due`).
+    fn needRates(ctx: *anyopaque) void {
+        const l: *Live = @ptrCast(@alignCast(ctx));
+        const gpa = l.app.gpa;
+        var loaded = false;
+        if (!l.rates_cache_read) {
+            l.rates_cache_read = true;
+            if (l.kv.get(gpa, rates_at_key) catch null) |v| {
+                defer gpa.free(v);
+                l.rates_at = std.fmt.parseInt(i64, v, 10) catch 0;
+            }
+            if (l.ratesPath()) |path| {
+                defer gpa.free(path);
+                if (std.Io.Dir.cwd().readFileAlloc(l.app.io, path, gpa, .limited(convert.max_bytes)) catch null) |body| {
+                    defer gpa.free(body);
+                    if (convert.Rates.parse(gpa, body)) |r| {
+                        l.useRates(r);
+                        loaded = true;
+                    }
+                }
+            }
+        }
+        if (loaded) l.s.ratesLanded();
+        if (l.rates_busy or !convert.due(l.rates != null, l.rates_at, l.rates_tried, account.now())) return;
+        l.rates_busy = true;
+        l.rates_tried = account.now();
+        l.fetchRates(0);
+    }
+
+    fn fetchRates(l: *Live, which: usize) void {
+        const a = l.app.gpa.create(RatesAsk) catch {
+            l.rates_busy = false;
+            return;
+        };
+        a.* = .{ .live = l, .which = which };
+        nanoui.http.fetch(l.app.gpa, .{
+            .url = convert.urls[which],
+            .headers = &.{.{ .name = "Accept", .value = "application/json" }},
+            .timeout = 10,
+        }, a, RatesAsk.done);
+    }
+
+    /// Makes `r` the table in use and the panel's.
+    fn useRates(l: *Live, r: convert.Rates) void {
+        var old = l.rates;
+        l.rates = r;
+        l.s.rates = &l.rates.?;
+        if (old) |*o| o.deinit();
     }
 
     /// A search's page in the panel, or (null) not.
@@ -283,19 +409,18 @@ pub const Live = struct {
         const t = l.tray orelse return;
         const ready = if (l.updater) |u| u.ready() else null;
         const label = if (ready) |v| std.fmt.bufPrint(&l.update_label, "Restart to Update to {s}", .{v}) catch "Restart to Update" else "Check for Updates";
-        const acc = l.accountItems();
-        t.setMenu("Nanolight", &.{
+        const acc = l.accountItem();
+        const Item = nanoui.menu.MenuItem;
+        const update = if (nix_managed) [_]Item{} else [_]Item{.{ .label = label, .disabled = l.updater == null, .click = .of(l, Live.updateNow) }};
+        t.setMenu("Nanolight", &([_]Item{
             .{ .label = "Settings…", .accelerator = "Cmd+,", .click = .of(l, Live.menuSettings) },
             .{ .label = "Open Nanolight", .click = .of(l, Live.menuShow) },
             .{ .label = "Welcome…", .click = .of(l, Live.welcome) },
             .{ .label = "Google Suggestions", .kind = .checkbox, .checked = l.s.suggest_on, .click = .of(l, Live.toggleSuggest) },
             .separator,
-            acc[0],
-            acc[1],
+            acc,
             .separator,
-            .{ .label = label, .disabled = l.updater == null, .click = .of(l, Live.updateNow) },
-            .{ .label = "Quit Nanolight", .role = .quit },
-        }) catch {};
+        } ++ update ++ [_]Item{.{ .label = "Quit Nanolight", .role = .quit }})) catch {};
     }
 
     fn updateNow(l: *Live, _: *nanoui.menu.Item) void {
@@ -318,6 +443,7 @@ pub const Live = struct {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (w.isFocused()) return;
         if (l.recorder.active()) record(l, false);
+        l.s.hid(account.now());
         l.through.stop();
         l.s.note = "";
         // The Mac's popover hides itself; elsewhere the panel goes as
@@ -326,12 +452,13 @@ pub const Live = struct {
         if (!mac) @import("update_pc.zig").away(l);
     }
 
-    fn hide(ctx: *anyopaque) void {
+    pub fn hide(ctx: *anyopaque) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (l.keep_open) {
             l.keep_open = false;
             return;
         }
+        l.s.hid(account.now());
         if (l.window) |w| w.hide();
     }
 
@@ -349,11 +476,20 @@ pub const Live = struct {
         const w = l.window orelse return;
         const showing = w.isVisible() and panel.focused(w);
         l.o.pressed(showing);
-        if (showing) return w.hide();
+        if (showing) {
+            l.s.hid(account.now());
+            return w.hide();
+        }
+        // Where a paste from the clipboard history goes.
+        if (l.clip != null) l.clip_watcher.noteFrontmost();
         // Freed a key in System Settings, quit a launcher: look again.
         if (l.o.active) l.o.refresh();
         panel.place(w);
         rc.refresh(l);
+        if (l.s.popDue(account.now())) {
+            l.scripts.pop();
+            l.s.toRoot();
+        }
         l.s.reveal();
         w.show();
         panel.shown(w);
@@ -363,7 +499,7 @@ pub const Live = struct {
     }
 
     fn hooks(l: *Live) @import("onboard.zig").Hooks {
-        return .{ .ctx = l, .apply = apply, .fix = fix, .login = login, .done = done };
+        return .{ .ctx = l, .apply = apply, .fix = fix, .login = if (l.o.skip_key) null else login, .done = done };
     }
 
     fn useKey(l: *Live, choice: shortcut.Choice) void {
@@ -482,6 +618,38 @@ const Ask = struct {
     }
 };
 
+/// A fetch of the rates on its way: which of `convert.urls` it asked.
+const RatesAsk = struct {
+    live: *Live,
+    which: usize,
+
+    fn done(a: *RatesAsk, r: nanoui.http.Response) void {
+        const l = a.live;
+        const gpa = l.app.gpa;
+        defer gpa.destroy(a);
+        const table = if (r.status == 200) convert.Rates.parse(gpa, r.body) else null;
+        if (table) |t| {
+            l.rates_busy = false;
+            l.rates_at = account.now();
+            var at: [24]u8 = undefined;
+            l.kv.set(rates_at_key, std.fmt.bufPrint(&at, "{d}", .{l.rates_at}) catch "0") catch {};
+            if (l.ratesPath()) |path| {
+                defer gpa.free(path);
+                std.Io.Dir.cwd().writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch {};
+            }
+            l.useRates(t);
+            l.s.rates_failed = false;
+        } else if (a.which + 1 < convert.urls.len) {
+            return l.fetchRates(a.which + 1);
+        } else {
+            l.rates_busy = false;
+            l.s.rates_failed = l.rates == null;
+        }
+        l.s.ratesLanded();
+        if (l.window) |w| w.redraw();
+    }
+};
+
 /// This platform's archive in each release (macos/package.sh, pc/package.sh).
 const asset = switch (builtin.os.tag) {
     .macos => "nanolight-macos-arm64.zip",
@@ -518,11 +686,26 @@ pub fn main(init: std.process.Init) !void {
     apps.scanSystem(&index, init.io, init.environ_map);
     const kv = nanoui.kv.standard();
     index.load(kv);
-    var o: Onboard = .{};
+    // A headless run is no one's: neither their config nor their settings.
+    var cfg_arena: std.heap.ArenaAllocator = .init(init.gpa);
+    defer cfg_arena.deinit();
+    const loaded: ?config.Config = if (app.flags.hidden) null else config.load(cfg_arena.allocator(), init.io, init.environ_map, kv);
+    const cfg: config.Config = loaded orelse .{};
+    // A missing file seeds nothing: it would forget what the app applied.
+    if (loaded) |c| if (c.from_file) config.seed(kv, init.gpa, c, account.now());
+    // The key is the config's or the Nix module's: the welcome does not ask.
+    var o: Onboard = .{ .skip_key = nix_managed or (if (cfg.hotkey) |h| shortcut.Choice.parse(h) != null else false) };
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
     defer s.query.deinit();
-    var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa) };
+    var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa), .cfg = cfg };
+    defer if (live.rates) |*r| r.deinit();
+    defer if (live.ql_arena) |a| {
+        a.deinit();
+        init.gpa.destroy(a);
+    };
     s.host = live.host();
+    s.pop_after = cfg.pop_to_root_seconds;
+    if (!app.flags.hidden) _ = live.setQuicklinks(config.loadQuicklinks(cfg_arena.allocator(), kv));
     // Google's completions are on unless turned off in Settings.
     if (kv.get(init.gpa, suggest_key) catch null) |v| {
         defer init.gpa.free(v);
@@ -545,11 +728,28 @@ pub fn main(init: std.process.Init) !void {
     panel.adjust(&options, app.flags.hidden, s.height());
     live.window = try app.newWindow(options);
     if (app.flags.hidden) return app.run();
-    // Raycast extensions' commands among the apps (never in headless runs:
-    // they're this machine's).
+    // Script commands among the apps (never in headless runs: they're this
+    // machine's).
     rc.init(&live, init.environ_map);
     defer rc.deinit(&live);
+    commands.init(init.io, init.environ_map);
+    live.cmds = .{ .io = app.io, .hooks = .{ .ctx = &live, .footer = Live.commandFooter, .done = Live.commandDone } };
+    defer live.cmds.deinit();
     rc.rescan(&live);
+    var clip_dir = clipboard_live.openDir(init.gpa, init.io);
+    defer if (clip_dir) |*d| d.close(init.io);
+    var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, .{
+        // A file that failed to load gives no retention or exclude list: record and prune nothing.
+        .enabled = config.clipboardEnabled(kv, init.gpa, cfg.clipboard.enabled),
+        .config_ok = loaded != null,
+        .retention_days = if (loaded != null) cfg.clipboard.retention_days else 0,
+        .max_entries = if (loaded != null) cfg.clipboard.max_entries else 0,
+        .exclude_apps = cfg.clipboard.exclude_apps,
+    });
+    defer clip_store.deinit();
+    // No data directory, no history: nothing could be kept.
+    if (clip_dir != null) clipboard_live.init(&live, &clip_store);
+    defer clipboard_live.deinit(&live);
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
     if (single.claim(.{ .ctx = &live, .func = Live.command }) > 0) std.log.info("nanolight: asked an older copy to quit", .{});
     panel.setup(app, live.window.?, &s, if (o.active) o.height() else s.height());
@@ -566,9 +766,10 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, v, "0")) _ = live.menuBar(false);
     }
     // A release build checks its GitHub releases; one run from zig-out
-    // can't replace itself, and leaves the item off.
-    const updater = nanoui.Updater.start(init, .{
-        .repo = "justrach/nanolight",
+    // can't replace itself, and leaves the item off. A Nix build never
+    // updates itself.
+    const updater = if (nix_managed) null else nanoui.Updater.start(init, .{
+        .repo = "jeiang/nanolight",
         .asset = asset,
         .version = version,
         .name = "Nanolight",
@@ -582,8 +783,8 @@ pub fn main(init: std.process.Init) !void {
         // 10 s, unseen, and comes back as it was (update_pc.zig off the Mac).
         u.autoRestart(app, .{ .idle_ms = 10 * 1000 });
     };
-    // Signed in before: synced now. Signing in is from the menu.
-    live.acct = .{ .gpa = init.gpa, .kv = kv, .hooks = live.accountHooks() };
+    // `[sync]` names a server: synced now.
+    live.acct = .{ .gpa = init.gpa, .io = init.io, .kv = kv, .hooks = live.accountHooks(), .cfg = cfg.sync };
     live.acct.?.load();
     live.menu();
     // Restarted by an automatic update: quietly, the panel saying so the

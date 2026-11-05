@@ -153,7 +153,7 @@ pub const Scene = struct {
             // when, words, size, weight, alpha, x, y
             .{ 0.7, "Nanolight", 76, .bold, 0.97, ix + icon + gap, iy + 8 },
             .{ 0.95, "Mac  ·  Windows  ·  Linux", 26, .medium, 0.6, 0, iy + icon + 46 },
-            .{ 1.3, "github.com/justrach/nanolight", 18, .medium, 0.4, 0, iy + icon + 92 },
+            .{ 1.3, "github.com/jeiang/nanolight", 18, .medium, 0.4, 0, iy + icon + 92 },
         };
         for (lines, 0..) |l, i| {
             const a = cam.ease(cam.out, d.now, at + l[0], 0.4);

@@ -69,7 +69,7 @@ const script = [_]Step{
     .{ .at = 11.0, .op = .enter },
     .{ .at = 11.0, .op = .{ .caption = "↩ copies the answer" } },
     .{ .at = 12.5, .op = .clear },
-    .{ .at = 12.5, .op = .{ .caption = "Anything else: ask Grok, or search X" } },
+    .{ .at = 12.5, .op = .{ .caption = "Anything else: search the web with your quicklinks" } },
 } ++ typing(12.8, "liquid glass", 0.065) ++ [_]Step{
     .{ .at = 14.5, .op = down },
     .{ .at = 15.4, .op = .enter },
@@ -111,7 +111,7 @@ fn measure(ix: *Index, query: []const u8) f64 {
     const runs = 2000;
     const t0 = CACurrentMediaTime();
     for (0..runs) |_| {
-        r.build(query, ix, sug[0..ns], &.{});
+        r.build(query, ix, sug[0..ns], &.{}, &@import("settings.zig").default_quicklinks);
         std.mem.doNotOptimizeAway(&r);
     }
     return (CACurrentMediaTime() - t0) / runs * 1e6;

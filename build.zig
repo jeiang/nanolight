@@ -5,8 +5,12 @@
 //!   zig build run            build and open it
 //!   zig build app            zig-out/Nanolight.app, for /Applications
 //!   zig build test           its search, math, suggestions and panel
+//!   zig build server         the sync server, zig-out/bin/nanolight-server
+//!   zig build clip-probe     the Linux clipboard watcher, run without the panel
 //!   zig build film           the walkthrough's renderer (tools/film.sh)
 //!   zig build promo          the promo's renderer (tools/promo.sh)
+//!   -Dnix=true               a Nix build: Nix owns updates and startup, so
+//!                            no updater and no login-item UI
 //!
 //! Release packages (the signed app, its disk image and the update feed)
 //! are macos/package.sh's; Windows' zip and Linux's tarball, pc/package.sh's.
@@ -21,6 +25,7 @@ pub fn build(b: *std.Build) void {
     // The version, for `--version` and the updater off the Mac (no bundle there).
     const opts = b.addOptions();
     opts.addOption([]const u8, "version", version);
+    opts.addOption(bool, "nix_managed", b.option(bool, "nix", "A Nix build: the Nix modules own updates and startup (no updater, no login-item UI)") orelse false);
 
     const exe = b.addExecutable(.{ .name = "nanolight", .root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -29,9 +34,6 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
     exe.root_module.addOptions("build_options", opts);
-    // Raycast extensions' host (raycast/dist/host.js, 170 KB), in the
-    // program: written out for the user's Node when an extension runs.
-    exe.root_module.addAnonymousImport("raycast_host", .{ .root_source_file = b.path("raycast/dist/host.js") });
     // A release is shipped without its debug info (15 MB to 2.8 MB on Linux).
     if (optimize != .debug) exe.root_module.strip = true;
     switch (os) {
@@ -40,12 +42,13 @@ pub fn build(b: *std.Build) void {
             exe.root_module.linkFramework("Carbon", .{});
             // Opening at login, from its welcome (SMAppService).
             exe.root_module.linkFramework("ServiceManagement", .{});
-            // The Codegraff key, kept in the Keychain (src/keychain_mac.zig).
-            exe.root_module.linkFramework("Security", .{});
+            // Clipboard history's paste: the Accessibility check, and ⌘V sent as a key event.
+            exe.root_module.linkFramework("ApplicationServices", .{});
+            exe.root_module.linkFramework("CoreGraphics", .{});
         },
         .windows => {
             // A window app: no console. The hot key, the Start menu's icons,
-            // the Credential Manager and the Run key.
+            // and the Run key.
             exe.subsystem = .windows;
             for ([_][]const u8{ "user32", "gdi32", "shell32", "advapi32", "dwmapi", "ole32" }) |lib| exe.root_module.linkSystemLibrary(lib, .{});
         },
@@ -53,6 +56,15 @@ pub fn build(b: *std.Build) void {
         else => {},
     }
     b.installArtifact(exe);
+    // `zig build check`: compiles without linking, so a machine without the
+    // target's SDK still type-checks it. `-Dsdk=<dir>` points at stub
+    // frameworks and libraries (`<dir>/System/Library/Frameworks`, `<dir>/usr/lib`).
+    const chk = b.addObject(.{ .name = "nanolight-check", .root_module = exe.root_module });
+    if (b.option([]const u8, "sdk", "SDK root whose frameworks and libraries satisfy `check` (any target)")) |sdk| {
+        exe.root_module.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sdk}) });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib", .{sdk}) });
+    }
+    b.step("check", "Type-check without linking").dependOn(&chk.step);
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     b.step("run", "Run Nanolight (⌘Space)").dependOn(&run.step);
@@ -71,11 +83,31 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
     tests.root_module.addOptions("build_options", opts);
-    tests.root_module.addAnonymousImport("raycast_host", .{ .root_source_file = b.path("raycast/dist/host.js") });
     if (os == .windows) for ([_][]const u8{ "user32", "gdi32", "shell32", "advapi32", "dwmapi", "ole32" }) |lib| tests.root_module.linkSystemLibrary(lib, .{});
+    if (os == .macos) tests.root_module.linkFramework("ApplicationServices", .{});
     // zig-out/bin/nanolight-tests: the tests, to run on another machine.
     b.step("test-bin", "Install the tests as zig-out/bin/nanolight-tests").dependOn(&b.addInstallArtifact(tests, .{ .dest_sub_path = if (os == .windows) "nanolight-tests.exe" else "nanolight-tests" }).step);
     b.step("test", "Test Nanolight's search, math, suggestions and panel").dependOn(&b.addRunArtifact(tests).step);
+
+    // nanolight-server: the sync server (src/server.zig). Plain std, no nanoui.
+    const server = b.addExecutable(.{ .name = "nanolight-server", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/server.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    if (optimize != .debug) server.root_module.strip = true;
+    b.step("server", "Build the sync server (zig-out/bin/nanolight-server)").dependOn(&b.addInstallArtifact(server, .{}).step);
+
+    // Runs the Linux clipboard watcher without the panel (src/clipboard_probe.zig).
+    if (os == .linux) {
+        const probe = b.addExecutable(.{ .name = "clip-probe", .root_module = b.createModule(.{
+            .root_source_file = b.path("src/clipboard_probe.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+        }) });
+        b.step("clip-probe", "Build the Linux clipboard probe (zig-out/bin/clip-probe)").dependOn(&b.addInstallArtifact(probe, .{}).step);
+    }
 
     // The walkthrough, rendered offscreen (src/film.zig, tools/film.sh).
     const film = b.addExecutable(.{ .name = "nanolight-film", .root_module = b.createModule(.{
@@ -84,6 +116,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
+    film.root_module.addOptions("build_options", opts);
     b.step("film", "Build the walkthrough's renderer (zig-out/bin/nanolight-film)").dependOn(&b.addInstallArtifact(film, .{}).step);
 
     // The promo's shots, rendered offscreen (src/promo.zig, tools/promo.sh).
@@ -93,6 +126,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
+    promo.root_module.addOptions("build_options", opts);
     b.step("promo", "Build the promo's renderer (zig-out/bin/nanolight-promo)").dependOn(&b.addInstallArtifact(promo, .{}).step);
 }
 
@@ -126,6 +160,7 @@ pub fn infoPlist(b: *std.Build, version: []const u8) []const u8 {
         \\  <key>LSUIElement</key><true/>
         \\  <key>NSPrincipalClass</key><string>NSApplication</string>
         \\  <key>NSHighResolutionCapable</key><true/>
+        \\  <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
         \\</dict>
         \\</plist>
         \\

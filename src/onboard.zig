@@ -34,7 +34,7 @@ pub const Hooks = struct {
 };
 
 const Example = struct { q: []const u8, what: []const u8, icon: []const u8 };
-/// An app every machine of the kind has, math, and words for Grok or X;
+/// An app every machine of the kind has, math, and words for a quicklink;
 /// icons nanoui draws there (SF Symbols on the Mac, its own set elsewhere).
 const examples = [_]Example{
     switch (@import("builtin").os.tag) {
@@ -43,7 +43,7 @@ const examples = [_]Example{
         else => .{ .q = "term", .what = "Open a terminal", .icon = "terminal" },
     },
     .{ .q = "2^10 * 3", .what = "Do math", .icon = if (mac) "plus.forwardslash.minus" else "plus" },
-    .{ .q = "liquid glass", .what = "Ask Grok or search X", .icon = "sparkles" },
+    .{ .q = "liquid glass", .what = "Search the web", .icon = "sparkles" },
 };
 
 pub const Onboard = struct {
@@ -59,10 +59,12 @@ pub const Onboard = struct {
     reopened: bool = false,
     reopened_at: ?f64 = null,
     login: bool = false,
+    /// The key is set elsewhere (config.toml, a Nix build): no key step.
+    skip_key: bool = false,
 
     pub fn start(o: *Onboard, choice: Choice) void {
         o.active = true;
-        o.step = .key;
+        o.step = if (o.skip_key) .try_it else .key;
         o.choice = choice;
         o.closed = false;
         o.reopened = false;
@@ -128,7 +130,7 @@ pub const Onboard = struct {
             const t = ui.div(c).column().gap(4);
             defer t.end();
             ui.text(c, "Welcome to Nanolight", .{ .size = 22, .weight = .semibold, .color = p.text, .tracking = -0.3 });
-            ui.text(c, "Apps, math, Grok and X — one keystroke away.", .{ .size = 13.5, .color = p.sub });
+            ui.text(c, "Apps, math and quicklinks — one keystroke away.", .{ .size = 13.5, .color = p.sub });
         }
         ui.div(c).wFull().h(1).bg(p.hair).end();
         const body = ui.div(c).column().wFull().px(28).pt(18).gap(12);
@@ -304,9 +306,11 @@ pub const Onboard = struct {
         ui.div(c).wFull().h(1).bg(p.hair).end();
         const bar = ui.div(c).row().wFull().h(38).px(16).gap(8).itemsCenter();
         defer bar.end();
-        const n: usize = @intFromEnum(o.step);
-        for (0..3) |i| ui.div(c).w(if (i == n) 16 else 6).h(6).roundedFull().bg(if (i == n) p.text.alpha(0.7) else p.sub.alpha(0.3)).end();
-        ui.textf(c, .{ .size = 12, .color = p.sub.alpha(0.8), .tabular = true }, "  {d} of 3", .{n + 1});
+        const first: usize = @intFromBool(o.skip_key);
+        const total = 3 - first;
+        const n: usize = @backingInt(o.step) - first;
+        for (0..total) |i| ui.div(c).w(if (i == n) 16 else 6).h(6).roundedFull().bg(if (i == n) p.text.alpha(0.7) else p.sub.alpha(0.3)).end();
+        ui.textf(c, .{ .size = 12, .color = p.sub.alpha(0.8), .tabular = true }, "  {d} of {d}", .{ n + 1, total });
         ui.spacer(c);
         const action: []const u8 = switch (o.step) {
             .key => if (o.clash().clear()) "Continue" else c.print("Use {f} anyway", .{o.choice}),

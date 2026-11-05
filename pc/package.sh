@@ -40,7 +40,7 @@ for t in x86_64-windows-gnu x86_64-linux-gnu aarch64-linux-gnu; do
 [Desktop Entry]
 Type=Application
 Name=Nanolight
-Comment=A launcher: apps, math, Google and Raycast extensions
+Comment=A launcher: apps, math, Google and script commands
 Exec=nanolight
 Icon=nanolight
 Categories=Utility;

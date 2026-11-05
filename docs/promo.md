@@ -1,5 +1,7 @@
 # The promo
 
+This cut predates the removal of Raycast extension support (the Node host and store extensions): the "Raycast extension" and Hacker News shots below show what was removed. Only script commands remain.
+
 [promo.mp4](promo.mp4) is 40 seconds of what is new in Nanolight 2.0 (the 0.2 releases), 1920 × 1080 at 60 fps. [promo-preview.gif](promo-preview.gif) is the same video, silent and smaller. `tools/promo.sh` makes both in a few minutes, once the Windows and Linux recordings are in `zig-out/promo` (below).
 
 | Time | Shot |

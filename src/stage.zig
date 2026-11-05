@@ -97,7 +97,7 @@ pub const Stage = struct {
             ui.div(c).h(4).end();
             const k = ui.div(c).row().gap(10).itemsCenter();
             defer k.end();
-            ui.text(c, "github.com/justrach/nanolight", .{ .size = 14, .mono = true, .color = ui.Color.white.alpha(0.7) });
+            ui.text(c, "github.com/jeiang/nanolight", .{ .size = 14, .mono = true, .color = ui.Color.white.alpha(0.7) });
             ui.text(c, "·", .{ .size = 14, .color = ui.Color.white.alpha(0.5) });
             ui.text(c, "⌘Space", .{ .size = 14, .weight = .semibold, .color = ui.Color.white.alpha(0.85) });
         }
@@ -133,7 +133,7 @@ pub const Stage = struct {
         defer t.end();
         view.appIcon(c, 96);
         ui.text(c, "Nanolight", .{ .size = 66, .weight = .bold, .color = .white, .tracking = -1.2 });
-        ui.text(c, "Every app, math, Grok and X — one keystroke away.", .{ .size = 23, .weight = .medium, .color = ui.Color.white.alpha(0.88), .wrap = true, .line_height = 30 });
+        ui.text(c, "Every app, math and quicklink — one keystroke away.", .{ .size = 23, .weight = .medium, .color = ui.Color.white.alpha(0.88), .wrap = true, .line_height = 30 });
         const k = ui.div(c).row().gap(10).pt(8).itemsCenter();
         defer k.end();
         {

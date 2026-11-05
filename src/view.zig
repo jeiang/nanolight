@@ -9,10 +9,14 @@ const motion = ui.motion;
 const Index = @import("apps.zig").Index;
 const results = @import("results.zig");
 const suggest = @import("suggest.zig");
+const convert = @import("convert.zig");
 const text = @import("text.zig");
 const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Row = results.Row;
+const settings = @import("settings.zig");
+const commands = @import("commands.zig");
+const clipboard_view = @import("clipboard_view.zig");
 
 /// What the panel asks of whatever shows it (the window, or the film).
 pub const Host = struct {
@@ -31,6 +35,15 @@ pub const Host = struct {
     /// Settings (the shortcut, login, sync, updates). Without it the
     /// screen still draws, and changes nothing the app keeps.
     settings: ?*const SettingsHost = null,
+    /// A currency conversion is listed: fetch the rates unless they are
+    /// fresh, and answer with `Nanolight.ratesLanded`. Without it, none are
+    /// fetched.
+    rates: ?*const fn (ctx: *anyopaque) void = null,
+    /// Runs system command `i` (commands.zig). Without it, nothing runs.
+    command: ?*const fn (ctx: *anyopaque, i: usize) void = null,
+    /// Clipboard history (clipboard_view.zig). Without it the "Clipboard
+    /// History" row is not listed.
+    clipboard: ?*const clipboard_view.Host = null,
 };
 
 pub const width: f32 = 680;
@@ -91,7 +104,6 @@ pub const Nanolight = struct {
     copied_at: f64 = -10,
     kv: ?nanoui.kv.Store = null,
     spans: [results.max_rows][16]ui.Span = undefined,
-    url_buf: [1024]u8 = undefined,
     last_h: f32 = 0,
     /// The query as it was shown: selected, so no completion after it yet.
     revealed: u64 = 0,
@@ -101,8 +113,14 @@ pub const Nanolight = struct {
     onboard: ?*@import("onboard.zig").Onboard = null,
     /// Google's completions: whether to ask, those listed, the answers.
     suggest_on: bool = true,
+    /// The quicklinks listed under the apps (config.toml, or synced).
+    quicklinks: []const settings.Quicklink = &settings.default_quicklinks,
     web: suggest.List = .{},
     cache: suggest.Cache = .{},
+    /// Currency rates, once fetched or read from the cache, and whether
+    /// fetching them failed.
+    rates: ?*const convert.Rates = null,
+    rates_failed: bool = false,
     /// A search's page is in the panel, for the query as it was then.
     previewing: bool = false,
     preview_q: u64 = 0,
@@ -110,7 +128,34 @@ pub const Nanolight = struct {
     preview_url: []const u8 = "",
     /// Settings, drawn in the panel in place of the rows.
     settings_ui: settings_view.Settings = .{},
+    /// Clipboard History, drawn in the panel in place of the rows.
+    clip_ui: clipboard_view.Screen = .{},
     ext: ?*@import("raycast_view.zig").Ext = null,
+    /// When the panel last went away (seconds), and how long it may be away
+    /// before it reopens at the root; 0 is never.
+    away_at: ?i64 = null,
+    pop_after: u32 = 90,
+
+    /// The panel went away at `now`.
+    pub fn hid(s: *Nanolight, now: i64) void {
+        s.away_at = now;
+    }
+
+    /// Whether the panel, shown at `now`, was away longer than `pop_after`.
+    pub fn popDue(s: *Nanolight, now: i64) bool {
+        const t = s.away_at orelse return false;
+        s.away_at = null;
+        return s.pop_after > 0 and now - t > s.pop_after;
+    }
+
+    /// The first screen again: no query, the first row, no Settings or page.
+    pub fn toRoot(s: *Nanolight) void {
+        s.query.clear();
+        s.sel = 0;
+        s.back();
+        s.settings_ui.hide();
+        s.clip_ui.hide();
+    }
 
     /// Called as it is shown: the query selected, the keys its own.
     pub fn reveal(s: *Nanolight) void {
@@ -126,7 +171,8 @@ pub const Nanolight = struct {
 
     /// The panel's height for the rows it lists.
     pub fn height(s: *const Nanolight) f32 {
-        if (s.settings_ui.open) return settings_view.height;
+        if (s.settings_ui.open) return s.settings_ui.tall();
+        if (s.clip_ui.open) return clipboard_view.height;
         if (s.ext) |e| if (e.open) return e.height();
         if (s.previewing) return max_height;
         var h: f32 = header_h + footer_h + 1;
@@ -173,7 +219,8 @@ pub const Nanolight = struct {
             return;
         };
         if (s.settings_ui.open) return s.settings_ui.inPanel(c, s, p);
-        // A Raycast extension's command, while it runs (raycast_view.zig).
+        if (s.clip_ui.open) return s.clip_ui.inPanel(c, s, p);
+        // A script command's output, while it runs (raycast_view.zig).
         if (s.ext) |e| if (e.open) return e.panel(c, s, p);
 
         s.keys(c);
@@ -211,7 +258,19 @@ pub const Nanolight = struct {
         return h;
     }
 
-    /// Arrows, ^N/^P and Escape, before the field sees them.
+    /// ↓, ^N or ^J; offered before the field, so the key never edits.
+    pub fn moveDown(c: *ui.Context) bool {
+        const S = ui.Shortcut;
+        return c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true }) or c.shortcut(.{ .key = 'j', .ctrl = true });
+    }
+
+    /// ↑, ^P or ^K.
+    pub fn moveUp(c: *ui.Context) bool {
+        const S = ui.Shortcut;
+        return c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true }) or c.shortcut(.{ .key = 'k', .ctrl = true });
+    }
+
+    /// Arrows, ^N/^P, ^J/^K and Escape, before the field sees them.
     fn keys(s: *Nanolight, c: *ui.Context) void {
         const S = ui.Shortcut;
         if (s.previewing) {
@@ -227,10 +286,10 @@ pub const Nanolight = struct {
         const more = s.completion();
         if (more.len > 0 and c.shortcut(.{ .key = S.tab })) s.take(more);
         const n = s.res.n;
-        if (c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true })) {
+        if (moveDown(c)) {
             if (n > 0) s.sel = (s.sel + 1) % n;
         }
-        if (c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true })) {
+        if (moveUp(c)) {
             if (n > 0) s.sel = (s.sel + n - 1) % n;
         }
         // ⌘1…⌘9: the row of that number, at once.
@@ -253,7 +312,7 @@ pub const Nanolight = struct {
             .bare = true,
             .size = 21,
             .width = .fill,
-            .placeholder = "Search apps, do math, ask Grok…",
+            .placeholder = "Search apps, do math, search the web…",
             .placeholder_color = p.sub.alpha(0.75),
             .color = p.text,
         });
@@ -274,7 +333,7 @@ pub const Nanolight = struct {
             if (name.len <= q.len or !text.utf8StartsWithFold(name, q)) return "";
             return name[q.len..];
         }
-        if (r.kind != .search_web) return "";
+        if (r.kind != .quicklink or s.res.keyed != null or s.res.google != r.ql) return "";
         for (0..s.web.n) |i| {
             const w = s.web.get(i);
             if (w.len > q.len and text.utf8StartsWithFold(w, q)) return w[q.len..];
@@ -302,20 +361,36 @@ pub const Nanolight = struct {
         if (h == s.built) return;
         s.built = h;
         s.web.n = 0;
-        if (s.host) |host| if (host.suggest) |ask| if (s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null) {
+        const asks = results.google(s.quicklinks) != null and results.keyed(s.quicklinks, std.mem.trim(u8, q, " ")) == null;
+        if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null and convert.answer(q, s.rates) == null) {
             if (!s.cache.lookup(q, &s.web)) ask(host.ctx, q);
         };
         s.fill();
+        if (s.res.need_rates) if (s.host) |host| if (host.rates) |get| get(host.ctx);
         // The first row: an app, the answer, or the search for what was
         // typed; never a completion nobody picked (they come after it).
-        s.sel = 0;
+        s.sel = s.res.actionable(0);
     }
 
     fn fill(s: *Nanolight) void {
         var sug: [results.max_apps]u32 = undefined;
         const ns = s.index.suggestions(&sug);
         var web: [suggest.max_rows][]const u8 = undefined;
-        s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web));
+        s.res.rates = s.rates;
+        s.res.rates_failed = s.rates_failed;
+        s.res.clip_on = if (s.host) |h| h.clipboard != null else false;
+        s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web), s.quicklinks);
+    }
+
+    /// The rates arrived (or could not be had): the conversion listed, if
+    /// any, is redone. The selection stays where it was.
+    pub fn ratesLanded(s: *Nanolight) void {
+        const was_pending = s.res.pending;
+        s.fill();
+        // The card is the answer now, and the first row again; a card
+        // still pending (the fetch failed) keeps the selection off it.
+        if (was_pending and !s.res.pending) s.sel = 0;
+        if (s.sel >= s.res.n) s.sel = s.res.actionable(0);
     }
 
     /// Google's completions of `typed` (what `Host.suggest` asked): kept,
@@ -340,6 +415,8 @@ pub const Nanolight = struct {
         for (s.res.slice(), 0..) |now, i| {
             const same_row = now.kind == r.kind and switch (r.kind) {
                 .app => now.app == r.app,
+                .quicklink => now.ql == r.ql,
+                .pane, .command => now.app == r.app,
                 .suggest => suggest.same(s.web.get(now.web), was_text[0..was_len]),
                 else => true,
             };
@@ -404,6 +481,14 @@ pub const Nanolight = struct {
                 ui.richText(c, pane.name, s.highlight(i, r, p), .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) });
                 ui.text(c, "System Settings", .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
+            .command => {
+                ui.richText(c, commands.all[r.app].name, s.highlight(i, r, p), .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) });
+                ui.text(c, "System Command", .{ .size = 12, .color = p.sub.alpha(0.8) });
+            },
+            .clipboard => {
+                ui.text(c, "Clipboard History", .{ .size = 13.5, .weight = .medium, .color = p.text });
+                ui.text(c, "Text, images and files you copied", .{ .size = 12, .color = p.sub.alpha(0.8) });
+            },
             .settings => {
                 ui.text(c, "Nanolight Settings", .{ .size = 13.5, .weight = .medium, .color = p.text });
                 ui.text(c, "Shortcut, sync, updates", .{ .size = 12, .color = p.sub.alpha(0.8) });
@@ -412,29 +497,25 @@ pub const Nanolight = struct {
                 const w = s.web.get(r.web);
                 ui.richText(c, w, s.added(i, w, p), .{ .size = 13.5, .color = p.text.alpha(0.72), .truncate = .ellipsis });
             },
-            .ask_grok, .search_x, .search_web => {
-                const verb = switch (r.kind) {
-                    .ask_grok => "Ask Grok",
-                    .search_x => "Search X for",
-                    else => "Search Google for",
-                };
-                ui.textf(c, .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis }, "{s} “{s}”", .{ verb, std.mem.trim(u8, q, " ") });
-                ui.text(c, switch (r.kind) {
-                    .ask_grok => "grok.com",
-                    .search_x => "x.com · Latest",
-                    else => "google.com",
-                }, .{ .size = 12, .color = p.sub.alpha(0.8) });
+            .quicklink => {
+                const ql = s.quicklinks[r.ql];
+                ui.textf(c, .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis }, "Search {s} for “{s}”", .{ ql.name, s.res.argument(q) });
+                ui.text(c, results.host(ql.url), .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
         }
         ui.spacer(c);
         if (i == s.sel) {
-            ui.text(c, if (r.kind == .app or r.kind == .settings or r.kind == .pane) "Open" else "Go", .{ .size = 12, .weight = .medium, .color = p.sub });
+            ui.text(c, switch (r.kind) {
+                .app, .settings, .pane, .clipboard => "Open",
+                .command => "Run",
+                else => "Go",
+            }, .{ .size = 12, .weight = .medium, .color = p.sub });
             ui.kbd(c, "↩");
         } else if (i < 9) ui.textf(c, .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.5), .tabular = true }, "{s}{d}", .{ results.mod, i + 1 });
     }
 
     fn calcCard(s: *Nanolight, c: *ui.Context, p: Palette) void {
-        @import("calc_card.zig").draw(c, p, s.query.text(), s.res.answer, s.res.hex, c.time - s.copied_at < 1.4);
+        @import("calc_card.zig").draw(c, p, if (s.res.expr.len > 0) s.res.expr else s.query.text(), s.res.answer, s.res.hex, s.res.note, c.time - s.copied_at < 1.4);
     }
 
     /// The row's picture: the app's icon, or a symbol on a quiet tile.
@@ -451,16 +532,13 @@ pub const Nanolight = struct {
         const side: f32 = if (big) 34 else 26;
         const box = ui.div(c).size(side, side).rounded(if (big) 9 else 7).bg(p.tile).center();
         defer box.end();
-        if (r.kind == .search_x) {
-            ui.text(c, "𝕏", .{ .size = 15, .weight = .bold, .color = p.text });
-            return;
-        }
         ui.icon(c, switch (r.kind) {
             .calc => "plus.forwardslash.minus",
-            .ask_grok => "sparkles",
-            .search_web => "globe",
+            .quicklink => "globe",
             .suggest => "magnifyingglass",
             .settings => "gearshape",
+            .clipboard => "doc.on.doc",
+            .command => "terminal",
             else => "app.dashed",
         }, .{ .size = if (big) 16 else 13, .weight = .medium, .color = p.text });
     }
@@ -513,7 +591,11 @@ pub const Nanolight = struct {
             return;
         }
         if (s.res.n == 0) return;
-        ui.text(c, s.res.rows[@min(s.sel, s.res.n - 1)].kind.action(), .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
+        const sel = s.res.rows[s.res.actionable(s.sel)];
+        if (sel.kind == .quicklink)
+            ui.textf(c, .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85), .truncate = .ellipsis }, "Search {s}", .{s.quicklinks[sel.ql].name})
+        else
+            ui.text(c, sel.kind.action(), .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
         ui.kbd(c, "↩");
         ui.div(c).w(1).h(14).bg(p.hair).end();
         ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
@@ -523,12 +605,14 @@ pub const Nanolight = struct {
     /// Return on the selected row.
     pub fn activate(s: *Nanolight, c: *ui.Context) void {
         if (s.res.n == 0) return;
-        const r = s.res.rows[@min(s.sel, s.res.n - 1)];
+        const r = s.res.rows[s.res.actionable(s.sel)];
         switch (r.kind) {
             .calc => {
                 var buf: [64]u8 = undefined;
-                const v = @import("calc.zig").eval(s.query.text()) orelse return;
-                c.clipboard.write(c.clipboard.ctx, @import("calc.zig").format(&buf, v, false));
+                if (s.res.copy.len > 0) c.clipboard.write(c.clipboard.ctx, s.res.copy) else {
+                    const v = @import("calc.zig").eval(s.query.text()) orelse return;
+                    c.clipboard.write(c.clipboard.ctx, @import("calc.zig").format(&buf, v, false));
+                }
                 s.copied_at = c.time;
                 return;
             },
@@ -536,14 +620,15 @@ pub const Nanolight = struct {
                 s.index.opened(r.app, s.kv);
                 s.go(s.index.apps.items[r.app].path);
             },
-            .ask_grok, .search_x => s.go(results.url(&s.url_buf, r.kind, s.query.text())),
-            .search_web => s.search(s.query.text(), !s.searches_out),
+            .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), !s.searches_out),
             .settings => s.openSettings(),
+            .clipboard => s.openClipboard(),
             .pane => s.go(@import("settings_panes.zig").urls[r.app]),
+            .command => if (s.host) |h| if (h.command) |run| run(h.ctx, r.app),
             .suggest => {
                 // Its words fill the field, as a search box's would.
                 s.query.set(s.web.get(r.web));
-                s.search(s.query.text(), !s.searches_out);
+                s.searchWith(s.res.google orelse return, s.query.text(), !s.searches_out);
             },
         }
     }
@@ -551,19 +636,20 @@ pub const Nanolight = struct {
     /// ⌘↩ on the selected row: a search goes where Return doesn't send it.
     fn activateOut(s: *Nanolight, c: *ui.Context) void {
         if (s.res.n == 0) return;
-        const r = s.res.rows[@min(s.sel, s.res.n - 1)];
+        const r = s.res.rows[s.res.actionable(s.sel)];
         switch (r.kind) {
-            .search_web => s.search(s.query.text(), s.searches_out),
-            .suggest => s.search(s.web.get(r.web), s.searches_out),
+            .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), s.searches_out),
+            .suggest => s.searchWith(s.res.google orelse return, s.web.get(r.web), s.searches_out),
             else => s.activate(c),
         }
     }
 
-    /// Google's page for `words`: in the panel when `in_panel` and the host
-    /// can show it there, else in the browser.
-    fn search(s: *Nanolight, words: []const u8, in_panel: bool) void {
+    /// Quicklink `ql`'s page for `words`: in the panel when `in_panel` and
+    /// the host can show it there, else in the browser.
+    fn searchWith(s: *Nanolight, ql: u16, words: []const u8, in_panel: bool) void {
         const h = s.host orelse return;
-        const u = results.url(&s.preview_buf, .search_web, words);
+        if (ql >= s.quicklinks.len) return;
+        const u = results.url(&s.preview_buf, s.quicklinks[ql].url, words);
         const show = (if (in_panel) h.preview else null) orelse return s.go(u);
         s.preview_url = u;
         s.previewing = true;
@@ -574,6 +660,12 @@ pub const Nanolight = struct {
     pub fn openSettings(s: *Nanolight) void {
         s.back();
         s.settings_ui.show();
+    }
+
+    /// Clipboard History in place of the rows.
+    pub fn openClipboard(s: *Nanolight) void {
+        s.back();
+        s.clip_ui.show(s);
     }
 
     /// The rows again, the page gone.
