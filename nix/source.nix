@@ -6,12 +6,12 @@
 }: let
   # Each name is the package hash from the .zon: Zig finds a package by it.
   zigDeps = {
-    "nanoui-0.10.0-we0KMfU7IwBpXRx73av8pj8_ZFqAyNArXeU8Wvn4YDyi" = fetchgit {
+    "nanoui-0.12.0-we0KMa-SJAAVqwMpS2tGhq0-ptie65zdk8NOf2IQKBxR" = fetchgit {
       url = "https://github.com/justrach/nanoui";
-      rev = "7ef0fe75b345480985e23ca2c5a82a25154865a1";
+      rev = "d1330a84fca9581cdcaff7fa71041b2cccf3066b";
       # Zig fetches a package without its submodules; nanoui has several.
       fetchSubmodules = false;
-      hash = "sha256-3UiaK3R3Adz56PI4VEBX36XZrGJ452IJA6t1ZDUfj2A=";
+      hash = "sha256-+lyZnQXwswPApJzkV1aZPJK+4MLbqK7ieD9cMvPITIw=";
     };
     "http_zig-0.1.0-2CB7E00SAwAnwnBkJDgCDm3zLwrCmZZkHNSw5t7X9Vbf" = fetchgit {
       url = "https://github.com/justrach/http-zig";
