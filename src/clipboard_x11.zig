@@ -315,6 +315,7 @@ pub const X11 = struct {
         const p = x.take(x.cap) orelse return x.failed();
         defer x.drop(p);
         if (p.kind == x.incr_atom) {
+            if (x.targets_stage) return x.finish();
             x.incr = true;
             return x.step();
         }
