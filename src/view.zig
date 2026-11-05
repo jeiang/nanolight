@@ -608,11 +608,8 @@ pub const Nanolight = struct {
         const r = s.res.rows[s.res.actionable(s.sel)];
         switch (r.kind) {
             .calc => {
-                var buf: [64]u8 = undefined;
-                if (s.res.copy.len > 0) c.clipboard.write(c.clipboard.ctx, s.res.copy) else {
-                    const v = @import("calc.zig").eval(s.query.text()) orelse return;
-                    c.clipboard.write(c.clipboard.ctx, @import("calc.zig").format(&buf, v, false));
-                }
+                if (s.res.copy.len == 0) return;
+                c.clipboard.write(c.clipboard.ctx, s.res.copy);
                 s.copied_at = c.time;
                 return;
             },

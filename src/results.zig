@@ -190,14 +190,22 @@ pub const Results = struct {
             for (suggestions[0..@min(suggestions.len, max_apps)]) |i| r.push(.{ .kind = .app, .app = i });
             return;
         }
-        if (calc.eval(query)) |v| {
+        // "2 + 3 *" or "500 usd to eur *": the answer so far, so the card
+        // stays while the next number is typed.
+        const math = std.mem.trimEnd(u8, query, " +-*/%^×÷");
+        if (calc.eval(math)) |v| {
             r.answer = calc.format(&r.answer_buf, v, true);
+            r.copy = calc.format(&r.copy_buf, v, false);
+            if (math.len < query.len and math.len <= r.expr_buf.len) {
+                @memcpy(r.expr_buf[0..math.len], math);
+                r.expr = r.expr_buf[0..math.len];
+            }
             r.hex = if (v >= 0 and v < 1e15 and v == @round(v))
                 std.fmt.bufPrint(&r.hex_buf, "0x{X}", .{@as(u64, @intFromFloat(v))}) catch ""
             else
                 "";
             r.push(.{ .kind = .calc });
-        } else if (convert.answer(query, r.rates)) |a| {
+        } else if (convert.answer(math, r.rates)) |a| {
             r.pending = a == .pending;
             r.convertRow(a);
             r.push(.{ .kind = .calc });
@@ -535,10 +543,10 @@ test "a conversion is answered like math, with the rate under a currency's" {
     try t.expectEqualStrings("", r.hex);
     try t.expect(!r.pending);
     try t.expectEqual(@as(usize, 0), r.actionable(0));
-    // Math after a conversion forgets its note and copy.
+    // Math after a conversion forgets its note, and copies its own answer.
     r.build("2+2", &ix, &.{}, &.{}, defaults);
     try t.expectEqualStrings("", r.note);
-    try t.expectEqualStrings("", r.copy);
+    try t.expectEqualStrings("4", r.copy);
 }
 
 test "math around a conversion: the card shows the amount worked out and copies the answer" {
@@ -559,10 +567,15 @@ test "math around a conversion: the card shows the amount worked out and copies 
     try t.expectEqualStrings("10 km", r.expr);
     try t.expectEqualStrings("10,000 m", r.answer);
     try t.expectEqualStrings("10000", r.copy);
-    // Math that doesn't compute is no card at all.
+    // An operator with nothing after it yet keeps the answer so far.
     r.build("10 km to mi *", &ix, &.{}, &.{}, defaults);
-    try t.expect(r.n == 0 or r.rows[0].kind != .calc);
-    // No rates yet: still pending, nothing to copy; bad math is not.
+    try t.expectEqual(Kind.calc, r.rows[0].kind);
+    try t.expectEqualStrings("6.2137119224 mi", r.answer);
+    r.build("2 + 3 *", &ix, &.{}, &.{}, defaults);
+    try t.expectEqual(Kind.calc, r.rows[0].kind);
+    try t.expectEqualStrings("2 + 3", r.expr);
+    try t.expectEqualStrings("5", r.copy);
+    // No rates yet: still pending, nothing to copy.
     r.build("12 ttd to usd * 12", &ix, &.{}, &.{}, defaults);
     try t.expectEqual(Kind.calc, r.rows[0].kind);
     try t.expect(r.pending);
@@ -570,8 +583,7 @@ test "math around a conversion: the card shows the amount worked out and copies 
     try t.expectEqualStrings("Loading rates…", r.answer);
     try t.expectEqualStrings("", r.copy);
     r.build("12 ttd to usd /", &ix, &.{}, &.{}, defaults);
-    try t.expect(!r.pending);
-    try t.expect(r.n == 0 or r.rows[0].kind != .calc);
+    try t.expect(r.pending);
     var rates = convert.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785,\"eur\":0.86}}").?;
     defer rates.deinit();
     r.rates = &rates;
@@ -586,6 +598,9 @@ test "math around a conversion: the card shows the amount worked out and copies 
     try t.expectEqualStrings("21.22 USD", r.answer);
     try t.expectEqualStrings("21.22", r.copy);
     try t.expectEqualStrings("1 TTD = 0.147384 USD · 2026-11-03", r.note);
+    r.build("12 ttd to usd * ", &ix, &.{}, &.{}, defaults);
+    try t.expectEqualStrings("12 TTD", r.expr);
+    try t.expectEqualStrings("1.77 USD", r.answer);
     r.build("$20 * 3 in eur", &ix, &.{}, &.{}, defaults);
     try t.expectEqualStrings("60 USD", r.expr);
     try t.expectEqualStrings("51.60 EUR", r.answer);
