@@ -132,8 +132,9 @@ pub const Index = struct {
         const a = ix.arena.allocator();
         for (ix.apps.items) |*app| {
             if (!wantsLocalizedDisplayName(app.path)) continue;
-            if (displayNameInto(a, app.path)) |loc| {
-                if (!std.ascii.eqlIgnoreCase(loc, app.name)) app.name = loc;
+            if (displayNameInto(a, app.path)) |display_name| {
+                const loc = withoutAppSuffix(display_name);
+                if (loc.len > 0 and !std.ascii.eqlIgnoreCase(loc, app.name)) app.name = loc;
             }
             if (text.hasCjk(app.name)) app.pinyin = pinyinKey(a, app.name) orelse "";
         }
@@ -289,6 +290,13 @@ fn wantsLocalizedDisplayName(path: []const u8) bool {
     return std.mem.indexOf(u8, path, "/Applications/") != null;
 }
 
+/// Finder can include the bundle extension in its localized display name.
+fn withoutAppSuffix(name: []const u8) []const u8 {
+    const suffix = ".app";
+    if (name.len >= suffix.len and std.ascii.eqlIgnoreCase(name[name.len - suffix.len ..], suffix)) return name[0 .. name.len - suffix.len];
+    return name;
+}
+
 /// The Finder's icon for `path`, drawn at 64 pixels and encoded as PNG.
 fn displayNameInto(a: std.mem.Allocator, path: []const u8) ?[]const u8 {
     const pool = objc.Pool.push();
@@ -318,7 +326,7 @@ fn pinyinKey(a: std.mem.Allocator, name: []const u8) ?[]const u8 {
     return a.dupe(u8, buf[0..n]) catch null;
 }
 
-fn iconPng(gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
+pub fn iconPng(gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
     const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
@@ -333,6 +341,17 @@ fn iconPng(gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
     const len = objc.msg(objc.NSUInteger, data, "length", .{});
     const bytes = objc.msg(?[*]const u8, data, "bytes", .{}) orelse return null;
     return gpa.dupe(u8, bytes[0..len]) catch null;
+}
+
+test "localized Mac names omit the app suffix" {
+    const t = std.testing;
+    try t.expectEqualStrings("Safari", withoutAppSuffix("Safari.app"));
+    try t.expectEqualStrings("微信", withoutAppSuffix("微信.APP"));
+    try t.expectEqualStrings("My.App", withoutAppSuffix("My.App.aPp"));
+    try t.expectEqualStrings("App", withoutAppSuffix("App"));
+    try t.expectEqualStrings("App.app helper", withoutAppSuffix("App.app helper"));
+    try t.expectEqualStrings("", withoutAppSuffix(""));
+    try t.expectEqualStrings("", withoutAppSuffix(".app"));
 }
 
 test "names are kept once, sorted, and opening one suggests it" {

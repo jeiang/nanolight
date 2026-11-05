@@ -1,8 +1,8 @@
 //! The panel's window on the Mac: a popover the shadow's margin bigger than
-//! the panel, never resized (a window resized on every frame of the
-//! height's spring shook as it searched: AppKit's new frame and Metal's
-//! next drawable don't land together); only the system's vibrancy under the
-//! panel follows its height. A menu bar app: no Dock icon.
+//! the panel, never resized (a window resized as it searched shook:
+//! AppKit's new frame and Metal's next drawable don't land together);
+//! only the system's vibrancy under the panel follows its height. A menu
+//! bar app: no Dock icon.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;

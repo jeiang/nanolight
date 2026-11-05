@@ -66,7 +66,8 @@ in {
           cp -R ${storeApp} ${installedApp}
           chown -R ${user} ${installedApp}
           chmod -R u+w ${installedApp}
-          if sudo -u ${user} codesign --force --deep --sign ${lib.escapeShellArg cfg.codesignIdentity} ${installedApp}; then
+          # -H: codesign finds the login keychain through the user's HOME; root's has none.
+          if sudo -H -u ${user} codesign --force --deep --sign ${lib.escapeShellArg cfg.codesignIdentity} ${installedApp}; then
             mkdir -p "$(dirname ${stamp})"
             echo ${lib.escapeShellArg "${storeApp} ${cfg.codesignIdentity}"} > ${stamp}
             uid=$(id -u ${user})

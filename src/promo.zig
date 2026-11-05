@@ -127,7 +127,7 @@ fn later(comptime steps: anytype) @TypeOf(steps) {
 const screen_script = [_]Step{.{ .at = open_at, .op = .show }};
 
 /// The camera: the whole stage, held still. Zooming in and out with each
-/// shot, and following the panel's springing height as results came and
+/// shot, and following the panel's height as results came and
 /// went, made the frame bob with every key; the panel is large enough to
 /// read without it.
 const centre: cam.View = .{ .zoom = 1, .cx = scene_mod.width / 2, .cy = scene_mod.height / 2 };

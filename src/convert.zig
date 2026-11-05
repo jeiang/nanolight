@@ -1,6 +1,8 @@
 //! Conversions typed into the bar: "10 km to mi", "32 f in c", "1.5 GiB to
-//! MB", "100 usd to ttd", "$20 in eur". Units and the parser are pure.
-//! Currency rates are a table fetched elsewhere (`Rates`, the JSON of
+//! MB", "100 usd to ttd", "$20 in eur", with math around them: "35 * 7 ttd
+//! to usd" converts 245 TTD, "10 km to mi / 2" halves the miles. Units and
+//! the parser are pure; calc.zig works out the math. Currency rates are a
+//! table fetched elsewhere (`Rates`, the JSON of
 //! github.com/fawazahmed0/exchange-api: lowercase codes, each worth of one
 //! USD) that `answer` is handed; `due` says when to fetch it again.
 const std = @import("std");
@@ -121,10 +123,18 @@ fn code(word: []const u8, buf: *[3]u8) ?[]const u8 {
     return buf;
 }
 
-pub const Parsed = struct { amount: f64, from: []const u8, to: []const u8 };
+pub const Parsed = struct {
+    amount: f64,
+    from: []const u8,
+    to: []const u8,
+    /// Operators the converted value goes through ("* 12"), or empty.
+    ops: []const u8 = "",
+};
 
-/// "<number> <from> to|in <to>", or "<symbol><number> to|in <to>". Whether
-/// the names mean anything is for `answer`.
+/// "<amount> <from> to|in <to>", or "<symbol><amount> to|in <to>", either
+/// followed by operators on the converted value: "12 ttd to usd * 12". The
+/// amount is any math (`calc.lead`): "3 * 10 km", "(2 + 3) km", "1,500 m".
+/// Whether the names mean anything, and the operators, is for `answer`.
 pub fn parse(query: []const u8) ?Parsed {
     var s = std.mem.trim(u8, query, " \t");
     var from: []const u8 = "";
@@ -133,42 +143,38 @@ pub fn parse(query: []const u8) ?Parsed {
         s = std.mem.trimStart(u8, s[sym.sym.len..], " ");
         break;
     };
-    var num: [32]u8 = undefined;
-    var n: usize = 0;
-    var i: usize = 0;
-    if (i < s.len and s[i] == '-') {
-        num[0] = '-';
-        n = 1;
-        i = 1;
-    }
-    const digits = i;
-    while (i < s.len and (std.ascii.isDigit(s[i]) or s[i] == '.' or s[i] == ',')) : (i += 1) {
-        if (s[i] == ',') continue;
-        if (n == num.len) return null;
-        num[n] = s[i];
-        n += 1;
-    }
-    if (i == digits) return null;
-    const amount = std.fmt.parseFloat(f64, num[0..n]) catch return null;
-    if (!std.math.isFinite(amount)) return null;
-    const rest = std.mem.trim(u8, s[i..], " \t");
-    if (from.len > 0) {
+    const head = calc.lead(s) orelse return null;
+    const rest = std.mem.trim(u8, head.rest, " \t");
+    const target = if (from.len > 0) blk: {
         if (rest.len < 4 or !(std.ascii.startsWithIgnoreCase(rest, "to ") or std.ascii.startsWithIgnoreCase(rest, "in "))) return null;
-        const to = std.mem.trim(u8, rest[3..], " \t");
-        return if (to.len == 0) null else .{ .amount = amount, .from = from, .to = to };
+        break :blk rest[3..];
+    } else blk: {
+        // The first " to " or " in " with something before it ("10 in in cm").
+        var at: usize = 1;
+        while (at + 4 <= rest.len) : (at += 1) {
+            if (rest[at] != ' ' or rest[at + 3] != ' ') continue;
+            const w = rest[at + 1 .. at + 3];
+            if (!std.ascii.eqlIgnoreCase(w, "to") and !std.ascii.eqlIgnoreCase(w, "in")) continue;
+            from = std.mem.trim(u8, rest[0..at], " \t");
+            break :blk rest[at + 4 ..];
+        }
+        return null;
+    };
+    const tail = std.mem.trim(u8, target, " \t");
+    const cut = opsStart(tail);
+    const to = std.mem.trimEnd(u8, tail[0..cut], " \t");
+    return if (to.len == 0) null else .{ .amount = head.value, .from = from, .to = to, .ops = tail[cut..] };
+}
+
+/// Where the operators after a conversion's target begin ("usd * 12" at the
+/// `*`), or `s.len`. A slash between letters is a unit's own ("km/h").
+fn opsStart(s: []const u8) usize {
+    for (s, 0..) |ch, i| {
+        const in_unit = ch == '/' and i > 0 and i + 1 < s.len and std.ascii.isAlphabetic(s[i - 1]) and std.ascii.isAlphabetic(s[i + 1]);
+        if (std.mem.indexOfScalar(u8, "*/+-%^", ch) != null and !in_unit) return i;
+        for ([_][]const u8{ "×", "÷", "−" }) |op| if (std.mem.startsWith(u8, s[i..], op)) return i;
     }
-    // The first " to " or " in " with something before it ("10 in in cm").
-    var at: usize = 1;
-    while (at + 4 <= rest.len) : (at += 1) {
-        if (rest[at] != ' ' or rest[at + 3] != ' ') continue;
-        const w = rest[at + 1 .. at + 3];
-        if (!std.ascii.eqlIgnoreCase(w, "to") and !std.ascii.eqlIgnoreCase(w, "in")) continue;
-        const f = std.mem.trim(u8, rest[0..at], " \t");
-        const to = std.mem.trim(u8, rest[at + 4 ..], " \t");
-        if (f.len == 0 or to.len == 0) return null;
-        return .{ .amount = amount, .from = f, .to = to };
-    }
-    return null;
+    return s.len;
 }
 
 /// Currency rates, each worth of one USD, by lowercase three-letter code.
@@ -246,7 +252,10 @@ pub const Answer = union(enum) {
 };
 
 /// What `query` converts to, or null if it is not a conversion: unknown
-/// names, or units of different kinds ("10 m to min").
+/// names, units of different kinds ("10 m to min"), or math that doesn't
+/// compute around it ("10 km to mi *"). The answer's `amount` is the math
+/// before the units worked out, its `value` the converted one carried
+/// through the operators after them.
 pub fn answer(query: []const u8, rates: ?*const Rates) ?Answer {
     const p = parse(query) orelse return null;
     const a = unit(p.from);
@@ -255,22 +264,26 @@ pub fn answer(query: []const u8, rates: ?*const Rates) ?Answer {
         const x = a orelse return null;
         const y = b orelse return null;
         if (x.family != y.family) return null;
-        const v = ((p.amount * x.scale + x.offset) - y.offset) / y.scale;
-        if (!std.math.isFinite(v)) return null;
+        const v = calc.carry(((p.amount * x.scale + x.offset) - y.offset) / y.scale, p.ops) orelse return null;
         return .{ .unit = .{ .amount = p.amount, .value = v, .from = first(x), .to = first(y) } };
     }
     var fb: [3]u8 = undefined;
     var tb: [3]u8 = undefined;
     const f = code(p.from, &fb) orelse return null;
     const t = code(p.to, &tb) orelse return null;
-    const table = rates orelse return .pending;
+    const table = rates orelse {
+        // Nothing to convert with yet: the operators are tried on the
+        // amount, which has the answer's sign, so bad math is not pending.
+        _ = calc.carry(p.amount, p.ops) orelse return null;
+        return .pending;
+    };
     const rf = table.get(f) orelse return null;
     const rt = table.get(t) orelse return null;
     const rate = rt / rf;
-    var m: Money = .{ .amount = p.amount, .value = p.amount * rate, .rate = rate, .from = undefined, .to = undefined, .date = table.date };
+    const v = calc.carry(p.amount * rate, p.ops) orelse return null;
+    var m: Money = .{ .amount = p.amount, .value = v, .rate = rate, .from = undefined, .to = undefined, .date = table.date };
     _ = std.ascii.upperString(&m.from, f);
     _ = std.ascii.upperString(&m.to, t);
-    if (!std.math.isFinite(m.value)) return null;
     return .{ .money = m };
 }
 
@@ -388,6 +401,10 @@ test "forms and spellings" {
     try expectUnit(0.5, ".5 km to km");
     try expectUnit(29.5735295625, "1 fl oz to ml");
     try expectUnit(29.5735295625, "1 floz to ml");
+    // Forms from before math came around them.
+    try expectUnit(1500, "1,500,000 m to km");
+    try expectUnit(1609.344, "1mi in m");
+    try expectUnit(6.21371192237334, "  10 km to mi  ");
 }
 
 test "temperature has offsets" {
@@ -440,6 +457,31 @@ test "the parser splits on the first separator" {
     try testing.expectEqualStrings("fl oz", w.from);
     try testing.expect(parse("$ to eur") == null);
     try testing.expect(parse("$20 eur") == null);
+    // The math before the units is the amount; operators after the target
+    // are kept apart, and old forms have none.
+    try testing.expectEqualStrings("", parse("10km in miles").?.ops);
+    const e = parse("35 * 7 ttd to usd").?;
+    try testing.expectEqual(@as(f64, 245), e.amount);
+    try testing.expectEqualStrings("ttd", e.from);
+    try testing.expectEqualStrings("usd", e.to);
+    try testing.expectEqualStrings("", e.ops);
+    const o = parse("12 ttd to usd * 12").?;
+    try testing.expectEqual(@as(f64, 12), o.amount);
+    try testing.expectEqualStrings("usd", o.to);
+    try testing.expectEqualStrings("* 12", o.ops);
+    const v = parse("10 m/s to km/h / 2").?;
+    try testing.expectEqualStrings("m/s", v.from);
+    try testing.expectEqualStrings("km/h", v.to);
+    try testing.expectEqualStrings("/ 2", v.ops);
+    try testing.expectEqualStrings("/2", parse("10 km to mi/2").?.ops);
+    const f = parse("1 cup to fl oz × 2").?;
+    try testing.expectEqualStrings("fl oz", f.to);
+    try testing.expectEqualStrings("× 2", f.ops);
+    const d = parse("$20 * 3 in eur").?;
+    try testing.expectEqual(@as(f64, 60), d.amount);
+    try testing.expectEqualStrings("$", d.from);
+    try testing.expectEqualStrings("eur", d.to);
+    try testing.expect(parse("10 km to * 2") == null);
 }
 
 const sample =
@@ -481,6 +523,84 @@ test "currencies cross through the dollar" {
     try testing.expect(answer("10 foo to bar", &r) == null);
     try testing.expect(answer("100 usd to ttd", null).? == .pending);
     try testing.expect(answer("100 usd to km", null) == null);
+}
+
+test "math around a conversion: the amount before it, the answer after it" {
+    var r = Rates.parse(testing.allocator, sample).?;
+    defer r.deinit();
+    const a = answer("35 * 7 ttd to usd", &r).?.money;
+    try testing.expectEqual(@as(f64, 245), a.amount);
+    try testing.expectApproxEqRel(@as(f64, 245.0 / 6.785), a.value, 1e-12);
+    try testing.expectApproxEqRel(@as(f64, 1.0 / 6.785), a.rate, 1e-12);
+    try testing.expectEqualStrings("TTD", &a.from);
+    try testing.expectEqualStrings("USD", &a.to);
+    // The rate is still one of `from`: the operators act on the answer.
+    const b = answer("12 ttd to usd * 12", &r).?.money;
+    try testing.expectEqual(@as(f64, 12), b.amount);
+    try testing.expectApproxEqRel(@as(f64, 12.0 * 12 / 6.785), b.value, 1e-12);
+    try testing.expectApproxEqRel(@as(f64, 1.0 / 6.785), b.rate, 1e-12);
+    const c = answer("3 * 10 km to mi", null).?.unit;
+    try testing.expectEqual(@as(f64, 30), c.amount);
+    try testing.expectApproxEqRel(@as(f64, 30000.0 / 1609.344), c.value, 1e-12);
+    try testing.expectEqualStrings("km", c.from);
+    try testing.expectEqualStrings("mi", c.to);
+    const d = answer("10 km to mi / 2", null).?.unit;
+    try testing.expectEqual(@as(f64, 10), d.amount);
+    try testing.expectApproxEqRel(@as(f64, 10000.0 / 1609.344 / 2.0), d.value, 1e-12);
+    const e = answer("$20 * 3 in eur", &r).?.money;
+    try testing.expectEqual(@as(f64, 60), e.amount);
+    try testing.expectApproxEqRel(@as(f64, 51.6), e.value, 1e-12);
+    try testing.expectEqualStrings("USD", &e.from);
+    try testing.expectEqualStrings("EUR", &e.to);
+    // Parentheses, functions and precedence, on either side.
+    try expectUnit(10000, "(2 + 3) * 2 km to m");
+    try expectUnit(2, "(1,500 + 500) m to km");
+    try expectUnit(4000, "sqrt(16) km to m");
+    try expectUnit(-6.21371192237334, "-(5 + 5) km to mi");
+    try expectUnit(36, "2 * 5 m/s to km/h");
+    try expectUnit(2 * 6.21371192237334 + 1, "10 km to mi * 2 + 1");
+    try expectUnit(6.21371192237334 + 2, "10 km to mi + 1 * 2");
+    try expectUnit(6.21371192237334 / 2.0, "10 km to mi / (1 + 1)");
+    try expectUnit(6.21371192237334 / 2.0, "10 km to mi/2");
+    try expectUnit(18, "10 m/s to km/h / 2");
+    try expectUnit(180, "100 c to f - 32");
+    try expectUnit(29.5735295625 * 2, "1 fl oz to ml × 2");
+    try testing.expectApproxEqRel(@as(f64, 24.0 / 6.785), answer("12 ttd to usd * (1 + 1)", &r).?.money.value, 1e-12);
+    try testing.expectApproxEqRel(@as(f64, 80), answer("$100 to € - 6", &r).?.money.value, 1e-12);
+}
+
+test "math that doesn't compute is not a conversion, pending or not" {
+    var r = Rates.parse(testing.allocator, sample).?;
+    defer r.deinit();
+    for ([_][]const u8{
+        "10 km to mi *",
+        "10 km to mi / 0",
+        "10 km to mi * 2 3",
+        "10 km to mi * foo",
+        "10 km to mi * (2",
+        "10 km to mi )",
+        "10 km to mi * 2 in cm",
+        "10 km to * 2",
+        "10 km * 2 to mi",
+        "35 * km to mi",
+        "* 7 km to mi",
+        "(35 * 7 km to mi",
+        "35 * 7) km to mi",
+        "1/0 km to mi",
+        "1e308 * 10 km to mi",
+        "12 ttd to usd *",
+        "12 ttd to usd / 0",
+        "12 ttd * 2 to usd",
+        "$20 * in eur",
+        "$20 * 3 eur",
+    }) |q| {
+        try testing.expect(answer(q, null) == null);
+        try testing.expect(answer(q, &r) == null);
+    }
+    // No table yet: math that computes waits for one, as a plain amount does.
+    try testing.expect(answer("35 * 7 ttd to usd", null).? == .pending);
+    try testing.expect(answer("12 ttd to usd * 12", null).? == .pending);
+    try testing.expect(answer("$20 * 3 in eur", null).? == .pending);
 }
 
 test "tiny unit results keep their digits" {

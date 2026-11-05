@@ -1,13 +1,16 @@
 //! The launcher panel: the query, then what it finds in sections, then a
 //! footer naming what Return does. Neutral glass, a hairline rim, 40-point
 //! rows, the selection a grey step that slides between them. Nothing moves
-//! while nothing happens: frames come from keys, and from height settling.
+//! while nothing happens: frames come from keys.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const motion = ui.motion;
 const Index = @import("apps.zig").Index;
 const results = @import("results.zig");
+const files = @import("files.zig");
+const files_view = @import("files_view.zig");
+const answers = @import("answers.zig");
 const suggest = @import("suggest.zig");
 const convert = @import("convert.zig");
 const text = @import("text.zig");
@@ -26,14 +29,13 @@ pub const Host = struct {
     hide: *const fn (ctx: *anyopaque) void,
     /// The panel's height changed: a window follows it.
     resize: ?*const fn (ctx: *anyopaque, h: f32) void = null,
-    /// Google's completions of a query aren't known: ask for them, and
-    /// answer with `Nanolight.answered`. Without it, none are listed.
+    /// Request completions, returned through `Nanolight.answered`.
     suggest: ?*const fn (ctx: *anyopaque, query: []const u8) void = null,
+    files: ?*const fn (ctx: *anyopaque, query: []const u8) void = null,
     /// Shows a search's page in the panel, over `webArea`; null takes it
     /// away. Without it, searches open in the browser.
     preview: ?*const fn (ctx: *anyopaque, url: ?[]const u8) void = null,
-    /// Settings (the shortcut, login, sync, updates). Without it the
-    /// screen still draws, and changes nothing the app keeps.
+    /// Settings callbacks; without them, changes are not persisted.
     settings: ?*const SettingsHost = null,
     /// A currency conversion is listed: fetch the rates unless they are
     /// fresh, and answer with `Nanolight.ratesLanded`. Without it, none are
@@ -73,12 +75,13 @@ pub const max_height: f32 = header_h + footer_h + 2 + list_pad * 2 + results.max
 pub fn webArea(h: f32) struct { y: f32, h: f32 } {
     return .{ .y = header_h + 1, .h = @max(0, h - header_h - footer_h - 2) };
 }
-/// Opening and growing: snappy, a touch under critical damping.
+/// Opening: snappy, a touch under critical damping.
 pub const spring: motion.Spring = .{ .stiffness = 320, .damping = 32 };
 const slide: motion.Spring = .{ .stiffness = 700, .damping = 52 };
 
 pub const Palette = @import("palette.zig").Palette;
 pub const palette = @import("palette.zig").palette;
+pub const Theme = @import("palette.zig").Theme;
 
 pub const Nanolight = struct {
     index: *Index,
@@ -99,18 +102,25 @@ pub const Nanolight = struct {
     /// Return sends a Google search to the browser and ⌘↩ shows it in
     /// the panel, the other way round from the default (issue #10).
     searches_out: bool = false,
+    /// The panel's tint, chosen in Settings (`nanolight.theme`).
+    theme: Theme = .system,
     /// Each showing gets a new one: the panel comes in again.
     shown: u32 = 0,
     copied_at: f64 = -10,
     kv: ?nanoui.kv.Store = null,
     spans: [results.max_rows][16]ui.Span = undefined,
     last_h: f32 = 0,
+    /// The height kept while Google is asked (answers.zig); 0 when it isn't.
+    held_h: f32 = 0,
     /// The query as it was shown: selected, so no completion after it yet.
     revealed: u64 = 0,
     /// Said in the footer in place of the name ("Updated to 0.1.3"), if set.
     note: []const u8 = "",
     /// The first-run welcome, drawn while it is active.
     onboard: ?*@import("onboard.zig").Onboard = null,
+    /// Local file search is opt-in on this Mac.
+    files_on: bool = false,
+    found: files.List = .{},
     /// Google's completions: whether to ask, those listed, the answers.
     suggest_on: bool = true,
     /// The quicklinks listed under the apps (config.toml, or synced).
@@ -175,6 +185,10 @@ pub const Nanolight = struct {
         if (s.clip_ui.open) return clipboard_view.height;
         if (s.ext) |e| if (e.open) return e.height();
         if (s.previewing) return max_height;
+        return @max(s.rowsHeight(), s.held_h);
+    }
+
+    fn rowsHeight(s: *const Nanolight) f32 {
         var h: f32 = header_h + footer_h + 1;
         if (s.res.n == 0) return h;
         h += 1 + list_pad * 2;
@@ -196,10 +210,10 @@ pub const Nanolight = struct {
     }
 
     pub fn panel(s: *Nanolight, c: *ui.Context) void {
-        const p = palette(c.theme.dark);
+        const p = palette(c.theme.dark, s.theme);
         const shell = ui.div(c).column().w(width).rounded(18).border(p.hair).clip();
         if (s.own_glass) {
-            _ = shell.glass(.{ .tint = if (c.theme.dark) ui.Color.black.alpha(0.42) else ui.Color.white.alpha(0.5) })
+            _ = shell.glass(.{ .tint = @import("palette.zig").tint(c.theme.dark, s.theme) })
                 .shadows(&.{ .{ .color = .{ .a = 0.22 }, .blur = 4, .y = 1 }, .{ .color = .{ .a = 0.28 }, .blur = 40, .y = 18 } });
         } else {
             // The system's shadow is off (its outline drew a black ring
@@ -212,7 +226,7 @@ pub const Nanolight = struct {
         }
         defer shell.end();
         if (s.onboard) |o| if (o.active) {
-            const h = s.follow(c, o.height());
+            const h = s.follow(o.height());
             const body = ui.div(c).column().wFull().h(h).clip();
             defer body.end();
             o.view(c, s, p);
@@ -229,7 +243,7 @@ pub const Nanolight = struct {
         // Typing takes the page away: the rows are for the new words.
         if (s.previewing and std.hash.Wyhash.hash(0, s.query.text()) != s.preview_q) s.back();
         if (submitted) s.activate(c);
-        const h = s.follow(c, s.height());
+        const h = s.follow(s.height());
         {
             const body = ui.div(c).column().wFull().h(h - header_h).clip();
             defer body.end();
@@ -248,9 +262,10 @@ pub const Nanolight = struct {
         }
     }
 
-    /// The panel's height, springing to `target`; a window follows it.
-    pub fn follow(s: *Nanolight, c: *ui.Context, target: f32) f32 {
-        const h = motion.number(c, "panel-h", @min(target, max_height), .{ .spring = spring });
+    /// The panel's height: `target`, at once, as the rows it fits are there
+    /// at once (easing to it only made each key wait); a window follows it.
+    pub fn follow(s: *Nanolight, target: f32) f32 {
+        const h = @min(target, max_height);
         if (s.host) |host| if (host.resize) |f| if (@abs(h - s.last_h) > 0.25) {
             s.last_h = h;
             f(host.ctx, h);
@@ -284,7 +299,7 @@ pub const Nanolight = struct {
         if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.activateOut(c);
         // Tab takes the faint completion, as → does.
         const more = s.completion();
-        if (more.len > 0 and c.shortcut(.{ .key = S.tab })) s.take(more);
+        if (!files_view.takeOnTab(s, c) and more.len > 0 and c.shortcut(.{ .key = S.tab })) s.take(more);
         const n = s.res.n;
         if (moveDown(c)) {
             if (n > 0) s.sel = (s.sel + 1) % n;
@@ -341,7 +356,6 @@ pub const Nanolight = struct {
         return "";
     }
 
-    /// The completion `more` added to the query, the caret after it.
     fn take(s: *Nanolight, more: []const u8) void {
         var buf: [suggest.max_len * 2]u8 = undefined;
         const q = s.query.text();
@@ -353,17 +367,22 @@ pub const Nanolight = struct {
         s.query.want_selection = .{ len, len };
     }
 
-    /// The rows for the query, if it changed since they were built: with
-    /// what is known of Google's completions of it, asked for if not all.
+    /// Rebuild changed queries, asking for missing completions.
     pub fn rebuild(s: *Nanolight) void {
         const q = s.query.text();
         const h = std.hash.Wyhash.hash(0, q);
         if (h == s.built) return;
         s.built = h;
+        files_view.rebuild(s);
         s.web.n = 0;
+        const held = @max(s.held_h, s.rowsHeight());
+        s.held_h = 0;
         const asks = results.google(s.quicklinks) != null and results.keyed(s.quicklinks, std.mem.trim(u8, q, " ")) == null;
         if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null and convert.answer(q, s.rates) == null) {
-            if (!s.cache.lookup(q, &s.web)) ask(host.ctx, q);
+            if (!s.cache.lookup(q, &s.web)) {
+                s.held_h = held;
+                ask(host.ctx, q);
+            }
         };
         s.fill();
         if (s.res.need_rates) if (s.host) |host| if (host.rates) |get| get(host.ctx);
@@ -372,13 +391,14 @@ pub const Nanolight = struct {
         s.sel = s.res.actionable(0);
     }
 
-    fn fill(s: *Nanolight) void {
+    pub fn fill(s: *Nanolight) void {
         var sug: [results.max_apps]u32 = undefined;
         const ns = s.index.suggestions(&sug);
         var web: [suggest.max_rows][]const u8 = undefined;
         s.res.rates = s.rates;
         s.res.rates_failed = s.rates_failed;
         s.res.clip_on = if (s.host) |h| h.clipboard != null else false;
+        s.res.found = &s.found;
         s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web), s.quicklinks);
     }
 
@@ -393,39 +413,9 @@ pub const Nanolight = struct {
         if (s.sel >= s.res.n) s.sel = s.res.actionable(0);
     }
 
-    /// Google's completions of `typed` (what `Host.suggest` asked): kept,
-    /// and listed if it is still what is typed. The selection stays on the
-    /// row it was on, wherever that row now is: Return a moment after
-    /// typing does what the panel showed, not a completion that just came.
-    pub fn answered(s: *Nanolight, typed: []const u8, said: *const suggest.List) void {
-        s.cache.put(typed, said);
-        if (!suggest.same(typed, s.query.text())) return;
-        const was: ?Row = if (s.sel < s.res.n) s.res.rows[s.sel] else null;
-        var was_text: [suggest.max_len]u8 = undefined;
-        var was_len: usize = 0;
-        if (was) |r| if (r.kind == .suggest) {
-            const w = s.web.get(r.web);
-            @memcpy(was_text[0..w.len], w);
-            was_len = w.len;
-        };
-        s.web = said.*;
-        s.fill();
-        s.sel = 0;
-        const r = was orelse return;
-        for (s.res.slice(), 0..) |now, i| {
-            const same_row = now.kind == r.kind and switch (r.kind) {
-                .app => now.app == r.app,
-                .quicklink => now.ql == r.ql,
-                .pane, .command => now.app == r.app,
-                .suggest => suggest.same(s.web.get(now.web), was_text[0..was_len]),
-                else => true,
-            };
-            if (same_row) {
-                s.sel = i;
-                return;
-            }
-        }
-    }
+    pub const answered = answers.answered;
+    pub const unanswered = answers.unanswered;
+    pub const filesAnswered = files_view.filesAnswered;
 
     fn list(s: *Nanolight, c: *ui.Context, p: Palette) void {
         const box = ui.div(c).column().wFull().p(list_pad);
@@ -489,6 +479,7 @@ pub const Nanolight = struct {
                 ui.text(c, "Clipboard History", .{ .size = 13.5, .weight = .medium, .color = p.text });
                 ui.text(c, "Text, images and files you copied", .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
+            .file => files_view.row(s, c, p, i, r),
             .settings => {
                 ui.text(c, "Nanolight Settings", .{ .size = 13.5, .weight = .medium, .color = p.text });
                 ui.text(c, "Shortcut, sync, updates", .{ .size = 12, .color = p.sub.alpha(0.8) });
@@ -506,7 +497,7 @@ pub const Nanolight = struct {
         ui.spacer(c);
         if (i == s.sel) {
             ui.text(c, switch (r.kind) {
-                .app, .settings, .pane, .clipboard => "Open",
+                .app, .file, .settings, .pane, .clipboard => "Open",
                 .command => "Run",
                 else => "Go",
             }, .{ .size = 12, .weight = .medium, .color = p.sub });
@@ -528,6 +519,7 @@ pub const Nanolight = struct {
             _ = ui.image(c, .{ .key = s.index.apps.items[a].path, .bytes = png, .max_width = 26, .max_height = 26, .radius = 0, .scale = 1 });
             return;
         };
+        if (r.kind == .file) return files_view.tile(s, c, p, r);
         const big = r.kind == .calc;
         const side: f32 = if (big) 34 else 26;
         const box = ui.div(c).size(side, side).rounded(if (big) 9 else 7).bg(p.tile).center();
@@ -544,7 +536,7 @@ pub const Nanolight = struct {
     }
 
     /// The matched letters, full strength and heavier.
-    fn highlight(s: *Nanolight, i: usize, r: Row, p: Palette) []const ui.Span {
+    pub fn highlight(s: *Nanolight, i: usize, r: Row, p: Palette) []const ui.Span {
         const hits = r.match.matched();
         var n: usize = 0;
         var k: usize = 0;
@@ -608,11 +600,8 @@ pub const Nanolight = struct {
         const r = s.res.rows[s.res.actionable(s.sel)];
         switch (r.kind) {
             .calc => {
-                var buf: [64]u8 = undefined;
-                if (s.res.copy.len > 0) c.clipboard.write(c.clipboard.ctx, s.res.copy) else {
-                    const v = @import("calc.zig").eval(s.query.text()) orelse return;
-                    c.clipboard.write(c.clipboard.ctx, @import("calc.zig").format(&buf, v, false));
-                }
+                if (s.res.copy.len == 0) return;
+                c.clipboard.write(c.clipboard.ctx, s.res.copy);
                 s.copied_at = c.time;
                 return;
             },
@@ -620,6 +609,7 @@ pub const Nanolight = struct {
                 s.index.opened(r.app, s.kv);
                 s.go(s.index.apps.items[r.app].path);
             },
+            .file => s.go(s.found.entries[r.file].path()),
             .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), !s.searches_out),
             .settings => s.openSettings(),
             .clipboard => s.openClipboard(),

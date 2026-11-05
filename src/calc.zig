@@ -1,7 +1,8 @@
 //! Math typed into the bar, answered as it's typed: + - * / % ^, × and ÷,
 //! parentheses, pi and e, and sqrt, sin, cos, tan, ln, log, abs. A query
 //! counts as math only with an operator or a function in it, so "42" or
-//! "e" alone stay searches.
+//! "e" alone stay searches. Conversions (convert.zig) work out the math
+//! around them here too: `lead` before the units, `carry` after them.
 const std = @import("std");
 
 pub const Error = error{ Syntax, Domain };
@@ -11,6 +12,11 @@ const Parser = struct {
     i: usize = 0,
     /// An operator or a function was seen: this is math, not a name.
     math: bool = false,
+    /// Numbers may group thousands with commas ("1,500"), as amounts are
+    /// written in a conversion.
+    commas: bool = false,
+    /// The first operand, already worked out: `carry` goes on from it.
+    seed: ?f64 = null,
 
     fn skip(p: *Parser) void {
         while (p.i < p.s.len and p.s[p.i] == ' ') p.i += 1;
@@ -70,7 +76,8 @@ const Parser = struct {
 
     /// Right-associative: 2^3^2 is 2^9.
     fn power(p: *Parser) Error!f64 {
-        const base = try p.unary();
+        const base = p.seed orelse try p.unary();
+        p.seed = null;
         if (p.op('^', "")) {
             p.math = true;
             return std.math.pow(f64, base, try p.power());
@@ -99,7 +106,7 @@ const Parser = struct {
 
     fn number(p: *Parser) Error!f64 {
         const start = p.i;
-        while (p.i < p.s.len and (std.ascii.isDigit(p.s[p.i]) or p.s[p.i] == '.' or p.s[p.i] == '_')) p.i += 1;
+        while (p.i < p.s.len and (std.ascii.isDigit(p.s[p.i]) or p.s[p.i] == '.' or p.s[p.i] == '_' or (p.commas and p.s[p.i] == ','))) p.i += 1;
         // 1e3, 2.5E-4
         if (p.i < p.s.len and (p.s[p.i] == 'e' or p.s[p.i] == 'E') and p.i + 1 < p.s.len and
             (std.ascii.isDigit(p.s[p.i + 1]) or ((p.s[p.i + 1] == '-' or p.s[p.i + 1] == '+') and p.i + 2 < p.s.len and std.ascii.isDigit(p.s[p.i + 2]))))
@@ -107,7 +114,18 @@ const Parser = struct {
             p.i += 2;
             while (p.i < p.s.len and std.ascii.isDigit(p.s[p.i])) p.i += 1;
         }
-        return std.fmt.parseFloat(f64, p.s[start..p.i]) catch error.Syntax;
+        const text = p.s[start..p.i];
+        if (std.mem.indexOfScalar(u8, text, ',') == null) return std.fmt.parseFloat(f64, text) catch error.Syntax;
+        // "1,500": the commas only group the digits.
+        var buf: [64]u8 = undefined;
+        var n: usize = 0;
+        for (text) |ch| {
+            if (ch == ',') continue;
+            if (n == buf.len) return error.Syntax;
+            buf[n] = ch;
+            n += 1;
+        }
+        return std.fmt.parseFloat(f64, buf[0..n]) catch error.Syntax;
     }
 
     fn word(p: *Parser) Error!f64 {
@@ -146,6 +164,28 @@ pub fn eval(query: []const u8) ?f64 {
     if (p.peek() != 0 or !p.math) return null;
     if (std.math.isNan(v) or std.math.isInf(v)) return null;
     return v;
+}
+
+pub const Lead = struct { value: f64, rest: []const u8 };
+
+/// The math `s` starts with and what follows it: "35 * 7 ttd" is 245,
+/// then "ttd". A plain number counts, and numbers may group thousands with
+/// commas ("1,500"). Null when `s` doesn't start with math that computes.
+pub fn lead(s: []const u8) ?Lead {
+    var p: Parser = .{ .s = s, .commas = true };
+    const v = p.expr() catch return null;
+    if (!std.math.isFinite(v)) return null;
+    return .{ .value = v, .rest = s[p.i..] };
+}
+
+/// `v` carried through `ops`, the rest of an expression that `v` begins:
+/// "* 12 + 1" is v * 12 + 1, by the usual precedence; nothing is `v`
+/// itself. Null when `ops` isn't that, or the value can't be computed.
+pub fn carry(v: f64, ops: []const u8) ?f64 {
+    var p: Parser = .{ .s = ops, .commas = true, .seed = v };
+    const x = p.expr() catch return null;
+    if (p.peek() != 0 or !std.math.isFinite(x)) return null;
+    return x;
 }
 
 /// The value as the row shows it and the clipboard takes it: whole numbers
@@ -198,6 +238,38 @@ test "math is answered, names are not" {
     try t.expectEqual(@as(?f64, null), eval("1/0"));
     try t.expectEqual(@as(?f64, null), eval("2 +"));
     try t.expectEqual(@as(?f64, null), eval("sqrt(-1)"));
+}
+
+test "math before a conversion's units, and after them" {
+    const t = std.testing;
+    const l = lead("35 * 7 ttd to usd").?;
+    try t.expectEqual(@as(f64, 245), l.value);
+    try t.expectEqualStrings("ttd to usd", l.rest);
+    const k = lead("(2 + 3) * 2km").?;
+    try t.expectEqual(@as(f64, 10), k.value);
+    try t.expectEqualStrings("km", k.rest);
+    try t.expectEqual(@as(f64, 1500.5), lead("1,500.5 m").?.value);
+    try t.expectEqual(@as(f64, -1), lead("-1 km").?.value);
+    try t.expectEqual(@as(f64, 0.5), lead(".5 km").?.value);
+    try t.expect(lead("km to mi") == null);
+    try t.expect(lead("35 * ttd") == null);
+    try t.expect(lead("(35 * 7 ttd") == null);
+    try t.expect(lead("1/0 km") == null);
+    try t.expectEqual(@as(?f64, 24), carry(12, "* 2"));
+    try t.expectEqual(@as(?f64, 25), carry(12, "* 2 + 1"));
+    try t.expectEqual(@as(?f64, 14), carry(12, "+ 1 * 2"));
+    try t.expectEqual(@as(?f64, 144), carry(12, "^ 2"));
+    try t.expectEqual(@as(?f64, 6), carry(12, "/ (1 + 1)"));
+    try t.expectEqual(@as(?f64, 12000), carry(12, "× 1,000"));
+    try t.expectEqual(@as(?f64, 12), carry(12, ""));
+    try t.expectEqual(@as(?f64, null), carry(12, "*"));
+    try t.expectEqual(@as(?f64, null), carry(12, "/ 0"));
+    try t.expectEqual(@as(?f64, null), carry(12, "2"));
+    try t.expectEqual(@as(?f64, null), carry(12, "* (2"));
+    try t.expectEqual(@as(?f64, null), carry(12, "* 2 in cm"));
+    try t.expectEqual(@as(?f64, null), carry(std.math.inf(f64), ""));
+    // Plain math still reads no commas.
+    try t.expectEqual(@as(?f64, null), eval("1,000 * 2"));
 }
 
 test "values read as people write them" {

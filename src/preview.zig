@@ -49,7 +49,7 @@ pub const Preview = struct {
         return objc.msg(objc.BOOL, web, "isHidden", .{}) == objc.NO;
     }
 
-    /// The page to the panel's height `h` (it springs as it opens).
+    /// The page to the panel's height `h`.
     pub fn fit(p: *Preview, h: f32) void {
         const web = p.web orelse return;
         const host = objc.msg(?objc.Object, web, "superview", .{}) orelse return;

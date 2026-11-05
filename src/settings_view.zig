@@ -17,13 +17,15 @@ const mac = @import("builtin").os.tag == .macos;
 /// A Nix build: the Nix modules own startup and updates.
 const nix = @import("build_options").nix_managed;
 
-const RowKind = enum { choice, suggest, browser, login, menu_bar, clipboard, clear_clipboard, updates, welcome, quit };
+const RowKind = enum { choice, suggest, files, browser, login, menu_bar, clipboard, clear_clipboard, updates, welcome, quit, theme };
+const Theme = @import("palette.zig").Theme;
 
-/// As tall as its sections, never past the window. The Mac has two rows
-/// more: where searches open, and the menu bar icon.
-const base_height: f32 = 512 + if (mac) 2 * 46 else 0;
+/// As tall as its sections, never past the window. The Mac has three rows
+/// more (file search, where searches open, and the menu bar icon), and
+/// tighter spacing to fit them.
+const base_height: f32 = if (mac) 620 else 512;
 /// The clipboard's section: a heading, a switch and a button.
-const clip_height: f32 = 116;
+const clip_height: f32 = if (mac) 110 else 116;
 /// The tallest it gets (with the clipboard's section).
 pub const height: f32 = base_height + clip_height;
 
@@ -40,6 +42,7 @@ pub const Settings = struct {
     recording: bool = false,
     refused: bool = false,
     suggest: bool = true,
+    files: bool = false,
     /// Return sends searches to the browser (`Nanolight.searches_out`).
     browser: bool = false,
     login: bool = false,
@@ -81,6 +84,7 @@ pub const Settings = struct {
 
     fn pull(s: *Settings, n: *panel.Nanolight) void {
         s.suggest = n.suggest_on;
+        s.files = n.files_on;
         s.browser = n.searches_out;
         const h = s.hooks(n) orelse return;
         s.menu_bar = h.menu_bar(h.ctx, null);
@@ -103,27 +107,54 @@ pub const Settings = struct {
         const f = motion.frame(c, .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = panel.spring } });
         const page = ui.div(c).column().wFull().grow().motion(f);
         defer page.end();
-        head(c, p);
+        s.head(c, n, p, rows);
         s.body(c, n, p, rows);
         foot(c, p);
     }
 
-    fn head(c: *ui.Context, p: Palette) void {
+    fn head(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
         const bar = ui.div(c).row().wFull().h(panel.header_h).px(16).gap(10).itemsCenter();
         defer bar.end();
         const badge = ui.div(c).size(28, 28).rounded(8).center().bg(p.tile);
         ui.icon(c, "gearshape", .{ .size = 15, .weight = .medium, .color = p.text });
         badge.end();
         ui.text(c, "Settings", .{ .size = 18, .weight = .semibold, .color = p.text, .tracking = -0.2 });
+        ui.spacer(c);
+        s.themes(c, n, p, rows);
+    }
+
+    /// The theme's swatches, in the header: always in sight, however many
+    /// rows are under it. The last row for ↑/↓; ←/→ step through them.
+    fn themes(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
+        const on = isSel(rows, s.sel, .theme);
+        ui.key(c, "theme");
+        const group = ui.div(c).row().h(30).px(10).gap(4).itemsCenter().rounded(10).bg(if (on) p.sel else p.fill.alpha(0));
+        defer group.end();
+        ui.text(c, n.theme.title(), .{ .size = 12.5, .weight = .medium, .color = if (on) p.text else p.sub });
+        ui.div(c).w(4).end();
+        for (Theme.all) |t| {
+            ui.key(c, c.print("theme-{s}", .{@tagName(t)}));
+            const ring = ui.div(c).size(20, 20).roundedFull().center().control().border(if (t == n.theme) p.text.alpha(0.7) else p.fill.alpha(0));
+            defer ring.end();
+            if (ring.clicked()) s.setTheme(n, t);
+            ui.div(c).size(12, 12).roundedFull().bg(t.hue(c.theme.dark) orelse p.sub).end();
+        }
+    }
+
+    fn setTheme(s: *Settings, n: *panel.Nanolight, t: Theme) void {
+        n.theme = t;
+        const h = s.hooks(n) orelse return;
+        h.theme(h.ctx, t);
     }
 
     fn body(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
-        const col = ui.div(c).column().wFull().px(20).pt(2).pb(6).gap(10).grow();
+        const col = ui.div(c).column().wFull().px(20).pt(2).pb(6).gap(if (mac) 8 else 10).grow();
         defer col.end();
         label(c, p, "Open Nanolight with");
         s.choices(c, n, p);
         label(c, p, "Search");
         s.switchRow(c, n, p, rows, .suggest, "Google Suggestions");
+        if (mac) s.switchRow(c, n, p, rows, .files, "File Search");
         if (mac) s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
         if (mac or !nix) label(c, p, "This " ++ @import("results.zig").machine);
         if (!nix) s.switchRow(c, n, p, rows, .login, "Open at Login");
@@ -211,6 +242,7 @@ pub const Settings = struct {
         ui.spacer(c);
         mark(c, p, switch (kind) {
             .suggest => s.suggest,
+            .files => s.files,
             .browser => s.browser,
             .login => s.login,
             .menu_bar => s.menu_bar,
@@ -239,6 +271,12 @@ pub const Settings = struct {
                 s.suggest = n.suggest_on;
                 n.built = 1;
                 if (h) |host| host.suggest(host.ctx, s.suggest);
+            },
+            .files => {
+                n.files_on = !n.files_on;
+                s.files = n.files_on;
+                n.built = 1;
+                if (n.kv) |kv| kv.set(@import("files.zig").enabled_key, if (n.files_on) "1" else "0") catch {};
             },
             .browser => {
                 n.searches_out = !n.searches_out;
@@ -313,7 +351,7 @@ pub const Settings = struct {
             s.activateSelected(n);
         }
         s.pull(n);
-        const h = n.follow(c, s.tall());
+        const h = n.follow(s.tall());
         const box = ui.div(c).column().wFull().h(h).clip();
         defer box.end();
         s.view(c, n, p);
@@ -335,8 +373,11 @@ pub const Settings = struct {
     }
 
     fn nudge(s: *Settings, n: *panel.Nanolight, rows: []const RowKind, dir: i8) void {
-        if (rows[s.sel] != .choice) return;
-        s.pick(n, s.choice.step(dir));
+        switch (rows[s.sel]) {
+            .choice => s.pick(n, s.choice.step(dir)),
+            .theme => s.setTheme(n, n.theme.step(dir)),
+            else => {},
+        }
     }
 
     fn activate(s: *Settings, n: *panel.Nanolight, kind: RowKind) void {
@@ -344,7 +385,7 @@ pub const Settings = struct {
         switch (kind) {
             // ←/→ step through the four; Return records one's own.
             .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, s.shown(), 1),
-            .suggest, .browser, .login, .menu_bar, .clipboard => s.flip(n, kind),
+            .suggest, .files, .browser, .login, .menu_bar, .clipboard => s.flip(n, kind),
             .clear_clipboard => {
                 if (h) |host| host.clipboard_clear(host.ctx);
                 s.cleared = true;
@@ -357,18 +398,20 @@ pub const Settings = struct {
                 host.welcome(host.ctx);
             },
             .quit => if (h) |host| host.quit(host.ctx),
+            .theme => s.setTheme(n, n.theme.step(1)),
         }
     }
 };
 
 /// The rows this build shows, in order, with or without the clipboard's.
+/// The theme's swatches, in the header, are the last for ↑/↓.
 fn visible(comptime clip: bool) []const RowKind {
     const T = struct {
         const rows = blk: {
-            var list: [10]RowKind = undefined;
+            var list: [12]RowKind = undefined;
             var n: usize = 0;
-            for ([_]RowKind{ .choice, .suggest, .browser, .login, .menu_bar, .clipboard, .clear_clipboard, .updates, .welcome, .quit }) |k| {
-                if (!mac and (k == .browser or k == .menu_bar)) continue;
+            for ([_]RowKind{ .choice, .suggest, .files, .browser, .login, .menu_bar, .clipboard, .clear_clipboard, .updates, .welcome, .quit, .theme }) |k| {
+                if (!mac and (k == .files or k == .browser or k == .menu_bar)) continue;
                 if (nix and (k == .login or k == .updates)) continue;
                 if (!clip and (k == .clipboard or k == .clear_clipboard)) continue;
                 list[n] = k;
