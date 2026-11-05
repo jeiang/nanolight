@@ -357,11 +357,14 @@ pub const Live = struct {
         if (url) |u| l.preview.show(w, u, l.s.last_h) else l.preview.hide();
     }
 
-    /// Escape or ⌘↩ while the page has the keys.
+    /// Escape (the page gone, the panel with it) or ⌘↩ while the page has the keys.
     fn pageKey(ctx: *anyopaque, key: preview_mod.Key) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         switch (key) {
-            .escape => l.s.back(),
+            .escape => {
+                l.s.back();
+                hide(l);
+            },
             .open_out => {
                 var buf: [2048]u8 = undefined;
                 open(l, l.preview.current(&buf) orelse l.s.preview_url);
@@ -788,9 +791,9 @@ pub fn main(init: std.process.Init) !void {
     live.acct.?.load();
     live.menu();
     // Restarted by an automatic update: quietly, the panel saying so the
-    // next time it opens. A Nix build is started by its service at login
-    // and on every rebuild, so it stays in the background unless the
-    // welcome is due. Otherwise launching shows the panel.
+    // next time it opens. Otherwise launching stays in the background,
+    // the key or the menu bar icon opening the panel, unless the welcome
+    // is due.
     var note_buf: [64]u8 = undefined;
     const old = kv.get(init.gpa, updated_key) catch null;
     defer if (old) |v| init.gpa.free(v);
@@ -799,6 +802,6 @@ pub fn main(init: std.process.Init) !void {
     if (restarted or old != null) {
         const now = if (live.updater) |u| u.current else old.?;
         s.note = std.fmt.bufPrint(&note_buf, "Updated to {s}", .{now}) catch "Updated";
-    } else if (!nix_managed or o.active) Live.toggle(&live);
+    } else if (o.active) Live.toggle(&live);
     try app.run();
 }

@@ -155,13 +155,11 @@ test "the panel finds, moves, answers and hands off" {
     press(&t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("https://claude.ai/new?q=liquid%20glass", probe.opened[0..probe.opened_len]);
 
-    // Escape clears the query, then closes.
+    // Escape closes at once, even with a query; the query waits for next time.
     probe.hidden = false;
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expectEqualStrings("", s.query.text());
-    try std.testing.expect(!probe.hidden);
-    _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(probe.hidden);
+    try std.testing.expectEqualStrings("liquid glass", s.query.text());
 }
 
 const suggest = @import("suggest.zig");
@@ -311,10 +309,12 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(t.hasText("Open in Browser"));
     try std.testing.expectEqual(view.max_height, s.height());
     try std.testing.expect(!web.probe.hidden);
-    // Escape: the rows again, the page gone.
+    // Escape: the page gone, and the panel with it.
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(web.page_len == null);
+    try std.testing.expect(web.probe.hidden);
     try std.testing.expectEqualStrings("liquid glass apple", s.query.text());
+    web.probe.hidden = false;
 
     // Return on words no app matches: Google's page; typing takes it away.
     press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "pizza" } });
@@ -533,9 +533,10 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     try std.testing.expect(s.settings_ui.open);
     try std.testing.expect(t.hasText("Open Nanolight with"));
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(!s.settings_ui.open);
+    try std.testing.expect(!s.settings_ui.open and prefs.probe.hidden);
+    prefs.probe.hidden = false;
 
-    // ⌘, opens it; Esc goes back to search.
+    // ⌘, opens it; Esc closes it and the panel, the search there next time.
     try std.testing.expect(t.shortcut(.{ .key = ',', .cmd = true }));
     t.settle(1);
     try std.testing.expect(s.settings_ui.open);
@@ -545,7 +546,7 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     try std.testing.expect(t.hasText("Check for Updates") != nix);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     t.settle(1);
-    try std.testing.expect(!s.settings_ui.open);
+    try std.testing.expect(!s.settings_ui.open and prefs.probe.hidden);
     try std.testing.expect(t.hasText("Safari"));
 
     // Typing "settings" lists the row; Return opens it.

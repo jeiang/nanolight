@@ -181,7 +181,7 @@ pub const Ext = struct {
         defer body.end();
         const v = e.view;
         const acts: []const model.Action = if (v) |vv| vv.actionsAt(e.sel) else &.{};
-        e.keys(c, acts);
+        e.keys(c, n, acts);
         e.header(c, p);
         ui.div(c).wFull().h(1).bg(p.hair).end();
         const mid = ui.div(c).column().wFull().grow().clip();
@@ -198,7 +198,7 @@ pub const Ext = struct {
         e.footer(c, p, acts);
     }
 
-    fn keys(e: *Ext, c: *ui.Context, acts: []const model.Action) void {
+    fn keys(e: *Ext, c: *ui.Context, nl: *pview.Nanolight, acts: []const model.Action) void {
         const S = ui.Shortcut;
         const v = e.view;
         const n = if (e.actions_open) acts.len else if (v) |vv| (if (vv.isList()) vv.count() else 0) else 0;
@@ -233,11 +233,8 @@ pub const Ext = struct {
             } else if (acts.len > 0) e.run(acts[0]);
         }
         if (c.shortcut(.{ .key = S.escape })) {
-            if (e.actions_open) {
-                e.actions_open = false;
-            } else if (e.query.text().len > 0 and v != null and v.?.isList()) {
-                e.query.clear();
-            } else e.say("pop", null, null);
+            e.say("pop", null, null);
+            nl.hidePanel();
         }
     }
 

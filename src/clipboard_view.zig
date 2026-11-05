@@ -1,7 +1,7 @@
 //! Clipboard History, in the panel in place of the rows: a search field, the
 //! entries newest first (type, source app, how long ago), and what the
 //! selected one holds. Return pastes it, ⌘↩ (Ctrl+Enter) only copies it,
-//! ⌘⌫ (Ctrl+Backspace, or ⌘D / Ctrl+D) deletes it, Esc goes back. ↑ ↓, ^N ^P and ^J ^K move.
+//! ⌘⌫ (Ctrl+Backspace, or ⌘D / Ctrl+D) deletes it, Esc closes it and the panel. ↑ ↓, ^N ^P and ^J ^K move.
 //! The panel hides on a paste; a paste that could only copy says why in the
 //! footer.
 const std = @import("std");
@@ -127,7 +127,10 @@ pub const Screen = struct {
 
     fn keys(s: *Screen, c: *ui.Context, n: *panel.Nanolight, hh: ?*const Host) void {
         const S = ui.Shortcut;
-        if (c.shortcut(.{ .key = S.escape })) return s.back(n);
+        if (c.shortcut(.{ .key = S.escape })) {
+            s.back(n);
+            return n.hidePanel();
+        }
         const h = hh orelse return;
         if (panel.Nanolight.moveDown(c)) {
             s.note = "";
@@ -264,7 +267,7 @@ pub const Screen = struct {
         ui.text(c, "Delete", .{ .size = 12, .color = p.sub.alpha(0.8) });
         ui.kbd(c, results.mod ++ "⌫");
         ui.div(c).w(1).h(14).bg(p.hair).end();
-        ui.text(c, "Back", .{ .size = 12, .color = p.sub.alpha(0.8) });
+        ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
         ui.kbd(c, "esc");
     }
 };

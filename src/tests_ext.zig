@@ -26,16 +26,19 @@ const Heard = struct {
 };
 
 fn noop(_: *anyopaque) void {}
+fn hideFlag(ctx: *anyopaque) void {
+    @as(*bool, @ptrCast(@alignCast(ctx))).* = true;
+}
 fn noopOpen(_: *anyopaque, _: []const u8) void {}
 
-test "a script's output shows every line, and Escape gives the search its keys back" {
+test "a script's output shows every line, and Escape closes it and the panel" {
     const gpa = std.testing.allocator;
     var ix: Index = .init(gpa);
     defer ix.deinit();
     var s: view.Nanolight = .{ .index = &ix };
     defer s.query.deinit();
-    var probe: u8 = 0;
-    s.host = .{ .ctx = &probe, .open = noopOpen, .hide = noop };
+    var hidden = false;
+    s.host = .{ .ctx = &hidden, .open = noopOpen, .hide = hideFlag };
     var ext: Ext = .{ .gpa = gpa, .back = &s.query };
     defer ext.deinit();
     s.ext = &ext;
@@ -59,6 +62,7 @@ test "a script's output shows every line, and Escape gives the search its keys b
     try std.testing.expect(t.hasText("/dev/vda1 10G 2G"));
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(std.mem.indexOf(u8, heard.text(), "\"pop\"") != null);
+    try std.testing.expect(hidden);
     // The runner stops the screen on a pop; the search has the keys again.
     ext.stop();
     t.settle(1);
@@ -67,14 +71,14 @@ test "a script's output shows every line, and Escape gives the search its keys b
     try std.testing.expectEqualStrings("gre", s.query.text());
 }
 
-test "a list's rows, its actions on ⌘K, and Return runs the first" {
+test "a list's rows, its actions on ⌘K, Return runs the first, Escape closes even with them open" {
     const gpa = std.testing.allocator;
     var ix: Index = .init(gpa);
     defer ix.deinit();
     var s: view.Nanolight = .{ .index = &ix };
     defer s.query.deinit();
-    var probe: u8 = 0;
-    s.host = .{ .ctx = &probe, .open = noopOpen, .hide = noop };
+    var hidden = false;
+    s.host = .{ .ctx = &hidden, .open = noopOpen, .hide = hideFlag };
     var ext: Ext = .{ .gpa = gpa, .back = &s.query };
     defer ext.deinit();
     s.ext = &ext;
@@ -98,6 +102,14 @@ test "a list's rows, its actions on ⌘K, and Return runs the first" {
     t.textOps(&.{.{ .command = .insert_newline }});
     t.settle(1);
     try std.testing.expect(std.mem.indexOf(u8, heard.text(), "\"id\":\"copy\"") != null);
+    // With the actions open and a query typed, one Escape pops and hides.
+    t.typeText("zig");
+    try std.testing.expect(t.shortcut(@import("raycast_view.zig").actions_key));
+    t.settle(1);
+    try std.testing.expect(ext.actions_open);
+    _ = t.shortcut(.{ .key = ui.Shortcut.escape });
+    try std.testing.expect(std.mem.indexOf(u8, heard.text(), "\"pop\"") != null);
+    try std.testing.expect(hidden);
 }
 
 test "a script's arguments: typed at once, Return runs it" {
