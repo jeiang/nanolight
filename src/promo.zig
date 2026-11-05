@@ -98,6 +98,8 @@ const script = later([_]Step{
     .{ .at = 5.1, .op = say("Settings, in the panel", "⌘ ,") },
     .{ .at = 7.6, .op = esc },
     .{ .at = 7.6, .op = say("", "") },
+    // Esc closes Settings and the panel; the key opens it again.
+    .{ .at = 7.9, .op = .show },
     .{ .at = 8.0, .op = say("Raycast extensions", "") },
 } ++ typing(8.0, "hacker", 0.09) ++ [_]Step{
     .{ .at = 9.0, .op = .ext_list },

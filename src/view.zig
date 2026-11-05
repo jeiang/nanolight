@@ -167,6 +167,12 @@ pub const Nanolight = struct {
         s.clip_ui.hide();
     }
 
+    /// The panel away. A screen's Escape closes the screen and this too,
+    /// rather than going back to the rows.
+    pub fn hidePanel(s: *Nanolight) void {
+        if (s.host) |h| h.hide(h.ctx);
+    }
+
     /// Called as it is shown: the query selected, the keys its own.
     pub fn reveal(s: *Nanolight) void {
         s.back();
@@ -290,7 +296,10 @@ pub const Nanolight = struct {
         const S = ui.Shortcut;
         if (s.previewing) {
             if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.go(s.preview_url);
-            if (c.shortcut(.{ .key = S.escape })) s.back();
+            if (c.shortcut(.{ .key = S.escape })) {
+                s.back();
+                s.hidePanel();
+            }
             return;
         }
         // ⌘,: Settings, as on the Mac. The comma never reaches the field.
@@ -313,7 +322,7 @@ pub const Nanolight = struct {
             s.activate(c);
         };
         if (c.shortcut(.{ .key = S.escape })) {
-            if (s.query.text().len > 0) s.query.clear() else if (s.host) |h| h.hide(h.ctx);
+            if (s.query.text().len > 0) s.query.clear() else s.hidePanel();
         }
     }
 
@@ -578,7 +587,7 @@ pub const Nanolight = struct {
             ui.text(c, "Open in Browser", .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
             ui.kbd(c, results.mod ++ "↩");
             ui.div(c).w(1).h(14).bg(p.hair).end();
-            ui.text(c, "Back", .{ .size = 12, .color = p.sub.alpha(0.8) });
+            ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
             ui.kbd(c, "esc");
             return;
         }

@@ -321,7 +321,7 @@ pub const Settings = struct {
         ui.div(c).wFull().h(1).bg(p.hair).end();
         const bar = ui.div(c).row().wFull().h(panel.footer_h).px(16).gap(8).itemsCenter();
         defer bar.end();
-        ui.text(c, "Back", .{ .size = 12, .color = p.sub.alpha(0.8) });
+        ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
         ui.kbd(c, "esc");
     }
 
@@ -330,7 +330,7 @@ pub const Settings = struct {
         if (c.shortcut(.{ .key = S.escape })) {
             s.hide();
             n.query.focus();
-            return;
+            return n.hidePanel();
         }
         if (!s.returned(c)) s.took_return = false;
         if (panel.Nanolight.moveDown(c)) s.sel = (s.sel + 1) % rows.len;

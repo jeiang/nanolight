@@ -157,7 +157,7 @@ test "the screen lists newest first with type, app and time, and the selection's
     try testing.expect(s.height() <= view.max_height);
 }
 
-test "typing searches text, file names and apps; Esc goes back, an empty query first" {
+test "typing searches text, file names and apps; Esc closes the screen and the panel" {
     const gpa = testing.allocator;
     var ix: Index = .init(gpa);
     defer ix.deinit();
@@ -179,9 +179,9 @@ test "typing searches text, file names and apps; Esc goes back, an empty query f
     try testing.expect(t.hasText("Image 800 × 600"));
     tests.press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "nothing like it" } });
     try testing.expect(t.hasText("No matches."));
-    // Esc leaves the screen, the query cleared for the rows.
+    // Esc leaves the screen and hides the panel, the query cleared for the rows.
     try testing.expect(t.shortcut(.{ .key = S.escape }));
-    try testing.expect(!s.clip_ui.open);
+    try testing.expect(!s.clip_ui.open and f.hidden);
     try testing.expectEqualStrings("", s.query.text());
     t.settle(1);
     try testing.expect(t.hasText("Search apps, do math, search the web…"));
