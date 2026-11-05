@@ -77,16 +77,14 @@ const script = [_]Step{
     .{ .at = 16.9, .op = .show },
     .{ .at = 16.9, .op = .{ .caption = "Back with the last query selected" } },
     .{ .at = 18.0, .op = esc },
-    .{ .at = 18.0, .op = .{ .caption = "esc clears the query" } },
-    .{ .at = 18.6, .op = .hide },
+    .{ .at = 18.0, .op = .{ .caption = "esc: gone, at once" } },
     .{ .at = 18.6, .op = .{ .caption = "Light or dark, as the system is" } },
     .{ .at = 19.1, .op = .light },
     .{ .at = 19.1, .op = .show },
 } ++ typing(19.5, "cal", 0.14) ++ [_]Step{
     .{ .at = 20.6, .op = down },
     .{ .at = 21.3, .op = esc },
-    .{ .at = 21.3, .op = .{ .caption = "esc, esc: gone" } },
-    .{ .at = 21.8, .op = esc },
+    .{ .at = 21.3, .op = .{ .caption = "esc from anywhere: gone" } },
     .{ .at = 22.5, .op = .{ .caption = "" } },
     .{ .at = 22.6, .op = .outro_on },
 };

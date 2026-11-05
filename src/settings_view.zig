@@ -1,7 +1,7 @@
 //! Settings, in the panel itself: the shortcut, Google's suggestions and
 //! where searches open, opening at login, the menu bar icon, the sync
 //! status, updates. The same glass, the
-//! same rows. Esc goes back to search; ↑/↓ move, Return and Space do the
+//! same rows. Esc closes it and the panel; ↑/↓ move, Return and Space do the
 //! row. The shortcut is one of four, or any key recorded with ⌘, ⌥ or ⌃
 //! (the last chip). Without a host (tests, the film) it still draws, and changes
 //! nothing the app keeps.

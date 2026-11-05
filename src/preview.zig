@@ -3,7 +3,7 @@
 //! after. It tells sites it is Safari, as browse does, so Google serves
 //! its own page, and a link that asks for a new window opens in it.
 //! Escape and ⌘↩ reach the panel even while the page has the keys
-//! (`watch`): back to the rows, or into the browser; ⌘[ goes back a page.
+//! (`watch`): the page and the panel away, or into the browser; ⌘[ goes back a page.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;

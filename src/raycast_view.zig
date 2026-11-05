@@ -233,12 +233,8 @@ pub const Ext = struct {
             } else if (acts.len > 0) e.run(acts[0]);
         }
         if (c.shortcut(.{ .key = S.escape })) {
-            if (e.actions_open) {
-                e.actions_open = false;
-            } else {
-                e.say("pop", null, null);
-                nl.hidePanel();
-            }
+            e.say("pop", null, null);
+            nl.hidePanel();
         }
     }
 

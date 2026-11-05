@@ -167,7 +167,7 @@ pub const Nanolight = struct {
         s.clip_ui.hide();
     }
 
-    /// The panel away. A screen's Escape closes the screen and this too,
+    /// The panel away: Escape, on any screen, closes it (and the screen)
     /// rather than going back to the rows.
     pub fn hidePanel(s: *Nanolight) void {
         if (s.host) |h| h.hide(h.ctx);
@@ -321,9 +321,7 @@ pub const Nanolight = struct {
             s.sel = k;
             s.activate(c);
         };
-        if (c.shortcut(.{ .key = S.escape })) {
-            if (s.query.text().len > 0) s.query.clear() else s.hidePanel();
-        }
+        if (c.shortcut(.{ .key = S.escape })) s.hidePanel();
     }
 
     fn header(s: *Nanolight, c: *ui.Context, p: Palette) bool {

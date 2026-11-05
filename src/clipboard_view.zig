@@ -1,7 +1,7 @@
 //! Clipboard History, in the panel in place of the rows: a search field, the
 //! entries newest first (type, source app, how long ago), and what the
 //! selected one holds. Return pastes it, ⌘↩ (Ctrl+Enter) only copies it,
-//! ⌘⌫ (Ctrl+Backspace, or ⌘D / Ctrl+D) deletes it, Esc goes back. ↑ ↓, ^N ^P and ^J ^K move.
+//! ⌘⌫ (Ctrl+Backspace, or ⌘D / Ctrl+D) deletes it, Esc closes it and the panel. ↑ ↓, ^N ^P and ^J ^K move.
 //! The panel hides on a paste; a paste that could only copy says why in the
 //! footer.
 const std = @import("std");

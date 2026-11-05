@@ -155,13 +155,11 @@ test "the panel finds, moves, answers and hands off" {
     press(&t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("https://claude.ai/new?q=liquid%20glass", probe.opened[0..probe.opened_len]);
 
-    // Escape clears the query, then closes.
+    // Escape closes at once, even with a query; the query waits for next time.
     probe.hidden = false;
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expectEqualStrings("", s.query.text());
-    try std.testing.expect(!probe.hidden);
-    _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(probe.hidden);
+    try std.testing.expectEqualStrings("liquid glass", s.query.text());
 }
 
 const suggest = @import("suggest.zig");
