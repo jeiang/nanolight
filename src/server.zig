@@ -122,7 +122,10 @@ pub fn handle(arena: std.mem.Allocator, io: Io, state: Io.Dir, tokens: []const T
     // An unreadable stored record is not replaced: that would lose it.
     const have: ?settings.Settings = if (stored) |b| settings.decode(arena, b) orelse return fail(r) else null;
     const merged = settings.merge(arena, incoming, have orelse incoming, req.first) catch return fail(r);
-    const body = settings.encode(arena, merged) catch return fail(r);
+    const body = (settings.encodeWithin(arena, merged, max_body * 2) catch return fail(r)) orelse {
+        r.status = 413;
+        return r;
+    };
     write(io, state, name, body) catch return fail(r);
     r.status = 200;
     r.body = body;
@@ -367,6 +370,28 @@ test "a body that is not a record is a 400, and one over 256 KiB a 413" {
     @memset(big, ' ');
     try testing.expectEqual(@as(u16, 413), send(a, tmp.dir, tokens, .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = big }).status);
     try testing.expectEqual(@as(u16, 404), send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/v1/sync", .authorization = bearer }).status);
+}
+
+test "a merge that outgrows the stored limit sheds apps and stays readable" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const tokens = try testTokens(a);
+    const pad = try a.alloc(u8, 480);
+    @memset(pad, 'x');
+    for (0..3) |k| {
+        const launches = try a.alloc(settings.Launch, 450);
+        for (launches, 0..) |*l, i| l.* = .{ .name = "App", .path = try std.fmt.allocPrint(a, "/Applications/{d}/{d:0>3}/{s}", .{ k, i, pad }), .count = 1 };
+        const body = try settings.encode(a, .{ .hotkey = "cmd_space", .suggest = true, .at = 1, .launches = launches });
+        try testing.expect(body.len <= max_body);
+        const put = send(a, tmp.dir, tokens, .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = body });
+        try testing.expectEqual(@as(u16, 200), put.status);
+        try testing.expect(put.body.len <= max_body * 2);
+        const got = send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/v1/sync", .authorization = bearer });
+        try testing.expectEqual(@as(u16, 200), got.status);
+    }
 }
 
 test "a first sync keeps the stored record, a later one the newer" {

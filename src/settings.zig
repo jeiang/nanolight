@@ -92,16 +92,41 @@ pub fn merge(arena: std.mem.Allocator, local: Settings, remote: Settings, prefer
             }
         } else try list.append(arena, l);
     };
-    // A steady order, so the same counts encode the same.
-    std.sort.pdq(Launch, list.items, {}, struct {
-        fn f(_: void, a: Launch, b: Launch) bool {
-            const ak = launchSortKey(a);
-            const bk = launchSortKey(b);
-            return std.mem.lessThan(u8, ak, bk);
-        }
-    }.f);
+    sortByKey(list.items);
     out.launches = list.items;
     return out;
+}
+
+/// A steady order, so the same counts encode the same.
+fn sortByKey(launches: []Launch) void {
+    std.sort.pdq(Launch, launches, {}, struct {
+        fn f(_: void, a: Launch, b: Launch) bool {
+            return std.mem.lessThan(u8, launchSortKey(a), launchSortKey(b));
+        }
+    }.f);
+}
+
+/// `s` encoded in at most `limit` bytes, or null when even without launches
+/// it is not. Too many launches drop the least opened, the same ones on every
+/// run (ties go to the later key).
+pub fn encodeWithin(arena: std.mem.Allocator, s: Settings, limit: usize) !?[]u8 {
+    var out = s;
+    const ranked = try arena.dupe(Launch, s.launches);
+    std.sort.pdq(Launch, ranked, {}, struct {
+        fn f(_: void, a: Launch, b: Launch) bool {
+            if (a.count != b.count) return a.count > b.count;
+            return std.mem.lessThan(u8, launchSortKey(a), launchSortKey(b));
+        }
+    }.f);
+    var keep = ranked.len;
+    while (true) {
+        const body = try encode(arena, out);
+        if (body.len <= limit) return body;
+        if (keep == 0) return null;
+        keep /= 2;
+        out.launches = try arena.dupe(Launch, ranked[0..keep]);
+        sortByKey(@constCast(out.launches));
+    }
 }
 
 /// Whether the two say the same.
@@ -187,4 +212,23 @@ test "only http and https quicklinks are web addresses" {
     try std.testing.expect(!webUrl("javascript:alert(1)"));
     try std.testing.expect(!webUrl("https://"));
     for (default_quicklinks) |q| try std.testing.expect(webUrl(q.url));
+}
+
+test "a record too big for the limit sheds its least opened apps" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const launches = try a.alloc(Launch, 100);
+    for (launches, 0..) |*l, i| {
+        l.* = .{ .name = "App", .path = try std.fmt.allocPrint(a, "/Applications/{d:0>3}", .{i}), .count = @intCast(i) };
+    }
+    const s: Settings = .{ .hotkey = "cmd_space", .suggest = true, .at = 1, .launches = launches };
+    const whole = try encode(a, s);
+    const body = (try encodeWithin(a, s, whole.len - 1)).?;
+    try std.testing.expect(body.len < whole.len);
+    const got = decode(a, body).?;
+    try std.testing.expect(got.launches.len > 0 and got.launches.len < 100);
+    for (got.launches) |l| try std.testing.expect(l.count >= 100 - got.launches.len);
+    try std.testing.expect((try encodeWithin(a, s, 10)) == null);
+    try std.testing.expectEqualStrings(whole, (try encodeWithin(a, s, whole.len)).?);
 }
