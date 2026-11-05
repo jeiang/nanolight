@@ -74,6 +74,9 @@ const Parser = struct {
     src: []const u8,
     pos: usize = 0,
     diag: *Diag,
+    depth: usize = 0,
+
+    const max_depth = 64;
 
     fn fail(p: *Parser, msg: []const u8) error{Syntax} {
         var line: usize = 1;
@@ -218,6 +221,9 @@ const Parser = struct {
     // ----- values -----
 
     fn value(p: *Parser) Error!Value {
+        p.depth += 1;
+        defer p.depth -= 1;
+        if (p.depth > max_depth) return p.fail("arrays and inline tables nest too deeply");
         switch (p.peek() orelse return p.fail("expected a value")) {
             '"' => return .{ .string = try p.basic(true) },
             '\'' => return .{ .string = try p.literal(true) },
@@ -707,6 +713,13 @@ test "errors carry the line" {
     try expectFail("[[a]\n", 1);
     try expectFail("= 1\n", 1);
     try expectFail("a = 'x\n", 1);
+    for ([_][]const u8{ "[", "{a = " }) |open| {
+        const src = try testing.allocator.alloc(u8, 4 + open.len * 100_000);
+        defer testing.allocator.free(src);
+        @memcpy(src[0..4], "a = ");
+        for (0..100_000) |i| @memcpy(src[4 + i * open.len ..][0..open.len], open);
+        try expectFail(src, 1);
+    }
 }
 
 test "structure errors: closed and clashing tables" {
