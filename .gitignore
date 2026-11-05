@@ -4,3 +4,4 @@ zig-pkg/
 .DS_Store
 result
 result-*
+.worktrees/
