@@ -338,8 +338,12 @@ fn scientific(buf: []u8, v: f64) []const u8 {
 /// The unit answer as the row shows it, and as Return copies it.
 pub fn formatUnit(buf: []u8, a: UnitAnswer, grouped: bool) []const u8 {
     var nb: [64]u8 = undefined;
-    const n = if (a.value != 0 and @abs(a.value) < 1e-4) scientific(&nb, a.value) else calc.format(&nb, a.value, grouped);
-    return std.fmt.bufPrint(buf, "{s} {s}", .{ n, a.to }) catch "";
+    return std.fmt.bufPrint(buf, "{s} {s}", .{ formatUnitValue(&nb, a.value, grouped), a.to }) catch "";
+}
+
+/// The number of a unit answer, without its unit.
+pub fn formatUnitValue(buf: []u8, v: f64, grouped: bool) []const u8 {
+    return if (v != 0 and @abs(v) < 1e-4) scientific(buf, v) else calc.format(buf, v, grouped);
 }
 
 const testing = std.testing;
@@ -483,6 +487,7 @@ test "tiny unit results keep their digits" {
     var buf: [64]u8 = undefined;
     try testing.expectEqualStrings("1e-12 km", formatUnit(&buf, answer("1 nm to km", null).?.unit, true));
     try testing.expectEqualStrings("9.09495e-13 TiB", formatUnit(&buf, answer("1 b to tib", null).?.unit, true));
+    try testing.expectEqualStrings("1e-12", formatUnitValue(&buf, answer("1 nm to km", null).?.unit.value, false));
     try testing.expectEqualStrings("0.5 km", formatUnit(&buf, answer("500 m to km", null).?.unit, true));
 }
 

@@ -37,7 +37,7 @@ pub fn eligible(typed: []const u8) bool {
 pub fn url(buf: []u8, typed: []const u8) []const u8 {
     var w: std.Io.Writer = .fixed(buf);
     w.writeAll("https://suggestqueries.google.com/complete/search?client=firefox&q=") catch return "";
-    results.escape(&w, typed);
+    results.escape(&w, typed, true);
     return w.buffered();
 }
 

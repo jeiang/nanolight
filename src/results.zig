@@ -259,7 +259,7 @@ pub const Results = struct {
         switch (a) {
             .unit => |u| {
                 r.answer = convert.formatUnit(&r.answer_buf, u, true);
-                r.copy = calc.format(&r.copy_buf, u.value, false);
+                r.copy = convert.formatUnitValue(&r.copy_buf, u.value, false);
                 r.expr = std.fmt.bufPrint(&r.expr_buf, "{s} {s}", .{ calc.format(&nb, u.amount, true), u.from }) catch "";
             },
             .money => |m| {
@@ -323,20 +323,21 @@ pub fn url(buf: []u8, template: []const u8, argument: []const u8) []const u8 {
     var rest = template;
     while (std.mem.indexOf(u8, rest, mark)) |i| {
         w.writeAll(rest[0..i]) catch return "";
-        escape(&w, argument);
+        escape(&w, argument, false);
         rest = rest[i + mark.len ..];
     }
     w.writeAll(rest) catch return "";
     return w.buffered();
 }
 
-/// `query`, trimmed, as a URL's query value: spaces as `+`, the rest of
-/// what isn't plain as `%XX`. Stops where `w` is full.
-pub fn escape(w: *std.Io.Writer, query: []const u8) void {
+/// `query`, trimmed, as URL text: spaces as `+` when `plus` (query values
+/// only; a path needs `%20`), the rest of what isn't plain as `%XX`. Stops
+/// where `w` is full.
+pub fn escape(w: *std.Io.Writer, query: []const u8, plus: bool) void {
     for (std.mem.trim(u8, query, " ")) |ch| {
         if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
             w.writeByte(ch) catch break;
-        } else if (ch == ' ') {
+        } else if (ch == ' ' and plus) {
             w.writeByte('+') catch break;
         } else w.print("%{X:0>2}", .{ch}) catch break;
     }
@@ -448,7 +449,8 @@ test "Google's completions go with the quicklink that is Google, wherever it is"
 
 test "queries are escaped into the address" {
     var buf: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("https://x.com/search?f=live&q=liquid+glass+%26+UI", url(&buf, "https://x.com/search?f=live&q={argument}", " liquid glass & UI "));
+    try std.testing.expectEqualStrings("https://x.com/search?f=live&q=liquid%20glass%20%26%20UI", url(&buf, "https://x.com/search?f=live&q={argument}", " liquid glass & UI "));
+    try std.testing.expectEqualStrings("https://example.com/hello%20world", url(&buf, "https://example.com/{argument}", "hello world"));
     try std.testing.expectEqualStrings("https://a/zig/zig", url(&buf, "https://a/{argument}/{argument}", "zig"));
     try std.testing.expectEqualStrings("https://example.com/", url(&buf, "https://example.com/", "ignored"));
     var tiny: [8]u8 = undefined;

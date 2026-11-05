@@ -149,7 +149,7 @@ test "the panel finds, moves, answers and hands off" {
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     press(&t, &.{.{ .command = .insert_newline }});
-    try std.testing.expectEqualStrings("https://claude.ai/new?q=liquid+glass", probe.opened[0..probe.opened_len]);
+    try std.testing.expectEqualStrings("https://claude.ai/new?q=liquid%20glass", probe.opened[0..probe.opened_len]);
 
     // Escape clears the query, then closes.
     probe.hidden = false;
@@ -302,7 +302,7 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(t.shortcut(.{ .key = '3', .cmd = true }));
     t.settle(1);
     try std.testing.expectEqualStrings("liquid glass apple", s.query.text());
-    try std.testing.expectEqualStrings("https://www.google.com/search?q=liquid+glass+apple", web.page[0..web.page_len.?]);
+    try std.testing.expectEqualStrings("https://www.google.com/search?q=liquid%20glass%20apple", web.page[0..web.page_len.?]);
     t.settle(2);
     try std.testing.expect(t.hasText("Open in Browser"));
     try std.testing.expectEqual(view.max_height, s.height());
