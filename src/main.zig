@@ -788,7 +788,9 @@ pub fn main(init: std.process.Init) !void {
     live.acct.?.load();
     live.menu();
     // Restarted by an automatic update: quietly, the panel saying so the
-    // next time it opens. Otherwise launching shows the panel.
+    // next time it opens. A Nix build is started by its service at login
+    // and on every rebuild, so it stays in the background unless the
+    // welcome is due. Otherwise launching shows the panel.
     var note_buf: [64]u8 = undefined;
     const old = kv.get(init.gpa, updated_key) catch null;
     defer if (old) |v| init.gpa.free(v);
@@ -797,6 +799,6 @@ pub fn main(init: std.process.Init) !void {
     if (restarted or old != null) {
         const now = if (live.updater) |u| u.current else old.?;
         s.note = std.fmt.bufPrint(&note_buf, "Updated to {s}", .{now}) catch "Updated";
-    } else Live.toggle(&live);
+    } else if (!nix_managed or o.active) Live.toggle(&live);
     try app.run();
 }

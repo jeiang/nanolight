@@ -229,7 +229,7 @@ VERSION=0.1.0 sh macos/package.sh   # the Mac release: signed app, disk image, u
 VERSION=0.1.0 sh pc/package.sh      # Windows' zip and Linux's tarballs, added to manifest.json
 zig build -Dtarget=x86_64-windows-gnu   # any target from any machine
 nix build .#nanolight .#nanolight-server  # the Nix packages (see Nix)
-zig build -Dnix=true                    # a Nix-managed build: no updater, no Open at Login (the Nix modules own startup)
+zig build -Dnix=true                    # a Nix-managed build: no updater, no Open at Login, and it starts in the background (the Nix modules own startup)
 ```
 
 `macos/package.sh` signs with `$CODESIGN_IDENTITY` and notarizes when notary credentials are set (see the script); otherwise it signs ad hoc. Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds, signs and attaches the release.
