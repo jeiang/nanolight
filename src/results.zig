@@ -1,6 +1,6 @@
 //! What the panel lists for a query, in order: the answer when it is math,
-//! the apps that match it (or, with no query, suggestions), then the
-//! quicklinks (settings.zig, `[[quicklinks]]`): the first is a search for
+//! local results ranked together by match (or apps suggested with no query),
+//! then the quicklinks (settings.zig, `[[quicklinks]]`): the first is a search for
 //! exactly what is typed, and Google's completions of it go under the
 //! quicklink whose address is Google's, a key or two away. `<keyword> words`
 //! runs only that quicklink. With no app or answer, Return searches what
@@ -67,11 +67,7 @@ pub const Kind = enum {
     fn section(k: Kind, suggested: bool) []const u8 {
         return switch (k) {
             .calc => "Calculator",
-            .app => if (suggested) "Suggestions" else "Applications",
-            .settings => "Nanolight",
-            .pane => "System Settings",
-            .command => "Commands",
-            .clipboard => "Nanolight",
+            .app, .settings, .pane, .command, .clipboard => if (suggested) "Suggestions" else "Results",
             .quicklink, .suggest => unreachable,
         };
     }
@@ -90,10 +86,8 @@ pub const Row = struct {
 };
 
 pub const max_apps = 6;
-/// System Settings' panes, under the apps (the Mac's).
+/// Per-kind caps within the shared, match-ranked local results.
 pub const max_panes = 3;
-/// System commands, under the panes: they never take a row from an app, a
-/// quicklink or the header of another section.
 pub const max_commands = 3;
 /// Google's completions fill what room is left, up to four.
 pub const max_web = 4;
@@ -208,28 +202,33 @@ pub const Results = struct {
             r.convertRow(a);
             r.push(.{ .kind = .calc });
         }
+        const local_start = r.n;
         var ranked: [max_apps]search.Ranked = undefined;
         const n = search.rankApps(query, ix, boost, &ranked);
         for (ranked[0..n]) |x| r.push(.{ .kind = .app, .app = x.index, .match = x.match });
-        // "settings" / "preferences": Nanolight's own screen, right under
-        // the apps: Return still opens System Settings, a key away from this.
-        if (isSettings(query)) r.push(.{ .kind = .settings });
+        if (isSettings(query)) r.push(.{
+            .kind = .settings,
+            .match = search.score(query, "Settings") orelse .{ .score = 0 },
+        });
         const clip = r.clip_on and isClipboard(query);
-        if (clip) r.push(.{ .kind = .clipboard });
-        if (r.n > 0 and r.rows[0].kind == .calc and !r.pending) return;
-        // System Settings' panes, in their own section. A section's header
-        // is less than a row: one completion fewer pays for it, so the
-        // panel never grows past its tallest (view.max_height).
+        if (clip) r.push(.{ .kind = .clipboard, .match = search.score(query, "Clipboard History").? });
+        if (local_start > 0 and !r.pending) {
+            r.rankLocal(local_start, query);
+            return;
+        }
         var pane_rows: [max_panes]search.Ranked = undefined;
         const np = if (isSettings(query) or clip) 0 else panes.rank(query, &pane_rows);
         for (pane_rows[0..np]) |x| r.push(.{ .kind = .pane, .app = x.index, .match = x.match });
         const key = keyed(ql, query);
-        // System commands take what room the apps, panes and quicklinks leave.
         const shown = @min(ql.len, max_quicklink_rows);
         var cmd_rows: [max_commands]search.Ranked = undefined;
-        const cmd_room = @min(max_commands, max_rows -| r.n -| shown -| 1 -| @intFromBool(np > 0));
-        const nc = if (key != null or isSettings(query) or clip) 0 else commands.rank(query, cmd_rows[0..cmd_room]);
+        const nc = if (key != null or isSettings(query) or clip) 0 else commands.rank(query, &cmd_rows);
         for (cmd_rows[0..nc]) |x| r.push(.{ .kind = .command, .app = x.index, .match = x.match });
+        r.rankLocal(local_start, query);
+        // Reserve the quicklinks and one completion before filling local rows.
+        // A pending card's extra height and header cost two ordinary rows.
+        const row_limit = max_rows - @as(usize, if (r.pending) 2 else 0);
+        r.n = @min(r.n, row_limit -| shown -| 1);
         // A keyword sends the rest of the query to its quicklink alone.
         if (key) |k| {
             r.keyed = k;
@@ -238,7 +237,7 @@ pub const Results = struct {
         }
         // The quicklinks, the first a search for what was typed, Google's
         // completions (as many as leave room for the rest) under Google's.
-        const room = max_rows -| r.n -| shown -| @intFromBool(np > 0) -| @intFromBool(nc > 0);
+        const room = row_limit -| r.n -| shown;
         r.google = google(ql);
         for (0..shown) |i| {
             r.push(.{ .kind = .quicklink, .ql = @intCast(i) });
@@ -290,6 +289,26 @@ pub const Results = struct {
         const q = std.mem.trim(u8, query, " ");
         for (keys) |k| if (std.mem.eql(u8, q, k)) return true;
         return false;
+    }
+
+    fn rankLocal(r: *Results, start: usize, query: []const u8) void {
+        const Order = struct {
+            fn before(preferred: ?Kind, a: Row, b: Row) bool {
+                if (preferred) |kind| {
+                    if ((a.kind == kind) != (b.kind == kind)) return a.kind == kind;
+                }
+                return a.match.score > b.match.score;
+            }
+        };
+        // These explicit shortcuts keep their own row first, even when an
+        // app's launch-count boost would otherwise put it ahead.
+        const preferred: ?Kind = if (std.ascii.eqlIgnoreCase(query, "settings"))
+            .settings
+        else if (r.clip_on and std.ascii.eqlIgnoreCase(query, "clip"))
+            .clipboard
+        else
+            null;
+        std.sort.insertion(Row, r.rows[start..r.n], preferred, Order.before);
     }
 
     fn push(r: *Results, row: Row) void {
@@ -365,7 +384,7 @@ test "math first, then apps; quicklinks only without an answer" {
     try t.expectEqual(Kind.quicklink, r.rows[1].kind);
     try t.expectEqual(@as(u16, 0), r.rows[1].ql);
     try t.expectEqual(@as(usize, 6), r.n);
-    try t.expectEqualStrings("Applications", r.section(0).?);
+    try t.expectEqualStrings("Results", r.section(0).?);
     try t.expectEqualStrings("Search", r.section(1).?);
     try t.expectEqualStrings("Quicklinks", r.section(2).?);
     try t.expect(r.section(3) == null);
@@ -392,11 +411,11 @@ test "math first, then apps; quicklinks only without an answer" {
     try t.expectEqual(@as(u16, 1), r.rows[3].ql);
     try t.expect(r.section(1) == null and r.section(2) == null);
     try t.expectEqualStrings("Quicklinks", r.section(3).?);
-    // "settings": System Settings first, Nanolight's own a row under it.
+    // The explicit Settings shortcut stays first, ahead of System Settings.
     r.build("settings", &ix, &.{}, &.{}, defaults);
-    try t.expectEqual(Kind.app, r.rows[0].kind);
-    try t.expectEqual(@as(u32, 1), r.rows[0].app);
-    try t.expectEqual(Kind.settings, r.rows[1].kind);
+    try t.expectEqual(Kind.settings, r.rows[0].kind);
+    try t.expectEqual(Kind.app, r.rows[1].kind);
+    try t.expectEqual(@as(u32, 1), r.rows[1].app);
     // A full list of apps still ends with every quicklink.
     var many_ix = try testIndex(t.allocator, &.{ "Safari", "Mail", "Maps", "Pages", "Calendar", "Calculator", "FaceTime" });
     defer many_ix.deinit();
@@ -457,7 +476,7 @@ test "queries are escaped into the address" {
     try std.testing.expectEqualStrings("", url(&tiny, "https://x.com/?q={argument}", "q"));
 }
 
-test "System Settings' panes come under the apps and keep the panel's height (#12)" {
+test "System Settings' panes share the local results header and keep the panel's height (#12)" {
     if (!mac) return error.SkipZigTest;
     const t = std.testing;
     var ix = try testIndex(t.allocator, &.{ "Safari", "System Settings", "Calculator" });
@@ -465,10 +484,9 @@ test "System Settings' panes come under the apps and keep the panel's height (#1
     var r: Results = .{};
     r.build("login items", &ix, &.{}, &.{ "login items mac", "login items windows", "login items iphone" }, defaults);
     try t.expectEqual(Kind.pane, r.rows[0].kind);
-    try t.expectEqualStrings("System Settings", r.section(0).?);
+    try t.expectEqualStrings("Results", r.section(0).?);
     try t.expectEqualStrings("Login Items & Extensions", panes.all[r.rows[0].app].name);
-    // Google's completions give up a row for the section's header.
-    try t.expect(r.n <= max_rows - 1);
+    try t.expect(r.n <= max_rows);
     // "settings" is Nanolight's own Settings and System Settings the app,
     // not every pane with "settings" in a word for it.
     r.build("settings", &ix, &.{}, &.{}, defaults);
@@ -523,16 +541,16 @@ test "a conversion is answered like math, with the rate under a currency's" {
     try t.expectEqualStrings("", r.copy);
 }
 
-test "system commands list under the apps without taking an app's, a quicklink's or a header's row" {
+test "system commands compete by match without taking a quicklink's row" {
     const t = std.testing;
     commands.listForTests(true);
     defer commands.listForTests(false);
     var ix = try testIndex(t.allocator, &.{ "Sleep Aid", "Sleepy", "Sleeper", "Sleeping", "Sleep Cycle", "Sleep Timer", "Sleep Log" });
     defer ix.deinit();
     var r: Results = .{};
-    // Every app row stays, and so does every quicklink.
+    // An exact command beats prefix app matches; every quicklink stays.
     r.build("sleep", &ix, &.{}, &.{ "sleep a", "sleep b", "sleep c", "sleep d" }, defaults);
-    for (r.rows[0..max_apps]) |row| try t.expectEqual(Kind.app, row.kind);
+    try t.expectEqual(Kind.command, r.rows[0].kind);
     var cmds: usize = 0;
     var links: usize = 0;
     for (r.slice()) |row| {
@@ -541,8 +559,8 @@ test "system commands list under the apps without taking an app's, a quicklink's
     }
     try t.expect(cmds <= max_commands);
     try t.expectEqual(@as(usize, 5), links);
-    try t.expect(r.n + @intFromBool(cmds > 0) <= max_rows);
-    // Alone, the command has its own section, after the apps.
+    try t.expect(r.n <= max_rows);
+    // Alone, the command still uses the shared Results section.
     var few = try testIndex(t.allocator, &.{"Safari"});
     defer few.deinit();
     r.build("sleep", &few, &.{}, &.{}, defaults);
@@ -550,7 +568,7 @@ test "system commands list under the apps without taking an app's, a quicklink's
         if (row.kind == .command) break i;
     } else return error.NoCommand;
     try t.expectEqualStrings("Sleep", commands.all[r.rows[at].app].name);
-    try t.expectEqualStrings("Commands", r.section(at).?);
+    try t.expectEqualStrings("Results", r.section(at).?);
     // Other commands can match too (the Mac's Sleep Display says "sleep
     // display"); the quicklinks follow them.
     const after = for (r.slice()[at..], at..) |row, i| {
@@ -569,4 +587,25 @@ test "system commands list under the apps without taking an app's, a quicklink's
     commands.listForTests(false);
     r.build("sleep", &few, &.{}, &.{}, defaults);
     for (r.slice()) |row| try t.expect(row.kind != .command);
+}
+
+test "Clipboard History competes with apps by its name's match" {
+    const t = std.testing;
+    var ix = try testIndex(t.allocator, &.{ "ColorSync Utility", "Archive Utility" });
+    defer ix.deinit();
+    var r: Results = .{ .clip_on = true };
+    r.build("cli", &ix, &.{}, &.{}, defaults);
+    try t.expectEqual(Kind.clipboard, r.rows[0].kind);
+    try t.expectEqual(search.score("cli", "Clipboard History").?.score, r.rows[0].match.score);
+    try t.expectEqualStrings("Results", r.section(0).?);
+    try t.expectEqual(Kind.app, r.rows[1].kind);
+    try t.expect(r.section(1) == null);
+    // Explicit shortcuts win even over a frequently opened app.
+    try ix.add("Clip", "/Clip.app");
+    ix.launches.items[2] = 100;
+    r.build("clip", &ix, &.{}, &.{}, defaults);
+    try t.expectEqual(Kind.clipboard, r.rows[0].kind);
+    r.clip_on = false;
+    r.build("cli", &ix, &.{}, &.{}, defaults);
+    for (r.slice()) |row| try t.expect(row.kind != .clipboard);
 }
