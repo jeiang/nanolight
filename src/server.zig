@@ -9,6 +9,7 @@
 //! plain values, so the tests drive it without a socket.
 const std = @import("std");
 const Io = std.Io;
+const builtin = @import("builtin");
 const settings = @import("settings.zig");
 
 pub const max_body = 256 * 1024;
@@ -139,8 +140,9 @@ fn fail(r: Reply) Reply {
     return out;
 }
 
-/// Written to a temp file, fsynced, then renamed over the record: a crash
-/// leaves the old record or the new one.
+/// Written to a temp file, fsynced, renamed over the record, then the directory
+/// is fsynced: a crash leaves the old record or the new one, and an
+/// acknowledged write survives power loss.
 fn write(io: Io, dir: Io.Dir, name: []const u8, bytes: []const u8) !void {
     var buf: [96]u8 = undefined;
     const tmp = try std.fmt.bufPrint(&buf, "{s}.tmp", .{name});
@@ -150,6 +152,11 @@ fn write(io: Io, dir: Io.Dir, name: []const u8, bytes: []const u8) !void {
     try f.writeStreamingAll(io, bytes);
     try f.sync(io);
     try dir.rename(tmp, dir, name, io);
+    if (builtin.os.tag != .windows) {
+        const d = try dir.openDir(io, ".", .{ .iterate = true });
+        defer d.close(io);
+        try (Io.File{ .handle = d.handle, .flags = .{ .nonblocking = false } }).sync(io);
+    }
 }
 
 // ----- the socket -----
@@ -206,14 +213,22 @@ fn serveOne(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, state: Io.Dir
     if (length > max_body) {
         reply = .{ .status = 413 };
     } else {
-        var body: []const u8 = "";
+        var body: ?[]const u8 = "";
         if (req.head.method.requestHasBody() and length > 0) {
             req.writeExpectContinue() catch return;
             var chunk: [1024]u8 = undefined;
             const reader = req.readerExpectNone(&chunk);
             body = reader.readAlloc(arena, @intCast(length)) catch return;
+        } else if (req.head.method.requestHasBody() and req.head.transfer_encoding == .chunked) {
+            req.writeExpectContinue() catch return;
+            var chunk: [1024]u8 = undefined;
+            const reader = req.readerExpectNone(&chunk);
+            body = reader.allocRemaining(arena, .limited(max_body + 1)) catch |e| switch (e) {
+                error.StreamTooLong => null,
+                else => return,
+            };
         }
-        reply = handle(arena, io, state, tokens, .{ .method = method, .path = path, .authorization = auth, .first = first, .body = body });
+        reply = if (body) |b| handle(arena, io, state, tokens, .{ .method = method, .path = path, .authorization = auth, .first = first, .body = b }) else .{ .status = 413 };
     }
     std.log.info("{s} {s} {d} {s}", .{ method, path, reply.status, if (reply.account.len > 0) reply.account else "-" });
     req.respond(reply.body, .{
