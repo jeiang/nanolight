@@ -45,6 +45,9 @@ pub const Account = struct {
     reason_buf: [96]u8 = undefined,
     reason_len: usize = 0,
     busy: bool = false,
+    /// Whether the request in flight is this machine's first sync, and the `at` it sent.
+    first_sent: bool = false,
+    sent_at: i64 = 0,
     pushes_waiting: u32 = 0,
 
     /// At launch: reads the token and syncs, if `[sync]` is set.
@@ -118,7 +121,8 @@ pub const Account = struct {
         var arena: std.heap.ArenaAllocator = .init(a.gpa);
         defer arena.deinit();
         const al = arena.allocator();
-        const body = settings.encode(al, a.hooks.snapshot(a.hooks.ctx, al)) catch return a.fail("out of memory");
+        const sent = a.hooks.snapshot(a.hooks.ctx, al);
+        const body = settings.encode(al, sent) catch return a.fail("out of memory");
         const base = baseUrl(a.cfg.url).?;
         const url = std.fmt.allocPrint(al, "{s}/v1/sync", .{base}) catch return a.fail("out of memory");
         const auth = std.fmt.allocPrint(al, "Bearer {s}", .{token}) catch return a.fail("out of memory");
@@ -128,10 +132,12 @@ pub const Account = struct {
             .{ .name = first_header, .value = "1" },
         };
         a.busy = true;
+        a.first_sent = a.firstHere();
+        a.sent_at = sent.at;
         nanoui.http.fetch(a.gpa, .{
             .url = url,
             .method = "PUT",
-            .headers = headers[0..if (a.firstHere()) 3 else 2],
+            .headers = headers[0..if (a.first_sent) 3 else 2],
             .body = body,
             .timeout = 15,
         }, a, answered);
@@ -146,9 +152,11 @@ pub const Account = struct {
         defer arena.deinit();
         const al = arena.allocator();
         const theirs = settings.decode(al, r.body) orelse return a.fail("the server's answer is not a record");
-        // Changed again while this was out: those choices are newer, and stay.
-        const first = a.firstHere();
-        const merged = settings.merge(al, a.hooks.snapshot(a.hooks.ctx, al), theirs, first) catch return a.fail("out of memory");
+        // Changed again while this was out: those choices are newer, and stay,
+        // even on a first sync.
+        const now_here = a.hooks.snapshot(a.hooks.ctx, al);
+        const first = a.first_sent and now_here.at == a.sent_at;
+        const merged = settings.merge(al, now_here, theirs, first) catch return a.fail("out of memory");
         a.hooks.apply(a.hooks.ctx, merged);
         a.kv.set(synced_key, a.cfg.url) catch {};
         a.last_ok = now();
