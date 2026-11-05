@@ -6,6 +6,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
+const win_msg = @import("win_msg.zig");
 
 const HANDLE = ?*anyopaque;
 const INPUT = extern struct {
@@ -279,10 +280,12 @@ fn registered(comptime name: []const u8) u32 {
     return RegisterClipboardFormatW(std.unicode.utf8ToUtf16LeStringLiteral(name));
 }
 
-/// The clipboard, opened for us; another process may hold it a moment.
-fn open() bool {
+/// The clipboard, opened for us; another process may hold it a moment. A
+/// writer passes a window of ours: EmptyClipboard makes it the owner, and
+/// with no owner SetClipboardData fails.
+fn open(owner: HANDLE) bool {
     for (0..open_tries) |_| {
-        if (OpenClipboard(null) != 0) return true;
+        if (OpenClipboard(owner) != 0) return true;
         Sleep(10);
     }
     return false;
@@ -389,7 +392,7 @@ pub const Watcher = struct {
         if (owner.len == 0) owner = processName(GetForegroundWindow(), &name_buf);
         // Before the clipboard is opened at all.
         if (sink.excluded(sink.ctx, owner)) return;
-        if (!open()) return;
+        if (!open(null)) return;
         defer _ = CloseClipboard();
         if (marked()) return;
         const gpa = std.heap.c_allocator;
@@ -448,9 +451,9 @@ pub const Watcher = struct {
             .file => .{ dropfiles(gpa, c.text) catch return false, cf_hdrop },
         };
         defer gpa.free(bytes);
-        if (!open()) return false;
+        if (!open(win_msg.window())) return false;
         defer _ = CloseClipboard();
-        _ = EmptyClipboard();
+        if (EmptyClipboard() == 0) return false;
         const ok = put(format, bytes);
         w.last = GetClipboardSequenceNumber();
         return ok;
