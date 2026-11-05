@@ -56,7 +56,11 @@
       };
       environment.systemPackages = lib.mkOption {type = lib.types.listOf lib.types.package;};
       environment.etc = lib.mkOption {type = lib.types.attrsOf lib.types.raw;};
-      launchd.user.agents = lib.mkOption {type = lib.types.attrsOf lib.types.raw;};
+      launchd.user.agents = lib.mkOption {
+        type = lib.types.attrsOf (lib.types.submodule {
+          options.serviceConfig = lib.mkOption {type = lib.types.attrsOf lib.types.raw;};
+        });
+      };
       system.activationScripts.postActivation.text = lib.mkOption {type = lib.types.lines;};
       system.primaryUser = lib.mkOption {type = lib.types.nullOr lib.types.str;};
       home.packages = lib.mkOption {type = lib.types.listOf lib.types.package;};
@@ -78,6 +82,7 @@
   darwin = evalStub self.darwinModules.default [
     {
       system.primaryUser = "jane";
+      launchd.user.agents.nanolight.serviceConfig.Label = "dev.example.nano light";
       programs.nanolight = {
         enable = true;
         inherit settings;
@@ -105,6 +110,7 @@
     darwinKeepAlive = agent.KeepAlive == {SuccessfulExit = false;};
     darwinRunsSignedCopy = lib.hasPrefix "/Applications/Nanolight.app/" (lib.head agent.ProgramArguments);
     darwinSpotlight = lib.hasInfix "AppleSymbolicHotKeys -dict-add 64" darwin.config.system.activationScripts.postActivation.text;
+    darwinKickstartsConfiguredLabel = lib.hasInfix "kickstart -k \"gui/$uid/\"'dev.example.nano light'" darwin.config.system.activationScripts.postActivation.text;
     homeUnit = home.config.systemd.user.services.nanolight.Service.Restart == "on-failure";
   };
 in

@@ -11,6 +11,7 @@ self: {
   installedApp = "/Applications/Nanolight.app";
   stamp = "/var/db/nanolight/app-source";
   signed = cfg.codesignIdentity != null;
+  label = config.launchd.user.agents.nanolight.serviceConfig.Label;
   exe =
     if signed
     then "${installedApp}/Contents/MacOS/nanolight"
@@ -69,7 +70,8 @@ in {
             mkdir -p "$(dirname ${stamp})"
             echo ${lib.escapeShellArg "${storeApp} ${cfg.codesignIdentity}"} > ${stamp}
             uid=$(id -u ${user})
-            launchctl kickstart -k "gui/$uid/org.nixos.nanolight" 2>/dev/null || true
+            launchctl kickstart -k "gui/$uid/"${lib.escapeShellArg label} \
+              || echo "warning: could not restart ${label}; relaunch it to run the signed copy" >&2
           else
             echo "warning: codesign failed; is the identity in ${user}'s login keychain?" >&2
           fi
