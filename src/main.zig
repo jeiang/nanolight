@@ -740,7 +740,8 @@ pub fn main(init: std.process.Init) !void {
     defer if (clip_dir) |*d| d.close(init.io);
     var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, .{
         // A file that failed to load gives no retention or exclude list: record and prune nothing.
-        .enabled = loaded != null and config.clipboardEnabled(kv, init.gpa, cfg.clipboard.enabled),
+        .enabled = config.clipboardEnabled(kv, init.gpa, cfg.clipboard.enabled),
+        .config_ok = loaded != null,
         .retention_days = if (loaded != null) cfg.clipboard.retention_days else 0,
         .max_entries = if (loaded != null) cfg.clipboard.max_entries else 0,
         .exclude_apps = cfg.clipboard.exclude_apps,

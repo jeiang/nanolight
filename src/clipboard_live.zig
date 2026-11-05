@@ -43,6 +43,7 @@ fn live(ctx: *anyopaque) *Live {
 
 fn startWatching(l: *Live) void {
     if (!clipboard.Watcher.available) return;
+    if (!(l.clip orelse return).cfg.config_ok) return;
     l.clip_watcher.start(.{ .ctx = l, .observe = observe, .excluded = excluded }) catch |e|
         std.log.warn("nanolight: clipboard history could not start: {t}", .{e});
 }
@@ -93,6 +94,7 @@ fn status(ctx: *anyopaque) ?[]const u8 {
     const l = live(ctx);
     if (@hasField(clipboard.Watcher, "why")) if (l.clip_watcher.why) |why| return why;
     const store = l.clip orelse return null;
+    if (!store.cfg.config_ok) return "Clipboard history is paused until the config file loads.";
     return if (store.cfg.enabled) null else "Clipboard history is off. Turn it on in Settings.";
 }
 

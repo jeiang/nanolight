@@ -76,7 +76,10 @@ pub const Item = struct {
 pub const Result = enum { added, bumped, disabled, excluded, concealed, empty, too_big, failed };
 
 pub const Config = struct {
+    /// The user's preference.
     enabled: bool = true,
+    /// False when the config file failed to load: nothing records, whatever `enabled` says.
+    config_ok: bool = true,
     /// 0: no age limit.
     retention_days: u32 = 7,
     /// 0: no limit.
@@ -140,7 +143,7 @@ pub const Store = struct {
     /// Keeps `item` copied at `now`, or says why not. A copy of what is
     /// already kept makes it newest and counts it.
     pub fn add(s: *Store, item: Item, now: i64) Result {
-        if (!s.cfg.enabled) return .disabled;
+        if (!s.cfg.enabled or !s.cfg.config_ok) return .disabled;
         if (item.concealed) return .concealed;
         if (s.excluded(item.source)) return .excluded;
         const content = if (item.kind == .image) item.png else item.text;
@@ -622,6 +625,8 @@ test "a copy is kept, newest first, and the same copy again bumps it" {
 test "nothing is stored when disabled, excluded, concealed, empty or too big" {
     var s = memory(.{ .enabled = false });
     defer s.deinit();
+    try testing.expectEqual(Result.disabled, s.add(textItem("x", ""), 1));
+    s.cfg = .{ .config_ok = false };
     try testing.expectEqual(Result.disabled, s.add(textItem("x", ""), 1));
     s.cfg = .{ .exclude_apps = &.{ "com.bitwarden.desktop", "KeePassXC.exe" } };
     try testing.expectEqual(Result.excluded, s.add(textItem("x", "com.Bitwarden.Desktop"), 1));
