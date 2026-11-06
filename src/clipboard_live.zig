@@ -74,16 +74,17 @@ fn pruneTick(ctx: ?*anyopaque) callconv(.c) void {
 }
 
 /// Settings' switch: whether history records; `set` changes it first (kept
-/// in kv, so the app's change outlasts the config file's value). Null on a
-/// system with no history.
+/// in kv, so the app's change outlasts the config file's value; see
+/// `config.switchClipboard`). Null on a system with no history.
 pub fn enabled(ctx: *anyopaque, set: ?bool) ?bool {
     const l = live(ctx);
     const store = l.clip orelse return null;
     if (!clipboard.Watcher.available) return null;
     if (set) |on| {
-        l.kv.set(config.clipboard_key, if (on) "1" else "0") catch {};
-        store.cfg.enabled = on;
-        if (on) startWatching(l) else l.clip_watcher.stop();
+        const next = config.switchClipboard(l.kv, on, store.cfg.enabled);
+        if (next == store.cfg.enabled) return next;
+        store.cfg.enabled = next;
+        if (next) startWatching(l) else l.clip_watcher.stop();
     }
     return store.cfg.enabled;
 }
