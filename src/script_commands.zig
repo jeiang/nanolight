@@ -16,6 +16,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const Index = @import("apps.zig").Index;
+const model = @import("raycast_model.zig");
 const windows = builtin.os.tag == .windows;
 
 pub const prefix = "script:";
@@ -24,16 +25,18 @@ pub const folder_path = "script-folder:";
 
 pub const Mode = enum { silent, compact, full_output, inline_ };
 
-/// `@raycast.argument1` to `@raycast.argument3`.
-pub const max_args = 3;
-
 pub const Argument = struct {
-    /// "text", "password" or "dropdown".
+    /// "text", "password" or "dropdown" (`kind`).
     type: []const u8 = "text",
     placeholder: []const u8 = "",
     optional: bool = false,
     percentEncoded: bool = false,
     data: []const struct { title: []const u8 = "", value: []const u8 = "" } = &.{},
+
+    /// Its type; one not known is text.
+    pub fn kind(a: Argument) model.Field.Kind {
+        return std.meta.stringToEnum(model.Field.Kind, a.type) orelse .text;
+    }
 };
 
 pub const Meta = struct {
@@ -44,7 +47,7 @@ pub const Meta = struct {
     description: []const u8 = "",
     cwd: []const u8 = "",
     confirm: bool = false,
-    args: [max_args]?Argument = @splat(null),
+    args: [model.max_args]?Argument = @splat(null),
     schema: bool = false,
 
     pub fn argCount(m: *const Meta) usize {
@@ -124,14 +127,14 @@ pub fn parse(arena: std.mem.Allocator, bytes: []const u8) ?Meta {
 /// `argumentN`'s slot in `Meta.args`: N from 1 to `max_args`.
 fn argumentSlot(key: []const u8) ?usize {
     // One digit names every slot.
-    comptime std.debug.assert(max_args <= 9);
+    comptime std.debug.assert(model.max_args <= 9);
     const argument = "argument";
     if (!std.mem.startsWith(u8, key, argument)) return null;
     const digits = key[argument.len..];
     if (digits.len != 1) return null;
     const n = std.fmt.charToDigit(digits[0], 10) catch return null;
     if (n < 1) return null;
-    if (n > max_args) return null;
+    if (n > model.max_args) return null;
     return n - 1;
 }
 
@@ -293,6 +296,13 @@ test "a script command's header" {
     try std.testing.expectEqual(@as(usize, 2), m.argCount());
     try std.testing.expect(m.args[0].?.percentEncoded);
     try std.testing.expectEqualStrings("en", m.args[1].?.data[0].value);
+    try std.testing.expectEqual(model.Field.Kind.text, m.args[0].?.kind());
+    try std.testing.expectEqual(model.Field.Kind.dropdown, m.args[1].?.kind());
+    const secret: Argument = .{ .type = "password" };
+    try std.testing.expectEqual(model.Field.Kind.password, secret.kind());
+    // A type not known is text.
+    const other: Argument = .{ .type = "number" };
+    try std.testing.expectEqual(model.Field.Kind.text, other.kind());
     try std.testing.expect(parse(arena.allocator(), "#!/bin/sh\necho hi\n") == null);
     // AppleScript's and JavaScript's comments too.
     try std.testing.expectEqualStrings(

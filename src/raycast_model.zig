@@ -1,13 +1,14 @@
 //! What a script command's screen (raycast_view.zig) shows, as its runner
 //! (script_run.zig) builds it: the arguments' form or a detail (its output,
-//! or a question). And what the screen tells the runner back, as `Event`s.
+//! or a question). The runner drives the screen with `Update`s; the screen
+//! tells the runner back with `Event`s.
 const std = @import("std");
 
-/// The most fields a form has: a script declares at most three arguments
-/// (script_commands.zig `max_args`).
-pub const max_fields = 3;
+/// A script declares at most three arguments (`@raycast.argument1` to
+/// `@raycast.argument3`), and its form has a field for each.
+pub const max_args = 3;
 
-/// What the screen's actions do. Return runs the first, ⌘↩ the second.
+/// What the screen's actions do.
 pub const Action = enum {
     run,
     again,
@@ -22,6 +23,12 @@ pub const Action = enum {
     }
 };
 
+/// A view's actions are in key order: Return runs the one at `return_at`,
+/// ⌘↩ the one at `cmd_return_at` (a form's ⌘↩ submits it with its first, as
+/// Raycast's does). The rest are only in the actions list.
+pub const return_at = 0;
+pub const cmd_return_at = 1;
+
 pub const Option = struct {
     value: []const u8,
     title: []const u8,
@@ -31,11 +38,14 @@ pub const Option = struct {
 pub const Field = struct {
     /// Which argument: 0 for `@raycast.argument1`.
     slot: usize,
-    kind: enum { text, dropdown } = .text,
+    kind: Kind = .text,
     title: []const u8,
     placeholder: []const u8 = "",
     value: []const u8 = "",
     options: []const Option = &.{},
+
+    /// A script's argument types; a password is typed but not shown.
+    pub const Kind = enum { text, password, dropdown };
 };
 
 /// The arguments, asked for before a run.
@@ -86,6 +96,40 @@ pub const Event = union(enum) {
     /// Escape or the back button: the runner ends the script and stops
     /// the screen.
     pop,
+};
+
+/// Where the screen's events go. The runner answers within the call: a new
+/// view, a note, or, on a pop, the screen stopped.
+pub const Sender = struct {
+    ctx: *anyopaque,
+    func: *const fn (ctx: *anyopaque, event: Event) void,
+};
+
+/// The command's name and its icon (PNG), for the header and the footer.
+/// The screen copies both: they may come from an index that is replaced
+/// while it is up (script_live.zig `refresh`).
+pub const Command = struct {
+    name: []const u8,
+    icon: ?[]const u8 = null,
+};
+
+/// What the runner tells its screen.
+pub const Update = union(enum) {
+    /// Opens the screen for a command, its events sent to `to`.
+    start: struct { command: Command, to: Sender },
+    /// The new top view; `arena` holds it and is now the screen's.
+    show: struct { arena: std.heap.ArenaAllocator, view: View },
+    /// Said in the footer for a while.
+    note: struct { text: []const u8, bad: bool },
+    /// Closes the screen.
+    stop,
+};
+
+/// Where the runner's updates go: the screen, which applies each within
+/// the call.
+pub const Screen = struct {
+    ctx: *anyopaque,
+    func: *const fn (ctx: *anyopaque, update: Update) void,
 };
 
 /// Markdown as plain lines for the panel: headings, emphasis and code

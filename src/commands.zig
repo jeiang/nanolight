@@ -9,7 +9,7 @@
 //! (`SetSuspendState`'s documented behavior).
 const std = @import("std");
 const builtin = @import("builtin");
-const nanoui = @import("nanoui");
+const proc = @import("proc.zig");
 const search = @import("search.zig");
 const windows = builtin.os.tag == .windows;
 
@@ -202,56 +202,39 @@ pub const Hooks = struct {
     done: *const fn (ctx: *anyopaque) void,
 };
 
-/// Runs a command and waits for it on the main thread (nothing polls).
+/// Runs a command, its end heard on the main thread (nothing polls).
 pub const Runner = struct {
     /// The app's (processes need a real one).
     io: std.Io,
     hooks: Hooks,
     index: usize = 0,
-    child: ?std.process.Child = null,
-    watch: ?nanoui.fdwatch.Watch = null,
+    proc: proc.Runner = .{},
     /// The tail of what it wrote to stderr.
     err: [160]u8 = undefined,
     err_len: usize = 0,
     said: [240]u8 = undefined,
 
     pub fn deinit(r: *Runner) void {
-        r.stop();
-    }
-
-    fn stop(r: *Runner) void {
-        if (r.watch) |w| w.cancel();
-        r.watch = null;
-        if (r.child) |*c| c.kill(r.io);
-        r.child = null;
+        r.proc.stop();
     }
 
     /// Runs command `i` of `all`, if it is listed.
     pub fn start(r: *Runner, i: usize) void {
         if (i >= all.len or !listed(i)) return;
-        r.stop();
         r.index = i;
         r.err_len = 0;
-        const argv = all[i].runs[chosen[i]];
-        const child = std.process.spawn(
-            r.io,
-            .{
-                .argv = argv,
-                .stdin = .ignore,
-                .stdout = .ignore,
-                .stderr = .pipe,
-                .create_no_window = windows,
-            },
-        ) catch
-            return r.fail("could not be started");
-        r.child = child;
-        const err = child.stderr.?;
-        r.watch = (if (windows)
-            nanoui.fdwatch.reader(err.handle, r, bytesIn, ended)
-        else
-            nanoui.fdwatch.readable(err.handle, r, readable)) catch null;
-        // No watch means nothing would end it: wait for it here (it is short).
-        if (r.watch == null) ended(r);
+        const options: std.process.SpawnOptions = .{
+            .argv = all[i].runs[chosen[i]],
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .pipe,
+            .create_no_window = windows,
+        };
+        r.proc.start(r.io, options, .{ .ctx = r, .bytes = feed, .ended = ended }) catch |e|
+            r.fail(switch (e) {
+                error.Spawn => "could not be started",
+                error.Watch => "could not be followed",
+            });
     }
 
     fn fail(r: *Runner, why: []const u8) void {
@@ -263,34 +246,16 @@ pub const Runner = struct {
         r.hooks.footer(r.hooks.ctx, text);
     }
 
-    fn readable(ctx: ?*anyopaque) callconv(.c) void {
+    fn feed(ctx: *anyopaque, bytes: []const u8) void {
         const r: *Runner = @ptrCast(@alignCast(ctx));
-        const c = r.child orelse return;
-        var buf: [512]u8 = undefined;
-        const n = std.c.read(c.stderr.?.handle, &buf, buf.len);
-        if (n <= 0) return ended(ctx);
-        r.feed(buf[0..@intCast(n)]);
+        r.err_len = proc.keepTail(&r.err, r.err_len, bytes);
     }
 
-    fn bytesIn(ctx: ?*anyopaque, bytes: []const u8) void {
+    fn ended(ctx: *anyopaque, term: ?std.process.Child.Term) void {
         const r: *Runner = @ptrCast(@alignCast(ctx));
-        r.feed(bytes);
-    }
-
-    fn feed(r: *Runner, bytes: []const u8) void {
-        r.err_len = keepTail(&r.err, r.err_len, bytes);
-    }
-
-    fn ended(ctx: ?*anyopaque) callconv(.c) void {
-        const r: *Runner = @ptrCast(@alignCast(ctx));
-        if (r.watch) |w| w.cancel();
-        r.watch = null;
-        var c = r.child orelse return;
-        r.child = null;
-        const term = c.wait(r.io) catch null;
         if (term) |t| if (t.success()) return r.hooks.done(r.hooks.ctx);
         var buf: [48]u8 = undefined;
-        const why = lastLine(r.err[0..r.err_len]);
+        const why = proc.lastLine(r.err[0..r.err_len]);
         r.fail(if (why.len > 0) why else if (term) |t| switch (t) {
             .exited => |code| std.fmt.bufPrint(
                 &buf,
@@ -301,32 +266,6 @@ pub const Runner = struct {
         } else "failed");
     }
 };
-
-/// Appends `bytes` to the `len` bytes held in `buf`, keeping the last that fit: the new length.
-fn keepTail(buf: []u8, len: usize, bytes: []const u8) usize {
-    if (bytes.len >= buf.len) {
-        @memcpy(buf, bytes[bytes.len - buf.len ..]);
-        return buf.len;
-    }
-    var keep = len;
-    if (keep + bytes.len > buf.len) {
-        const drop = keep + bytes.len - buf.len;
-        std.mem.copyForwards(u8, buf[0 .. keep - drop], buf[drop..keep]);
-        keep -= drop;
-    }
-    @memcpy(buf[keep..][0..bytes.len], bytes);
-    return keep + bytes.len;
-}
-
-/// The last non-empty line.
-fn lastLine(text: []const u8) []const u8 {
-    const t = std.mem.trimEnd(u8, text, " \r\n");
-    return std.mem.trim(
-        u8,
-        if (std.mem.lastIndexOfScalar(u8, t, '\n')) |nl| t[nl + 1 ..] else t,
-        " \r",
-    );
-}
 
 /// Marks every command of this OS as installed, or none (for tests).
 pub fn listForTests(on: bool) void {
@@ -434,20 +373,6 @@ test "commands are ranked like apps, only when listed, and capped by the room gi
         try t.expect(rank("volume 25", &out) > 0);
         try t.expectEqualStrings("Set Volume to 25%", name(out[0]));
     }
-}
-
-test "the stderr tail keeps the last bytes and its last line" {
-    const t = std.testing;
-    var buf: [8]u8 = undefined;
-    var n = keepTail(&buf, 0, "ab\n");
-    n = keepTail(&buf, n, "cdef");
-    try t.expectEqualStrings("ab\ncdef", buf[0..n]);
-    n = keepTail(&buf, n, "ghij");
-    try t.expectEqualStrings("cdefghij", buf[0..n]);
-    n = keepTail(&buf, n, "0123456789");
-    try t.expectEqualStrings("23456789", buf[0..n]);
-    try t.expectEqualStrings("last", lastLine("first\nlast\n"));
-    try t.expectEqualStrings("", lastLine(" \n"));
 }
 
 test "a program is found on the PATH only when it is there" {

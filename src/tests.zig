@@ -33,6 +33,7 @@ test {
     _ = @import("shortcut_clash.zig");
     _ = @import("settings_panes.zig");
     _ = @import("commands.zig");
+    _ = @import("proc.zig");
     _ = @import("clipboard.zig");
     _ = @import("clipboard_win.zig");
     _ = @import("tests_clipboard.zig");
