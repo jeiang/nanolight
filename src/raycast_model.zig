@@ -1,138 +1,92 @@
-//! What a script command's runner (script_run.zig) says, as one JSON
-//! object a line, and what the panel answers. Parsed into an arena per message.
+//! What a script command's screen (raycast_view.zig) shows, as its runner
+//! (script_run.zig) builds it: the arguments' form or a detail (its output,
+//! or a question). And what the screen tells the runner back, as `Event`s.
 const std = @import("std");
 
-pub const Icon = struct {
-    text: ?[]const u8 = null,
-    file: ?[]const u8 = null,
-    url: ?[]const u8 = null,
-    builtin: ?[]const u8 = null,
-};
+/// The most fields a form has: a script declares at most three arguments
+/// (script_commands.zig `max_args`).
+pub const max_fields = 3;
 
-pub const Action = struct {
-    id: []const u8 = "",
-    title: []const u8 = "",
-    shortcut: ?[]const u8 = null,
-};
+/// What the screen's actions do. Return runs the first, ⌘↩ the second.
+pub const Action = enum {
+    run,
+    again,
+    copy,
 
-pub const Item = struct {
-    id: []const u8 = "",
-    title: []const u8 = "",
-    subtitle: ?[]const u8 = null,
-    icon: ?Icon = null,
-    accessories: []const []const u8 = &.{},
-    actions: []const Action = &.{},
-};
-
-pub const Section = struct {
-    title: ?[]const u8 = null,
-    items: []const Item = &.{},
-};
-
-pub const Empty = struct {
-    title: ?[]const u8 = null,
-    description: ?[]const u8 = null,
-};
-
-pub const Meta = struct {
-    label: []const u8 = "",
-    text: ?[]const u8 = null,
+    pub fn title(a: Action) []const u8 {
+        return switch (a) {
+            .run => "Run",
+            .again => "Run Again",
+            .copy => "Copy Output",
+        };
+    }
 };
 
 pub const Option = struct {
-    value: []const u8 = "",
-    title: []const u8 = "",
+    value: []const u8,
+    title: []const u8,
 };
 
+/// One of the script's arguments.
 pub const Field = struct {
-    id: []const u8 = "",
-    type: []const u8 = "text",
-    title: ?[]const u8 = null,
-    value: std.json.Value = .null,
-    placeholder: ?[]const u8 = null,
+    /// Which argument: 0 for `@raycast.argument1`.
+    slot: usize,
+    kind: enum { text, dropdown } = .text,
+    title: []const u8,
+    placeholder: []const u8 = "",
+    value: []const u8 = "",
     options: []const Option = &.{},
 };
 
-/// The top view: a list (a Grid comes as one), a detail or a form.
-pub const View = struct {
-    kind: []const u8 = "list",
-    title: ?[]const u8 = null,
-    placeholder: ?[]const u8 = null,
+/// The arguments, asked for before a run.
+pub const Form = struct {
+    title: []const u8,
+    fields: []const Field,
+    actions: []const Action,
+};
+
+/// A script's output, or a question about it ("Run X?").
+pub const Detail = struct {
+    title: []const u8,
+    body: Body,
+    /// Still running: the header says "Loading…".
     loading: bool = false,
-    sections: []const Section = &.{},
-    empty: ?Empty = null,
-    selected: ?[]const u8 = null,
     actions: []const Action = &.{},
-    markdown: ?[]const u8 = null,
-    /// Text shown as printed (a script command's output; Nanolight's own).
-    output: ?[]const u8 = null,
-    metadata: []const Meta = &.{},
-    fields: []const Field = &.{},
 
-    pub fn isList(v: *const View) bool {
-        return std.mem.eql(u8, v.kind, "list");
+    pub const Body = union(enum) {
+        /// A heading and lines, from Markdown (`plain`).
+        markdown: []const u8,
+        /// Lines as printed, monospaced.
+        output: []const u8,
+    };
+};
+
+pub const View = union(enum) {
+    form: Form,
+    detail: Detail,
+
+    pub fn title(v: View) []const u8 {
+        return switch (v) {
+            inline else => |x| x.title,
+        };
     }
 
-    pub fn isForm(v: *const View) bool {
-        return std.mem.eql(u8, v.kind, "form");
-    }
-
-    pub fn count(v: *const View) usize {
-        var n: usize = 0;
-        for (v.sections) |s| n += s.items.len;
-        return n;
-    }
-
-    /// The `i`th item counting through the sections.
-    pub fn item(v: *const View, i: usize) ?*const Item {
-        var k = i;
-        for (v.sections) |s| {
-            if (k < s.items.len) return &s.items[k];
-            k -= s.items.len;
-        }
-        return null;
-    }
-
-    /// The actions in play: the selected item's in a list, else the view's.
-    pub fn actionsAt(v: *const View, sel: usize) []const Action {
-        if (v.isList()) if (v.item(sel)) |it| return it.actions;
-        return v.actions;
+    pub fn actions(v: View) []const Action {
+        return switch (v) {
+            inline else => |x| x.actions,
+        };
     }
 };
 
-pub const Message = struct {
-    type: []const u8 = "",
-    view: ?View = null,
-    style: ?[]const u8 = null,
-    title: ?[]const u8 = null,
-    message: ?[]const u8 = null,
-    target: ?[]const u8 = null,
-    text: ?[]const u8 = null,
-    id: ?std.json.Value = null,
-    method: ?[]const u8 = null,
-    /// A form field's new value (`field`, from the panel).
-    value: std.json.Value = .null,
+/// What the screen tells its runner.
+pub const Event = union(enum) {
+    action: Action,
+    /// A field's new value, which lives until the runner returns.
+    field: struct { slot: usize, value: []const u8 },
+    /// Escape or the back button: the runner ends the script and stops
+    /// the screen.
+    pop,
 };
-
-pub fn parse(arena: std.mem.Allocator, line: []const u8) !Message {
-    return std.json.parseFromSliceLeaky(Message, arena, line, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
-}
-
-/// A message to the host: `{"type":kind, field: value}` and a newline.
-pub fn say(buf: []u8, kind: []const u8, field: ?[]const u8, value: anytype) ![]const u8 {
-    var w: std.Io.Writer = .fixed(buf);
-    var s: std.json.Stringify = .{ .writer = &w };
-    try s.beginObject();
-    try s.objectField("type");
-    try s.write(kind);
-    if (field) |f| {
-        try s.objectField(f);
-        try s.write(value);
-    }
-    try s.endObject();
-    try w.writeByte('\n');
-    return w.buffered();
-}
 
 /// Markdown as plain lines for the panel: headings, emphasis and code
 /// marks dropped, images left out, links as their words.
@@ -177,17 +131,8 @@ pub fn plain(buf: []u8, md: []const u8) []const u8 {
     return std.mem.trim(u8, buf[0..n], " \n");
 }
 
-test "a host's render parses, and markdown reads as text" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const m = try parse(arena.allocator(), "{\"type\":\"render\",\"view\":{\"kind\":\"list\",\"loading\":false,\"sections\":[{\"title\":\"\",\"items\":[{\"id\":\"a\",\"title\":\"Story\",\"subtitle\":\"pg\",\"icon\":{\"text\":\"🔥\"},\"accessories\":[\"3\",\"0\"],\"actions\":[{\"id\":\"o\",\"title\":\"Open in Browser\",\"shortcut\":null},{\"id\":\"c\",\"title\":\"Copy Link\",\"shortcut\":\"cmd+.\"}]}]}],\"extra\":1}}");
-    const v = m.view.?;
-    try std.testing.expect(v.isList());
-    try std.testing.expectEqual(@as(usize, 1), v.count());
-    try std.testing.expectEqualStrings("Copy Link", v.actionsAt(0)[1].title);
-    try std.testing.expectEqualStrings("🔥", v.item(0).?.icon.?.text.?);
+test "markdown reads as text" {
     var buf: [256]u8 = undefined;
-    try std.testing.expectEqualStrings("Hello world\nSee docs and code.", plain(&buf, "# Hello **world**\n![x](y.png)See [docs](https://a.b) and `code`."));
-    try std.testing.expectEqualStrings("{\"type\":\"search\",\"text\":\"hn\"}\n", try say(&buf, "search", "text", "hn"));
-    try std.testing.expectEqualStrings("{\"type\":\"pop\"}\n", try say(&buf, "pop", null, null));
+    const md = "# Hello **world**\n![x](y.png)See [docs](https://a.b) and `code`.";
+    try std.testing.expectEqualStrings("Hello world\nSee docs and code.", plain(&buf, md));
 }
