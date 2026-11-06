@@ -14,7 +14,6 @@ pub fn before(a: Launch, b: Launch) bool {
     return std.mem.lessThan(u8, a.key, b.key);
 }
 
-/// `list` sorted by `before`, cut to `max`.
 pub fn mostOpened(list: []Launch) []const Launch {
     std.sort.pdq(Launch, list, {}, struct {
         fn f(_: void, a: Launch, b: Launch) bool {

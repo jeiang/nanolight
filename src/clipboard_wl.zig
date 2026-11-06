@@ -321,7 +321,6 @@ pub const Wl = struct {
     device: ?*Proxy = null,
     watch: ?nanoui.fdwatch.Watch = null,
 
-    // The selection now, and the read of it.
     current: ?*Offer = null,
     limit: offer.Timeout = .{},
     reading: bool = false,
@@ -331,7 +330,6 @@ pub const Wl = struct {
     rd_watch: ?nanoui.fdwatch.Watch = null,
     buf: std.ArrayList(u8) = .empty,
 
-    // What Nanolight owns the selection with.
     source: ?*Proxy = null,
     served: ?offer.Served = null,
     vk: ?*Proxy = null,

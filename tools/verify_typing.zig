@@ -71,7 +71,7 @@ pub fn check(arena: std.mem.Allocator, io: Io, options: Options) !bool {
     if (options.cycles == 0 or options.cycles > cycles_max) return error.Usage;
     try Io.Dir.cwd().createDirPath(io, options.shots);
     const work = try command.temporaryFolder(arena, io, "nanolight-typing");
-    defer Io.Dir.cwd().deleteTree(io, work) catch {}; // best effort: a temp folder.
+    defer Io.Dir.cwd().deleteTree(io, work) catch {}; // best effort: macOS clears /tmp.
     const frame = screen.firstPanel() orelse {
         command.say(io, "FAIL  no panel on screen", .{});
         return false;
@@ -183,7 +183,6 @@ const Watch = struct {
     }
 };
 
-/// A capture's state.
 fn stateOf(arena: std.mem.Allocator, io: Io, folder: []const u8, name: []const u8) !State {
     const path = try std.fmt.allocPrint(arena, "{s}/{s}.png", .{ folder, name });
     const hex = try release.hashFile(std.crypto.hash.Sha1, io, Io.Dir.cwd(), path);

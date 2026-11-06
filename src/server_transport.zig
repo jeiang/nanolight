@@ -85,7 +85,6 @@ const Timed = struct {
     }
 };
 
-/// What every connection is served with.
 pub const Serve = struct {
     state: Io.Dir,
     tokens: []const server.Token,

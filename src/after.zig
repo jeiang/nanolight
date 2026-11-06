@@ -24,7 +24,6 @@ pub fn oneShot(ms: u64, ctx: anytype, comptime func: fn (@TypeOf(ctx)) void) voi
 pub const Debounce = struct {
     pending: u32 = 0,
 
-    /// Whether a wait is still running.
     pub fn waiting(d: *const Debounce) bool {
         return d.pending > 0;
     }

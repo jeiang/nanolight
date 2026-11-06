@@ -67,7 +67,6 @@ pub fn log(comptime level: std.log.Level, comptime fmt: []const u8, args: anytyp
 /// whatever `max_entries` says (0 there limits only the count): past it, the oldest go first.
 pub const max_store_bytes: u64 = 256 << 20;
 comptime {
-    // The newest entry always fits on its own.
     for (std.enums.values(Kind)) |k| std.debug.assert(k.cap() <= max_store_bytes);
 }
 /// A text longer than this goes to a blob (all of it stays in memory without a dir).
@@ -251,7 +250,6 @@ pub const Store = struct {
 
     // ----- what is kept -----
 
-    /// Whether `source` is one of the excluded apps.
     pub fn excluded(s: *const Store, source: []const u8) bool {
         if (source.len == 0) return false;
         for (s.cfg.exclude_apps) |x| if (std.ascii.eqlIgnoreCase(x, source)) return true;
@@ -298,7 +296,6 @@ pub const Store = struct {
         return true;
     }
 
-    /// The entry for `item`, its blob written.
     fn make(s: *Store, item: Item, h: u64, content: []const u8, now: i64) ?Entry {
         const spill = item.kind.info().blob == .when_long and s.dir != null and
             content.len > inline_max;
@@ -343,7 +340,6 @@ pub const Store = struct {
         if (blobName(e, &buf)) |name| _ = deleteIfThere(s.io, dir, name);
     }
 
-    /// After a change in memory: counted, and the index written.
     fn changed(s: *Store) !void {
         s.gen +%= 1;
         try s.save();
@@ -434,7 +430,6 @@ pub const Store = struct {
         _ = s.prune(now) catch |e| indexNotWritten(e);
     }
 
-    /// The oldest entries past `keepCount` go.
     fn enforce(s: *Store) usize {
         const keep = keepCount(s.entries.items, max_store_bytes, s.cfg.max_entries);
         const gone = s.entries.items.len - keep;
@@ -705,7 +700,6 @@ pub const PasteResult = enum {
 /// What a watcher tells the app.
 pub const Sink = struct {
     ctx: *anyopaque,
-    /// Something was copied.
     observe: *const fn (ctx: *anyopaque, item: Item) void,
     /// Whether this source is excluded: asked before the content is read.
     excluded: *const fn (ctx: *anyopaque, source: []const u8) bool,
@@ -833,7 +827,6 @@ test "nothing is stored when disabled, excluded, concealed, empty or too big" {
     try testing.expect(!s.add(.{ .kind = .image, .png = big }, 1));
     try testing.expectEqual(@as(usize, 0), s.len());
     try testing.expectEqual(@as(u32, 0), s.gen);
-    // An unknown source is never excluded.
     try testing.expect(s.add(textItem("x", ""), 1));
 }
 
@@ -865,7 +858,6 @@ test "pruning by age and by count" {
     try testing.expectEqual(@as(usize, 0), try t.prune(now));
     try testing.expectEqual(@as(usize, 1), try t.prune(now + 2 * day));
     try testing.expectEqualStrings("a", t.at(0).text);
-    // 0 days keeps everything.
     t.cfg.retention_days = 0;
     try testing.expectEqual(@as(usize, 0), try t.prune(now + 1000 * day));
 }
@@ -886,7 +878,6 @@ test "the size budget keeps the newest, up to its boundary" {
     // One byte under: the oldest goes, the newest stays.
     try testing.expectEqual(@as(usize, 3), keepCount(&list, 10, 0));
     try testing.expectEqual(@as(usize, 2), keepCount(&list, 3, 0));
-    // The count limit too, whichever cuts more.
     try testing.expectEqual(@as(usize, 1), keepCount(&list, 100, 1));
     try testing.expectEqual(@as(usize, 0), keepCount(&list, 0, 0));
     try testing.expectEqual(@as(usize, 0), keepCount(&.{}, 0, 0));
@@ -910,7 +901,6 @@ test "search matches text, file names and the source app, best first" {
         4,
     );
     var out: [8]search.Ranked = undefined;
-    // No query: all, newest first.
     try testing.expectEqual(@as(usize, 4), s.find("", &out));
     try testing.expectEqual(@as(u32, 0), out[0].index);
     // A prefix beats a match inside.
@@ -920,11 +910,9 @@ test "search matches text, file names and the source app, best first" {
     // A file's name, not its directory prefix path alone.
     try testing.expectEqual(@as(usize, 1), s.find("budget", &out));
     try testing.expectEqual(Kind.file, s.at(out[0].index).kind);
-    // The source app, for every kind.
     try testing.expectEqual(@as(usize, 1), s.find("preview", &out));
     try testing.expectEqual(Kind.image, s.at(out[0].index).kind);
     try testing.expectEqual(@as(usize, 0), s.find("zzzzqq", &out));
-    // Room for only some.
     var one: [1]search.Ranked = undefined;
     try testing.expectEqual(@as(usize, 1), s.find("", &one));
 }
@@ -939,7 +927,6 @@ test "a long text goes to a blob and comes back whole; an image keeps its PNG" {
     try testing.expect(s.add(textItem(&long, ""), 1));
     const png = "\x89PNGdata";
     try testing.expect(s.add(.{ .kind = .image, .png = png, .width = 2, .height = 3 }, 2));
-    // The index holds the start only, the blob the rest.
     const e = s.get(hash(.text, &long)).?.*;
     try testing.expectEqual(@as(u64, long.len), e.size);
     try testing.expectEqual(@as(usize, preview_max), e.text.len);
@@ -956,7 +943,6 @@ test "a long text goes to a blob and comes back whole; an image keeps its PNG" {
     const files = try s.read(testing.allocator, s.at(0));
     try testing.expect(files.owned == null);
     try testing.expectEqualStrings("/a/b", files.content.text);
-    // Removing an entry removes its blob.
     try testing.expect(s.remove(img.hash));
     try testing.expect(!s.remove(img.hash));
     var names: usize = 0;
@@ -968,7 +954,6 @@ test "a long text goes to a blob and comes back whole; an image keeps its PNG" {
         try testing.expect(std.mem.endsWith(u8, f.name, ".txt"));
     }
     try testing.expectEqual(@as(usize, 1), names);
-    // A blob that is gone is an error, not an empty entry.
     try tmp.dir.deleteTree(testing.io, "blobs");
     try testing.expectError(error.FileNotFound, s.read(testing.allocator, e));
 }
@@ -1126,7 +1111,6 @@ test "a corrupt index starts empty, is deleted, and its blobs are left alone" {
     try testing.expectEqual(@as(usize, 0), s.len());
     try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "index.json", .{}));
     try tmp.dir.access(testing.io, "blobs/0000000000000001.png", .{});
-    // And it works from there.
     try testing.expect(s.add(textItem("fresh", ""), 2));
     try tmp.dir.access(testing.io, "index.json", .{});
 }
@@ -1170,7 +1154,6 @@ test "clear that cannot write the index deletes it, and one that leaves a file s
     try tmp.dir.createDirPath(testing.io, "index.json.tmp");
     try s.clear();
     try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "index.json", .{}));
-    // A prune that cannot write the index says so.
     _ = s.add(textItem("again", ""), 2);
     try testing.expect(if (s.prune(100 * std.time.s_per_day)) |_| false else |_| true);
     // Something in blobs/ that cannot be deleted: memory is cleared, the caller told.

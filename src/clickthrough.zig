@@ -1,6 +1,6 @@
 //! Clicks outside the panel reach what is under it. The window is as tall
 //! as the panel can be, and a shadow's margin wider (it never resizes: see
-//! app.zig's `App.resize`), so below a short panel it is clear but still there:
+//! panel_mac.zig), so below a short panel it is clear but still there:
 //! a click there landed on Nanolight's own window, which kept the keys, so
 //! the panel stayed and the app beneath got nothing. While the panel shows,
 //! the window ignores the mouse wherever the pointer is not over the panel:
@@ -97,6 +97,5 @@ test "only the panel takes the mouse, not the clear window round it" {
     try t.expect(!overPanel(f, .{ .x = 120, .y = 900 }, 40, 680, 300));
     try t.expect(!overPanel(f, .{ .x = 480, .y = 930 }, 40, 680, 300));
     try t.expect(!overPanel(f, .{ .x = 10, .y = 10 }, 40, 680, 300));
-    // A taller panel reaches further down.
     try t.expect(overPanel(f, .{ .x = 480, .y = 500 }, 40, 680, 600));
 }

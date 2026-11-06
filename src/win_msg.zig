@@ -54,7 +54,6 @@ const class_name = std.unicode.utf8ToUtf16LeStringLiteral("NanolightMessages");
 /// HWND_MESSAGE: the parent of message-only windows.
 const message_parent: HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, -3))));
 
-/// Where the window's messages go.
 pub const Handlers = struct {
     hotkey: *const fn () void,
     command: *const fn (cmd: single.Command) void,

@@ -60,7 +60,6 @@ pub fn build(b: *std.Build) void {
     run.addPassthruArgs();
     b.step("run", "Run Nanolight (⌘Space)").dependOn(&run.step);
 
-    // zig-out/Nanolight.app: the program with its icon, for /Applications.
     if (os == .macos) addAppBundle(b, exe, app_options.version);
 
     const tests = b.addTest(.{ .root_module = appModule(b, "src/tests.zig", app_options) });
@@ -74,7 +73,6 @@ pub fn build(b: *std.Build) void {
     addServer(b, target, optimize);
     addCheckConfig(b, target, optimize);
 
-    // Runs the Linux clipboard watcher without the panel (src/clipboard_probe.zig).
     if (os == .linux) {
         const probe = b.addExecutable(.{
             .name = "clip-probe",
@@ -142,7 +140,6 @@ fn addAppBundle(b: *std.Build, exe: *std.Build.Step.Compile, version: []const u8
     b.step("app", "Build zig-out/" ++ release.bundle_name).dependOn(&app.step);
 }
 
-/// What `zig build lint` checks, and its zig fmt formats.
 const lint_scope = [_][]const u8{ "src", "tools", "build.zig" };
 
 /// `zig build lint`: zig fmt's check, and the TigerStyle rules a machine
@@ -275,7 +272,6 @@ fn linkPlatform(module: *std.Build.Module, os: std.Target.Os.Tag) void {
             module.linkFramework("ApplicationServices", .{});
             module.linkFramework("CoreGraphics", .{});
         },
-        // Windows: see windows_libraries.
         .windows => for (windows_libraries) |library| module.linkSystemLibrary(library, .{}),
         // Linux: X11, GTK and gdk-pixbuf are opened at run time (dlopen).
         else => {},

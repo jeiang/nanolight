@@ -65,7 +65,6 @@ pub const Sink = struct {
     }
 };
 
-/// The app named `name`, case-insensitively.
 pub fn findName(apps: []const App, name: []const u8) ?u32 {
     for (apps, 0..) |a, i| {
         if (std.ascii.eqlIgnoreCase(a.name, name)) return @intCast(i);
@@ -145,7 +144,6 @@ pub fn walk(
         };
         var buf: [max_scan_path]u8 = undefined;
         const parts = .{ folder, std.fs.path.sep, e.name };
-        // A path past `max_scan_path` is passed over.
         const full = std.fmt.bufPrint(&buf, "{s}{c}{s}", parts) catch continue;
         switch (visit(ctx, .{ .dir = top.dir, .folder = folder, .full = full, .entry = e })) {
             .next => {},

@@ -91,7 +91,6 @@ fn serve(server: *Server) void {
         const stream = server.listener.accept(server.io) catch |err| switch (err) {
             error.Canceled => return,
             else => {
-                // A failed accept is retried after a pause, not in a spin.
                 server.io.sleep(.fromMilliseconds(accept_pause_ms), .awake) catch return;
                 continue;
             },

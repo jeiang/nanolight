@@ -378,7 +378,6 @@ pub fn format(buf: []u8, v: f64, grouped: bool) []const u8 {
         return group(buf, std.fmt.bufPrint(&digits, "{d}", .{n}) catch return "");
     }
     const s = std.fmt.bufPrint(buf, "{d:.10}", .{v}) catch return "";
-    // Trailing zeros of the fraction, then a bare point.
     var end = s.len;
     if (std.mem.indexOfScalar(u8, s, '.') != null) {
         while (end > 0 and s[end - 1] == '0') end -= 1;
@@ -459,7 +458,6 @@ test "math before a conversion's units, and after them" {
     try t.expectEqual(@as(?f64, null), carry(12, "* (2"));
     try t.expectEqual(@as(?f64, null), carry(12, "* 2 in cm"));
     try t.expectEqual(@as(?f64, null), carry(std.math.inf(f64), ""));
-    // Plain math still reads no commas.
     try t.expectEqual(@as(?f64, null), eval("1,000 * 2"));
 }
 

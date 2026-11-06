@@ -184,7 +184,6 @@ pub const X11 = struct {
     prop_atom: Atom = 0,
     own_atom: Atom = 0,
 
-    // The copy being read.
     phase: Phase = .idle,
     limit: offer.Timeout = .{},
     time: c_ulong = 0,

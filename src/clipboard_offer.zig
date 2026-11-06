@@ -341,7 +341,6 @@ pub const Served = struct {
     }
 };
 
-/// The most types one served entry is offered as.
 pub const max_served_mimes = blk: {
     var n: usize = 0;
     for (std.enums.values(clipboard.Kind)) |k| {

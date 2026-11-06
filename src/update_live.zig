@@ -51,7 +51,6 @@ pub const Update = struct {
         if (u.started) |updater| updater.deinit();
     }
 
-    /// The core's `away`.
     pub fn awayHook(u: *Update) Hook {
         return .{ .ctx = u, .func = away };
     }
@@ -77,7 +76,6 @@ pub const Update = struct {
         return if (updater.current.len > 0) updater.current else build.version;
     }
 
-    /// The newer version waiting, if one is.
     pub fn ready(u: *const Update) ?[]const u8 {
         const updater = u.updater orelse return null;
         return updater.ready();

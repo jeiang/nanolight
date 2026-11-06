@@ -4,7 +4,6 @@
 //! rates.zig's; converting by it, convert.zig's (through `Rates.perUsd`).
 const std = @import("std");
 
-/// A longer table is not read.
 pub const max_bytes = 512 * 1024;
 
 /// Currency rates, each worth of one USD, by lowercase three-letter code.

@@ -36,7 +36,6 @@ pub const Hooks = struct {
     snapshot: *const fn (ctx: *anyopaque, arena: std.mem.Allocator) Settings,
     /// The server's settings merged with this machine's: take them.
     apply: *const fn (ctx: *anyopaque, s: Settings) void,
-    /// The sync status changed: the menu changes.
     changed: *const fn (ctx: *anyopaque) void,
 };
 
@@ -237,7 +236,6 @@ fn baseUrl(url: []const u8) ?[]const u8 {
     return std.mem.trimEnd(u8, url, "/");
 }
 
-/// The same server whatever the trailing slash.
 fn sameServer(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, std.mem.trimEnd(u8, a, "/"), std.mem.trimEnd(u8, b, "/"));
 }
@@ -351,7 +349,6 @@ const TestSync = struct {
         const t: *TestSync = @fieldParentPtr("acc", a);
         t.sends += 1;
     }
-    /// The server agreeing with this machine.
     fn agree(t: *TestSync) !void {
         const body = try settings.encode(std.testing.allocator, t.here);
         defer std.testing.allocator.free(body);
@@ -365,7 +362,6 @@ test "a failed sync says why and is not retried, even if asked again meanwhile" 
     t.init();
     t.acc.sync();
     try std.testing.expectEqual(@as(u32, 1), t.sends);
-    // Asked again while it is out: not sent now.
     t.acc.sync();
     try std.testing.expectEqual(@as(u32, 1), t.sends);
     try std.testing.expect(t.acc.dirty);
@@ -388,7 +384,6 @@ test "a change made while a sync is out is sent once that one succeeds" {
     try std.testing.expectEqual(@as(u32, 1), t.sends);
     try t.agree();
     try std.testing.expect(t.acc.state == .synced);
-    // Sent again, once.
     try std.testing.expectEqual(@as(u32, 2), t.sends);
     try std.testing.expect(t.acc.inflight != null and !t.acc.dirty);
     try t.agree();

@@ -53,7 +53,6 @@ fn env(name: [*:0]const u8) ?[]const u8 {
     return std.mem.span(v);
 }
 
-/// Whether this is an X11 session: not Wayland, and a display.
 pub fn onX11() bool {
     return !std.mem.eql(u8, env("XDG_SESSION_TYPE") orelse "", "wayland") and
         env("DISPLAY") != null;

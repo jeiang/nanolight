@@ -29,7 +29,6 @@ pub const Feed = struct {
     fetched_s: i64 = 0,
     tried_s: i64 = 0,
     state: State = .idle,
-    /// The cached table was looked for (`cached`), once.
     cache_read: bool = false,
 
     pub const State = enum { idle, busy, missed };
@@ -72,7 +71,6 @@ pub const Feed = struct {
         f.tried_s = now_s;
     }
 
-    /// The fetch brought `r`, now the table in use.
     pub fn landed(f: *Feed, r: Rates, now_s: i64) void {
         assert(f.state == .busy);
         f.use(r);
@@ -229,14 +227,12 @@ test "rates are fetched when missing or a day old, one at a time, not in a loop"
     defer f.deinit();
     try testing.expect(f.due(1000));
     f.begin(1000);
-    // One out: no second, and no failure yet.
     try testing.expect(!f.due(1000 + retry_after));
     try testing.expect(!f.failed());
     f.fail();
     try testing.expect(f.failed());
     try testing.expect(!f.due(1000 + retry_after - 1));
     try testing.expect(f.due(1000 + retry_after));
-    // A retry on its way is not a failure.
     const t0 = 1000 + retry_after;
     f.begin(t0);
     try testing.expect(!f.failed());
@@ -245,8 +241,6 @@ test "rates are fetched when missing or a day old, one at a time, not in a loop"
     try testing.expect(f.table() != null);
     try testing.expect(!f.due(t0 + max_age - 1));
     try testing.expect(f.due(t0 + max_age));
-    // Stale and the refresh failed: the old table still answers, and the
-    // next try waits.
     f.begin(t0 + max_age);
     f.fail();
     try testing.expect(!f.failed());

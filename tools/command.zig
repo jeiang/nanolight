@@ -29,7 +29,7 @@ pub fn complain(io: Io, comptime format: []const u8, arguments: anytype) void {
         buffer[buffer.len - 4 ..].* = "...\n".*;
         break :blk &buffer;
     };
-    // best effort: as above, for standard error.
+    // best effort: a closed standard error leaves nowhere to report this complaint.
     Io.File.stderr().writeStreamingAll(io, line) catch {};
 }
 

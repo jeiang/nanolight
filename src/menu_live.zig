@@ -26,7 +26,6 @@ pub const Menu = struct {
         if (!prefs.flag(m.core.kv, m.core.app.gpa, .menu_bar)) _ = m.bar(false);
     }
 
-    /// The core's `menu`.
     pub fn menuHook(m: *Menu) Hook {
         return .{ .ctx = m, .func = rebuild };
     }
@@ -63,7 +62,6 @@ pub const Menu = struct {
     }
 };
 
-/// The menu, as things stand now.
 fn rebuild(ctx: *anyopaque) void {
     if (comptime !platform.tray) return;
     const m = after.cast(*Menu, ctx);

@@ -550,7 +550,6 @@ test "top keeps at most its room, best first, the first of equals first" {
     var got: [3]u32 = undefined;
     for (top.ranked(), &got) |r, *g| g.* = r.index;
     try t.expectEqualSlices(u32, &.{ 1, 4, 5 }, &got);
-    // No room: nothing is kept, and nothing breaks.
     var none: Top = .init(&.{});
     none.offer(.{ .index = 0, .match = .{ .score = 1 } });
     try t.expectEqual(@as(usize, 0), none.n);
