@@ -297,6 +297,7 @@ pub const Live = struct {
     fn ratesPath(l: *Live) ?[]u8 {
         const data = nanoui.path(l.app.gpa, .data, "Nanolight") catch return null;
         defer l.app.gpa.free(data);
+        // best effort: without the folder no rates are read, and the write says why.
         std.Io.Dir.cwd().createDirPath(l.app.io, data) catch {};
         return std.fs.path.join(l.app.gpa, &.{ data, "rates.json" }) catch null;
     }
@@ -432,6 +433,7 @@ pub const Live = struct {
             .separator,
             acc,
             .separator,
+            // best effort: without the menu, the panel still opens from its key.
         } ++ update ++ [_]Item{.{ .label = "Quit Nanolight", .role = .quit }})) catch {};
     }
 
@@ -655,7 +657,8 @@ const RatesAsk = struct {
             _ = config.kvSet(l.kv, rates_at_key, at_text);
             if (l.ratesPath()) |path| {
                 defer gpa.free(path);
-                std.Io.Dir.cwd().writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch {};
+                std.Io.Dir.cwd().writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch |err|
+                    std.log.warn("nanolight: the rates weren't kept in {s}: {t}", .{ path, err });
             }
         } else if (a.which + 1 < convert.urls.len) {
             return l.fetchRates(a.which + 1);

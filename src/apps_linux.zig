@@ -157,6 +157,7 @@ fn spawn(io: std.Io, args: []const []const u8) bool {
 
 fn reap(io: std.Io, child: std.process.Child) void {
     var c = child;
+    // best effort: the app was started; this only collects its exit status.
     _ = c.wait(io) catch {};
 }
 

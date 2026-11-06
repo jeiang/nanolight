@@ -158,7 +158,7 @@ fn fail(r: Reply) Reply {
 fn write(io: Io, dir: Io.Dir, name: []const u8, bytes: []const u8) !void {
     var buf: [96]u8 = undefined;
     const tmp = try std.fmt.bufPrint(&buf, "{s}.tmp", .{name});
-    errdefer dir.deleteFile(io, tmp) catch {};
+    errdefer dir.deleteFile(io, tmp) catch |err| std.log.warn("{s}: not removed: {t}", .{ tmp, err });
     const f = try dir.createFile(io, tmp, .{ .truncate = true });
     defer f.close(io);
     try f.writeStreamingAll(io, bytes);

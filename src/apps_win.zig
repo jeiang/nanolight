@@ -17,10 +17,16 @@ pub fn scan(ix: *Index, io: std.Io, env: *const std.process.Environ.Map) void {
     }
     const windir = env.get("WINDIR") orelse "C:\\Windows";
     var ex: [512]u8 = undefined;
-    ix.addIn("Settings", "ms-settings:", "Windows") catch {};
-    if (std.fmt.bufPrint(&ex, "{s}\\explorer.exe", .{windir})) |p| ix.addIn("File Explorer", p, "Windows") catch {} else |_| {}
-    ix.addIn("Microsoft Store", "ms-windows-store:", "Windows") catch {};
-    ix.addIn("Calculator", "calculator:", "Windows") catch {};
+    addBuiltIn(ix, "Settings", "ms-settings:");
+    if (std.fmt.bufPrint(&ex, "{s}\\explorer.exe", .{windir})) |p| addBuiltIn(ix, "File Explorer", p) else |_| {}
+    addBuiltIn(ix, "Microsoft Store", "ms-windows-store:");
+    addBuiltIn(ix, "Calculator", "calculator:");
+}
+
+/// A row Windows always has, listed under "Windows".
+fn addBuiltIn(ix: *Index, name: []const u8, path: []const u8) void {
+    // best effort: only memory can fail here, and the other apps still list.
+    ix.addIn(name, path, "Windows") catch {};
 }
 
 pub fn scanDir(ix: *Index, io: std.Io, path: []const u8, depth: u8) void {

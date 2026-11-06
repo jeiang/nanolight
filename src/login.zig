@@ -77,9 +77,13 @@ const Linux = struct {
                 if (n <= 0) return false;
                 var entry: [2048]u8 = undefined;
                 const text = std.fmt.bufPrint(&entry, "[Desktop Entry]\nType=Application\nName=Nanolight\nComment=A launcher, on Alt Space\nExec=\"{s}\"\nIcon=nanolight\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n", .{exe[0..@intCast(n)]}) catch return false;
+                // best effort: without the folder the write below fails and reports it off.
                 if (std.fs.path.dirname(path)) |dir| cwd.createDirPath(io(), dir) catch {};
                 cwd.writeFile(io(), .{ .sub_path = path, .data = text }) catch return false;
-            } else cwd.deleteFile(io(), path) catch {};
+            } else {
+                // best effort: the access below reports the entry if it is still there.
+                cwd.deleteFile(io(), path) catch {};
+            }
         }
         cwd.access(io(), path, .{}) catch return false;
         return true;

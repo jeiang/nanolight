@@ -204,6 +204,7 @@ pub const Index = struct {
     /// Finds the apps on this machine; `home` adds ~/Applications.
     pub fn scan(ix: *Index, io: std.Io, home: ?[]const u8) void {
         for (roots) |r| ix.scanDir(io, r, 1);
+        // best effort: only memory can fail here, and the other apps still list.
         ix.add("Finder", "/System/Library/CoreServices/Finder.app") catch {};
         if (home) |h| {
             var buf: [512]u8 = undefined;

@@ -151,6 +151,7 @@ pub fn dir(gpa: std.mem.Allocator) ![]u8 {
     const data = try nanoui.path(gpa, .data, "Nanolight");
     defer gpa.free(data);
     const d = try std.fs.path.join(gpa, &.{ data, "script-commands" });
+    // best effort: a folder that can't be made just lists no scripts.
     std.Io.Dir.cwd().createDirPath(io(), d) catch {};
     return d;
 }
@@ -158,6 +159,7 @@ pub fn dir(gpa: std.mem.Allocator) ![]u8 {
 /// Adds each script command in the folder and in `extra` (a folder down
 /// too) to `ix`, and the row that opens the folder.
 pub fn scan(ix: *Index, gpa: std.mem.Allocator, extra: []const []const u8) void {
+    // best effort: only memory can fail here, and the scripts still list.
     ix.addIn("Script Commands Folder", folder_path, "Raycast") catch {};
     if (dir(gpa)) |root| {
         defer gpa.free(root);
