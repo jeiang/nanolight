@@ -106,15 +106,13 @@ pub const X11 = struct {
     prop_atom: Atom = 0,
 
     // The copy being read.
-    busy: bool = false,
+    phase: Phase = .idle,
     /// Counts the steps of the read, so only the last one's timer counts.
     tick: u32 = 0,
     time: c_ulong = 0,
-    targets_stage: bool = false,
     gather: lx.Gather = undefined,
     want: Atom = 0,
     cap: usize = 0,
-    incr: bool = false,
     names: std.ArrayList([]const u8) = .empty,
     buf: std.ArrayList(u8) = .empty,
     source_buf: [128]u8 = undefined,
@@ -123,7 +121,7 @@ pub const X11 = struct {
 
     // What Nanolight owns the clipboard with.
     served: ?lx.Served = null,
-    served_atoms: [3]Atom = undefined,
+    served_atoms: [lx.max_served_mimes]Atom = undefined,
     /// The most one ChangeProperty carries.
     chunk_max: usize = 0,
     /// A transfer to a client in pieces, and its own timer's count.
@@ -132,6 +130,10 @@ pub const X11 = struct {
 
     /// What is sent to one requestor, in INCR pieces; its own copy of the bytes.
     const Out = struct { requestor: Window, prop: Atom, kind: Atom, data: []u8, at: usize = 0 };
+
+    /// Where a read of the owner's copy is: its TARGETS asked for, one type asked for,
+    /// or that type coming in INCR pieces.
+    const Phase = enum { idle, targets, data, incr };
 
     const gpa = std.heap.c_allocator;
 
@@ -244,16 +246,15 @@ pub const X11 = struct {
     }
 
     fn begin(x: *X11, owner: Window, time: c_ulong) void {
-        if (x.busy) {
+        if (x.phase != .idle) {
             x.queued = .{ .owner = owner, .time = time };
             return;
         }
         const sink = x.sink orelse return;
         const source = x.wmClass(owner);
         if (sink.excluded(sink.ctx, source)) return;
-        x.busy = true;
+        x.phase = .targets;
         x.time = time;
-        x.targets_stage = true;
         x.gather = .{ .plan = undefined, .sink = sink, .source = source };
         x.ask(x.targets_atom, 8192);
     }
@@ -262,7 +263,6 @@ pub const X11 = struct {
     fn ask(x: *X11, target: Atom, cap: usize) void {
         x.want = target;
         x.cap = cap;
-        x.incr = false;
         x.buf.clearRetainingCapacity();
         _ = x.xl.XConvertSelection(x.d.?, x.clipboard_atom, target, x.prop_atom, x.win, x.time);
         _ = x.xl.XFlush(x.d.?);
@@ -275,12 +275,11 @@ pub const X11 = struct {
     }
 
     fn expired(x: *X11, id: u32) void {
-        if (x.busy and id == x.tick) x.finish();
+        if (x.phase != .idle and id == x.tick) x.finish();
     }
 
     fn finish(x: *X11) void {
-        x.busy = false;
-        x.incr = false;
+        x.phase = .idle;
         for (x.names.items) |n| gpa.free(n);
         x.names.clearRetainingCapacity();
         x.buf.clearRetainingCapacity();
@@ -309,18 +308,18 @@ pub const X11 = struct {
     }
 
     fn notified(x: *X11, e: *const SelectionEvent) void {
-        if (!x.busy or e.selection != x.clipboard_atom or e.target != x.want) return;
+        if (x.phase == .idle or e.selection != x.clipboard_atom or e.target != x.want) return;
         if (e.time != 0 and e.time != x.time) return;
         if (e.property == 0) return x.failed();
         const p = x.take(x.cap) orelse return x.failed();
         defer x.drop(p);
         if (p.kind == x.incr_atom) {
-            if (x.targets_stage) return x.finish();
-            x.incr = true;
+            if (x.phase == .targets) return x.finish();
+            x.phase = .incr;
             return x.step();
         }
         const data = p.data orelse return x.failed();
-        if (x.targets_stage) return x.targets(p);
+        if (x.phase == .targets) return x.targets(p);
         if (p.left > 0 or p.format != 8) return x.failed();
         x.advance(data[0..p.n]);
     }
@@ -338,7 +337,7 @@ pub const X11 = struct {
                 break;
             };
         }
-        x.targets_stage = false;
+        x.phase = .data;
         x.gather.plan = lx.plan(x.names.items);
         if (x.gather.plan.own) return x.finish();
         const r = x.gather.first() orelse return x.finish();
@@ -350,6 +349,7 @@ pub const X11 = struct {
         const n = @min(r.mime.len, name.len);
         @memcpy(name[0..n], r.mime[0..n]);
         name[n] = 0;
+        x.phase = .data;
         x.ask(x.atom(&name), r.cap);
     }
 
@@ -360,19 +360,19 @@ pub const X11 = struct {
     }
 
     fn failed(x: *X11) void {
-        if (x.targets_stage) x.finish() else x.advance(null);
+        if (x.phase == .targets) x.finish() else x.advance(null);
     }
 
     /// One piece of an INCR transfer: the owner puts it in our property
     /// and waits for us to delete it; an empty piece ends the transfer.
     fn property(x: *X11, e: *const PropertyEvent) void {
         if (e.window != x.win) return x.outgoing(e);
-        if (!x.busy or !x.incr or e.atom != x.prop_atom or e.state != property_new_value) return;
+        if (x.phase != .incr or e.atom != x.prop_atom or e.state != property_new_value) return;
         const p = x.take(x.cap - x.buf.items.len + 4) orelse return x.advance(null);
         defer x.drop(p);
         if (p.format != 8 or p.left > 0) return x.advance(null);
         if (p.n == 0) {
-            x.incr = false;
+            x.phase = .data;
             return x.advance(x.buf.items);
         }
         if (x.buf.items.len + p.n > x.cap) return x.advance(null);
@@ -391,7 +391,8 @@ pub const X11 = struct {
         var s = lx.Served.init(gpa, c) catch return false;
         const mimes = s.mimes();
         for (mimes, 0..) |m, i| {
-            var name: [64:0]u8 = undefined;
+            var name: [lx.max_mime_name + 1:0]u8 = undefined;
+            std.debug.assert(m.len < name.len);
             @memcpy(name[0..m.len], m);
             name[m.len] = 0;
             x.served_atoms[i] = x.atom(&name);
@@ -432,7 +433,7 @@ pub const X11 = struct {
         var data: []const u8 = undefined;
         var kind: Atom = e.target;
         var format: c_int = 8;
-        var atoms: [4]c_ulong = undefined;
+        var atoms: [lx.max_served_mimes + 1]c_ulong = undefined;
         if (e.target == x.targets_atom) {
             atoms[0] = x.targets_atom;
             for (mimes, 0..) |_, i| atoms[i + 1] = x.served_atoms[i];

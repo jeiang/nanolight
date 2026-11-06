@@ -239,9 +239,10 @@ pub fn load(store: nanoui.kv.Store, gpa: std.mem.Allocator) Choice {
     return Choice.parse(v) orelse .cmd_space;
 }
 
-pub fn save(store: nanoui.kv.Store, c: Choice) void {
+/// False, and logged, when it could not be kept.
+pub fn save(store: nanoui.kv.Store, c: Choice) bool {
     var buf: [name_max]u8 = undefined;
-    store.set(store_key, c.name(&buf)) catch {};
+    return @import("config.zig").kvSet(store, store_key, c.name(&buf));
 }
 
 pub fn onboarded(store: nanoui.kv.Store) bool {
@@ -249,7 +250,8 @@ pub fn onboarded(store: nanoui.kv.Store) bool {
 }
 
 pub fn setOnboarded(store: nanoui.kv.Store) void {
-    store.set(onboarded_key, "1") catch {};
+    // A failure is logged; the welcome then shows again at the next start.
+    _ = @import("config.zig").kvSet(store, onboarded_key, "1");
 }
 
 /// One of the system's shortcuts, as `com.apple.symbolichotkeys` keeps it.
@@ -471,7 +473,7 @@ test "the choice is kept" {
     var mem: nanoui.kv.Memory = .{ .gpa = std.testing.allocator };
     defer mem.deinit();
     try std.testing.expectEqual(Choice.cmd_space, load(mem.store(), std.testing.allocator));
-    save(mem.store(), .ctrl_space);
+    try std.testing.expect(save(mem.store(), .ctrl_space));
     try std.testing.expectEqual(Choice.ctrl_space, load(mem.store(), std.testing.allocator));
     try std.testing.expect(!onboarded(mem.store()));
     setOnboarded(mem.store());

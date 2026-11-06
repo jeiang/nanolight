@@ -49,7 +49,7 @@ const theme_key = "nanolight.theme";
 fn theme(ctx: *anyopaque, t: Theme) void {
     const live = l(ctx);
     live.s.theme = t;
-    live.kv.set(theme_key, @tagName(t)) catch {};
+    _ = @import("config.zig").kvSet(live.kv, theme_key, @tagName(t));
     if (live.window) |w| w.redraw();
 }
 

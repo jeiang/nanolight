@@ -221,9 +221,10 @@ pub const Live = struct {
     fn applySynced(ctx: *anyopaque, st: Settings) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         var at: [24]u8 = undefined;
-        l.kv.set(sync_at_key, std.fmt.bufPrint(&at, "{d}", .{st.at}) catch "0") catch {};
+        const at_text = std.fmt.bufPrint(&at, "{d}", .{st.at}) catch unreachable;
+        _ = config.kvSet(l.kv, sync_at_key, at_text);
         if (shortcut.Choice.parse(st.hotkey)) |c| if (!c.eql(l.choice)) {
-            shortcut.save(l.kv, c);
+            _ = shortcut.save(l.kv, c);
             l.useKey(c);
         };
         l.setSuggest(st.suggest, .synced);
@@ -249,7 +250,8 @@ pub const Live = struct {
     /// This Mac chose its key or turned suggestions on or off, just now.
     fn touched(l: *Live) void {
         var at: [24]u8 = undefined;
-        l.kv.set(sync_at_key, std.fmt.bufPrint(&at, "{d}", .{account.now()}) catch "0") catch {};
+        const now = std.fmt.bufPrint(&at, "{d}", .{account.now()}) catch unreachable;
+        _ = config.kvSet(l.kv, sync_at_key, now);
         if (l.acct) |*a| a.changed();
     }
 
@@ -386,8 +388,8 @@ pub const Live = struct {
     pub fn setSuggest(l: *Live, on: bool, origin: Origin) void {
         if (on == l.s.suggest_on) return;
         l.s.suggest_on = on;
-        // best effort: the choice holds for this run; the next launch falls back to on.
-        l.kv.set(suggest_key, if (on) "1" else "0") catch {};
+        // A failure is logged; the choice holds for this run, the next launch falls back to on.
+        _ = config.kvSet(l.kv, suggest_key, if (on) "1" else "0");
         if (origin == .here) l.touched();
         // The rows again, with or without them.
         l.s.built = 1;
@@ -402,7 +404,7 @@ pub const Live = struct {
 
     pub fn setSearchesOut(l: *Live, on: bool) void {
         l.s.searches_out = on;
-        l.kv.set(searches_out_key, if (on) "1" else "0") catch {};
+        _ = config.kvSet(l.kv, searches_out_key, if (on) "1" else "0");
     }
 
     /// Whether the menu bar icon shows; `set` shows or hides it. Hidden,
@@ -414,7 +416,7 @@ pub const Live = struct {
         const objc = nanoui.objc;
         const t = l.tray orelse return false;
         if (set) |on| {
-            l.kv.set(menu_bar_key, if (on) "1" else "0") catch {};
+            _ = config.kvSet(l.kv, menu_bar_key, if (on) "1" else "0");
             objc.msg(void, t.item, "setVisible:", .{if (on) objc.YES else objc.NO});
         }
         return objc.msg(objc.BOOL, t.item, "isVisible", .{});
@@ -560,7 +562,7 @@ pub const Live = struct {
 
     pub fn apply(ctx: *anyopaque, choice: shortcut.Choice) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
-        shortcut.save(l.kv, choice);
+        _ = shortcut.save(l.kv, choice);
         l.useKey(choice);
         l.touched();
     }
@@ -662,7 +664,8 @@ const RatesAsk = struct {
             l.rates_busy = false;
             l.rates_at = account.now();
             var at: [24]u8 = undefined;
-            l.kv.set(rates_at_key, std.fmt.bufPrint(&at, "{d}", .{l.rates_at}) catch "0") catch {};
+            const at_text = std.fmt.bufPrint(&at, "{d}", .{l.rates_at}) catch unreachable;
+            _ = config.kvSet(l.kv, rates_at_key, at_text);
             if (l.ratesPath()) |path| {
                 defer gpa.free(path);
                 std.Io.Dir.cwd().writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch {};
@@ -719,10 +722,12 @@ pub fn main(init: std.process.Init) !void {
     // A headless run is no one's: neither their config nor their settings.
     var cfg_arena: std.heap.ArenaAllocator = .init(init.gpa);
     defer cfg_arena.deinit();
-    const loaded: ?config.Config = if (app.flags.hidden) null else config.load(cfg_arena.allocator(), init.io, init.environ_map, kv);
-    const cfg: config.Config = loaded orelse .{};
-    // A missing file seeds nothing: it would forget what the app applied.
-    if (loaded) |c| if (c.from_file) config.seed(kv, init.gpa, c, account.now());
+    const loaded: config.Loaded = if (app.flags.hidden)
+        .unusable
+    else
+        config.load(cfg_arena.allocator(), init.io, init.environ_map, kv);
+    const cfg = loaded.config();
+    config.apply(kv, init.gpa, loaded, account.now());
     // The key is the config's or the Nix module's: the welcome does not ask.
     var o: Onboard = .{ .skip_key = nix_managed or (if (cfg.hotkey) |h| shortcut.Choice.parse(h) != null else false) };
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
@@ -771,14 +776,8 @@ pub fn main(init: std.process.Init) !void {
     rc.rescan(&live);
     var clip_dir = clipboard_live.openDir(init.gpa, init.io);
     defer if (clip_dir) |*d| d.close(init.io);
-    var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, .{
-        // A file that failed to load gives no retention or exclude list: record and prune nothing.
-        .enabled = config.clipboardEnabled(kv, init.gpa, cfg.clipboard.enabled),
-        .config_ok = loaded != null,
-        .retention_days = if (loaded != null) cfg.clipboard.retention_days else 0,
-        .max_entries = if (loaded != null) cfg.clipboard.max_entries else 0,
-        .exclude_apps = cfg.clipboard.exclude_apps,
-    });
+    const clip_cfg = config.clipboardConfig(kv, init.gpa, loaded);
+    var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, clip_cfg);
     defer clip_store.deinit();
     // No data directory, no history: nothing could be kept.
     if (clip_dir != null) clipboard_live.init(&live, &clip_store);
