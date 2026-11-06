@@ -18,6 +18,7 @@ const account = @import("account.zig");
 const apps = @import("apps.zig");
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
+const after = @import("after.zig");
 
 /// A menu's item waits for the menu: it closes first, then the panel
 /// takes the keys.
@@ -84,7 +85,7 @@ pub const App = struct {
     hooks: Hooks = .{},
 
     pub fn from(ctx: *anyopaque) *App {
-        return @ptrCast(@alignCast(ctx));
+        return after.cast(*App, ctx);
     }
 
     pub fn redraw(a: *App) void {
@@ -128,11 +129,7 @@ pub const App = struct {
             // Nanolight is already open: the panel comes back, empty,
             // rather than macOS starting a second copy.
             a.s.query.clear();
-            nanoui.App.after(reopen_ms, a, struct {
-                fn f(c: ?*anyopaque) callconv(.c) void {
-                    toggle(c.?);
-                }
-            }.f);
+            after.oneShot(reopen_ms, @as(*anyopaque, a), toggle);
             return;
         }
         _ = apps.launch(a.app.io, target);
@@ -285,13 +282,12 @@ pub const App = struct {
         if (clash.system != null) {
             _ = nanoui.shell.openUrl(keyboard_pane);
         } else for (clash.launchers.slice()) |name| shortcut_clash.quit(name);
-        nanoui.App.after(launcher_quits_ms, a, struct {
-            fn f(c: ?*anyopaque) callconv(.c) void {
-                const it = from(c.?);
-                it.o.refresh();
-                it.redraw();
-            }
-        }.f);
+        after.oneShot(launcher_quits_ms, a, lookAgain);
+    }
+
+    fn lookAgain(a: *App) void {
+        a.o.refresh();
+        a.redraw();
     }
 
     fn done(ctx: *anyopaque) void {
@@ -315,25 +311,20 @@ pub const App = struct {
 
     /// The menu's Open Nanolight: the panel takes the keys.
     pub fn showAfterMenu(a: *App) void {
-        nanoui.App.after(menu_closes_ms, a, struct {
-            fn f(c: ?*anyopaque) callconv(.c) void {
-                toggle(c.?);
-            }
-        }.f);
+        after.oneShot(menu_closes_ms, @as(*anyopaque, a), toggle);
     }
 
     /// The menu's Settings…: the panel opens straight into Settings.
     pub fn settingsAfterMenu(a: *App) void {
-        nanoui.App.after(menu_closes_ms, a, struct {
-            fn f(c: ?*anyopaque) callconv(.c) void {
-                const it = from(c.?);
-                const w = it.window orelse return;
-                if (!(w.isVisible() and w.isFocused())) toggle(it);
-                // Over the welcome: skipped, kept as done, its key not taken.
-                it.o.end(.drop_choice);
-                it.s.openSettings();
-                w.redraw();
-            }
-        }.f);
+        after.oneShot(menu_closes_ms, a, openSettings);
+    }
+
+    fn openSettings(a: *App) void {
+        const w = a.window orelse return;
+        if (!(w.isVisible() and w.isFocused())) toggle(a);
+        // Over the welcome: skipped, kept as done, its key not taken.
+        a.o.end(.drop_choice);
+        a.s.openSettings();
+        w.redraw();
     }
 };

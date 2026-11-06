@@ -7,8 +7,8 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const keys = @import("keys.zig");
-
-const key_down: u64 = 1 << 10;
+const monitor = @import("event_monitor.zig");
+const after = @import("after.zig");
 
 pub const Got = struct {
     ctx: *anyopaque,
@@ -31,19 +31,13 @@ pub const Recorder = struct {
         r.got = got;
         if (r.monitor != null) return true;
         var b = objc.BlockRet(Recorder, &.{objc.Object}, ?objc.Object).init(r, seen);
-        const ns_event = objc.class("NSEvent");
-        const sel = "addLocalMonitorForEventsMatchingMask:handler:";
-        const block: *anyopaque = @ptrCast(&b);
-        const m = objc.msg(?objc.Object, ns_event, sel, .{ key_down, block }) orelse return false;
-        objc.msg(void, m, "retain", .{});
-        r.monitor = m;
+        r.monitor = monitor.add(.local, monitor.key_down, @ptrCast(&b)) orelse return false;
         return true;
     }
 
     pub fn stop(r: *Recorder) void {
         const m = r.monitor orelse return;
-        objc.msg(void, objc.class("NSEvent"), "removeMonitor:", .{m});
-        objc.release(m);
+        monitor.remove(m);
         r.monitor = null;
         r.last = null;
     }
@@ -63,12 +57,11 @@ pub const Recorder = struct {
         const ch: u21 = if (len > 0 and
             len <= s.len) std.unicode.utf8Decode(s[0..len]) catch 0 else 0;
         r.last = keys.recorded(code, flags, ch);
-        nanoui.App.after(0, r, deliver);
+        after.oneShot(0, r, deliver);
         return null;
     }
 
-    fn deliver(ctx: ?*anyopaque) callconv(.c) void {
-        const r: *Recorder = @ptrCast(@alignCast(ctx.?));
+    fn deliver(r: *Recorder) void {
         const last = r.last orelse return;
         r.last = null;
         const got = r.got orelse return;

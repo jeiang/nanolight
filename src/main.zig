@@ -18,6 +18,7 @@ const Nanolight = @import("view.zig").Nanolight;
 const chrome = @import("chrome.zig");
 const Onboard = @import("onboard.zig").Onboard;
 const platform = @import("platform.zig");
+const single = @import("single.zig");
 const panel = platform.panel;
 const account = @import("account.zig");
 const config = @import("config.zig");
@@ -222,10 +223,14 @@ fn runShown(
     sync_cfg: account.Config,
 ) !void {
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
-    if (platform.Single.claim(.{ .ctx = core, .func = App.command }) > 0) std.log.info(
-        "nanolight: asked an older copy to quit",
-        .{},
-    );
+    switch (platform.Single.claim(init.io, .{ .ctx = core, .func = App.command })) {
+        .none => {},
+        .quit => std.log.info("nanolight: asked an older copy to quit", .{}),
+        .stayed => std.log.warn(
+            "nanolight: an older copy didn't quit within {d} ms; both run",
+            .{single.quit_wait_ms},
+        ),
+    }
     core.start();
     // The first run: the welcome, in the panel.
     if (!prefs.has(core.kv, .onboarded)) core.o.start(core.choice);

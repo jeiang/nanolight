@@ -9,6 +9,7 @@ const update_live = @import("update_live.zig");
 const account_live = @import("account_live.zig");
 const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
+const after = @import("after.zig");
 /// A Nix build: no updater, so no update item.
 const nix_managed = @import("build_options").nix_managed;
 
@@ -65,7 +66,7 @@ pub const Menu = struct {
 /// The menu, as things stand now.
 fn rebuild(ctx: *anyopaque) void {
     if (comptime !platform.tray) return;
-    const m: *Menu = @ptrCast(@alignCast(ctx));
+    const m = after.cast(*Menu, ctx);
     const t = m.tray orelse return;
     const Item = nanoui.menu.MenuItem;
     const update = if (nix_managed) [_]Item{} else [_]Item{m.update.menuItem()};

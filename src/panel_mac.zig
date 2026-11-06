@@ -7,6 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const chrome = @import("chrome.zig");
+const after = @import("after.zig");
 
 /// The system's glass under the panel, which the window's views keep.
 var glass: ?objc.Object = null;
@@ -86,17 +87,18 @@ pub fn shown(w: *nanoui.Window) void {
         .{@as(f64, 1)},
     );
     objc.msg(void, cls, "endGrouping", .{});
-    // Whole once the fade is over, whatever became of it: a launcher
-    // left see-through would be worse than one that didn't fade.
-    nanoui.App.after(@intFromFloat(fade_s * 1000 + 80), w, struct {
-        fn f(ctx: ?*anyopaque) callconv(.c) void {
-            const win: *nanoui.Window = @ptrCast(@alignCast(ctx.?));
-            if (win.isVisible()) objc.msg(void, win.nswindow, "setAlphaValue:", .{@as(f64, 1)});
-        }
-    }.f);
+    after.oneShot(fade_settle_ms, w, settle);
 }
 
 const fade_s: f64 = 0.12;
+/// Whole once the fade is over, whatever became of it (AppKit's animation
+/// may not finish): a launcher left see-through would be worse than one
+/// that didn't fade. A little after the fade, so as not to cut it short.
+const fade_settle_ms: u64 = @as(u64, @intFromFloat(fade_s * 1000)) + 80;
+
+fn settle(w: *nanoui.Window) void {
+    if (w.isVisible()) objc.msg(void, w.nswindow, "setAlphaValue:", .{@as(f64, 1)});
+}
 
 /// Puts the system's vibrancy under the panel (NSVisualEffectView, as
 /// launchers use), the shadow's margin in. Not NSGlassEffectView: on

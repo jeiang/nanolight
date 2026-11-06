@@ -1,18 +1,18 @@
 //! File lookups run off the main thread; answers move their icons to the view.
 const std = @import("std");
-const nanoui = @import("nanoui");
 const files = @import("files.zig");
 const prefs = @import("prefs.zig");
 const suggest = @import("suggest.zig");
 const view = @import("view.zig");
 const platform = @import("platform.zig");
+const after = @import("after.zig");
 const App = @import("app.zig").App;
 
 pub const Files = struct {
     core: *App,
     query: [files.max_path]u8 = undefined,
     len: usize = 0,
-    waiting: u32 = 0,
+    pause: after.Debounce = .{},
     epoch: u64 = 0,
     sent: u64 = 0,
     busy: bool = false,
@@ -25,18 +25,11 @@ pub const Files = struct {
     /// File lookups share the suggestions' pause and keep at most one worker.
     fn ask(ctx: *anyopaque, q: []const u8) void {
         if (q.len >= files.max_path) return;
-        const f: *Files = @ptrCast(@alignCast(ctx));
+        const f = after.cast(*Files, ctx);
         @memcpy(f.query[0..q.len], q);
         f.len = q.len;
         f.epoch +%= 1;
-        f.waiting += 1;
-        nanoui.App.after(suggest.pause_ms, f, struct {
-            fn tick(c: ?*anyopaque) callconv(.c) void {
-                const it: *Files = @ptrCast(@alignCast(c.?));
-                it.waiting -= 1;
-                if (it.waiting == 0) it.send();
-            }
-        }.tick);
+        f.pause.poke(suggest.pause_ms, Files, "pause", send);
     }
 
     fn send(f: *Files) void {
@@ -44,7 +37,7 @@ pub const Files = struct {
         if (!core.s.files_on) return;
         // One search at a time, sent once the typing pauses, and once per query.
         if (f.busy) return;
-        if (f.waiting > 0) return;
+        if (f.pause.waiting()) return;
         if (f.sent == f.epoch) return;
         const q = f.query[0..f.len];
         if (!std.mem.eql(u8, q, std.mem.trim(u8, core.s.query.text(), " \t\r\n"))) return;
@@ -95,11 +88,10 @@ const FileAsk = struct {
             &a.found,
         );
         if (a.ok) a.found.icons();
-        nanoui.App.after(0, a, done);
+        after.oneShot(0, a, done);
     }
 
-    fn done(ctx: ?*anyopaque) callconv(.c) void {
-        const a: *FileAsk = @ptrCast(@alignCast(ctx.?));
+    fn done(a: *FileAsk) void {
         const f = a.owner;
         defer a.destroy();
         f.busy = false;

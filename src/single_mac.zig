@@ -7,6 +7,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const single = @import("single.zig");
 
 fn ours() ?objc.Object {
     const main = objc.msg(objc.Object, objc.class("NSBundle"), "mainBundle", .{});
@@ -54,11 +55,11 @@ pub fn quitOthers() usize {
 
 /// single.zig's: older copies quit; commands from a second copy aren't
 /// taken on the Mac (its hot key works everywhere).
-pub fn claim(_: @import("single.zig").Listener) usize {
-    return quitOthers();
+pub fn claim(_: std.Io, _: single.Listener) single.Older {
+    return if (quitOthers() > 0) .quit else .none;
 }
 
-pub fn send(_: @import("single.zig").Command) bool {
+pub fn send(_: single.Command) bool {
     return false;
 }
 
