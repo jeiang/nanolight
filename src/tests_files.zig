@@ -104,34 +104,36 @@ test "file tiers merge duplicates and keep exact names against many subsequences
 }
 
 test "Spotlight predicates prioritize literal names before subsequences" {
-    const files = @import("files.zig");
+    const spotlight = @import("spotlight.zig");
     var buf: [2048]u8 = undefined;
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"readme\"cd",
-        files.predicate(&buf, "readme", .exact).?,
+        spotlight.predicate(&buf, "readme", .exact).?,
     );
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"readme*\"cd",
-        files.predicate(&buf, "readme", .prefix).?,
+        spotlight.predicate(&buf, "readme", .prefix).?,
     );
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"* readme*\"cd",
-        files.predicate(&buf, "readme", .word).?,
+        spotlight.predicate(&buf, "readme", .word).?,
     );
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"*r*e*a*d*m*e*\"cd",
-        files.predicate(&buf, "readme", .subsequence).?,
+        spotlight.predicate(&buf, "readme", .subsequence).?,
     );
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"a\\*\\?\\\"\\\\*\"cd",
-        files.predicate(&buf, "a*?\"\\", .prefix).?,
+        spotlight.predicate(&buf, "a*?\"\\", .prefix).?,
     );
 }
 
 test "name search excludes the home Library subtree by default" {
-    const files = @import("files.zig");
-    if (files.home().len == 0) return;
-    var buf: [files.max_path]u8 = undefined;
+    const paths = @import("paths.zig");
+    const spotlight = @import("spotlight.zig");
+    const home = paths.home();
+    if (home.len == 0) return;
+    var buf: [@import("files.zig").max_path]u8 = undefined;
     for ([_][]const u8{
         "Library",
         "Library/Application Support/App/readme",
@@ -141,11 +143,11 @@ test "name search excludes the home Library subtree by default" {
         "Library/Application Scripts/readme",
         "Library/Caches/readme",
     }) |part| {
-        const path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ files.home(), part });
-        try std.testing.expect(files.excluded(path, ""));
+        const path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ home, part });
+        try std.testing.expect(spotlight.excluded(path, ""));
     }
-    const lookalike = try std.fmt.bufPrint(&buf, "{s}/LibraryWork/readme", .{files.home()});
-    try std.testing.expect(!files.excluded(lookalike, ""));
+    const lookalike = try std.fmt.bufPrint(&buf, "{s}/LibraryWork/readme", .{home});
+    try std.testing.expect(!spotlight.excluded(lookalike, ""));
 }
 
 test "cached path rows are filtered without directory IO" {

@@ -65,10 +65,10 @@ const FileAsk = struct {
 
     fn run(a: *FileAsk) void {
         const q = a.text[0..a.len];
-        if (files.isPath(q)) {
+        if (@import("paths.zig").isPath(q)) {
             files.complete(a.live.app.io, q, &a.found);
             a.ok = true;
-        } else a.ok = files.find(
+        } else a.ok = @import("spotlight.zig").find(
             a.live.app.io,
             q,
             a.locations orelse "",

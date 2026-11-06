@@ -1,67 +1,45 @@
-//! The apps Nanolight finds: on the Mac every `.app` in the usual folders
-//! (and one folder down, for Utilities and suites), named without `.app`;
-//! on Linux the desktop entries (apps_linux.zig), on Windows the Start
-//! menu's shortcuts (apps_win.zig). Sorted and without duplicates. How
-//! often each was opened is kept in the app's defaults and lifts it in the
-//! ranking. Icons are asked of the system only for the rows on screen, and
-//! kept.
+//! The apps Nanolight finds, each OS's as its backend finds them (the Mac's
+//! bundles, apps_mac.zig; Linux's desktop entries, apps_linux.zig; the
+//! Windows Start menu's shortcuts, apps_win.zig). Sorted and without
+//! duplicates. How often each was opened is kept in the app's defaults
+//! and lifts it in the ranking. Icons are asked of the system only for the
+//! rows on screen, and kept.
 const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
+const app_scan = @import("app_scan.zig");
+const counts = @import("launch_counts.zig");
 const prefs = @import("prefs.zig");
 const search = @import("search.zig");
-const mac = builtin.os.tag == .macos;
-const objc = nanoui.objc;
 const assert = std.debug.assert;
+const App = app_scan.App;
+const Launch = counts.Launch;
+const Env = std.process.Environ.Map;
 
-pub const App = struct {
-    name: []const u8,
-    path: []const u8,
-    /// The folder it is in, as the row shows it: "Applications", "Utilities".
-    folder: []const u8,
-    /// Mandarin reading as ASCII (scan time), for Latin queries.
-    pinyin: []const u8 = "",
-    /// Times it was opened (kept in prefs' `.launches`).
-    launches: u16 = 0,
-    /// Its icon, asked of the system the first time a row shows it.
-    icon: Icon = .unloaded,
+/// This OS's apps: what `app_scan.conforms` lists.
+const backend = switch (builtin.os.tag) {
+    .macos => @import("apps_mac.zig"),
+    .windows => @import("apps_win.zig"),
+    else => @import("apps_linux.zig"),
 };
-
-/// An app's icon: not asked for yet, asked for with no answer, or a PNG
-/// (the index's gpa owns it).
-pub const Icon = union(enum) { unloaded, none, png: []u8 };
-
-/// Where apps are, in the order a name is first taken from.
-pub const roots = [_][]const u8{
-    "/Applications",
-    "/System/Applications",
-    "/System/Library/CoreServices/Applications",
-};
-
-/// Shown with an empty query before anything was opened.
-pub const default_starters: []const []const u8 = switch (builtin.os.tag) {
-    .macos => &.{ "Safari", "Notes", "Calendar", "System Settings", "Finder" },
-    .windows => &.{ "File Explorer", "Microsoft Edge", "Settings", "Notepad", "Calculator" },
-    else => &.{ "Files", "Firefox", "Terminal", "Settings", "Text Editor" },
-};
-
-/// Finds this machine's apps.
-pub fn scanSystem(ix: *Index, io: std.Io, env: *const std.process.Environ.Map) void {
-    switch (builtin.os.tag) {
-        .macos => return ix.scan(io, env.get("HOME")),
-        .windows => @import("apps_win.zig").scan(ix, io, env),
-        else => @import("apps_linux.zig").scan(ix, io),
-    }
-    ix.sort();
+comptime {
+    app_scan.conforms(backend);
 }
 
-/// Apps in the folders config.toml names, found as this OS finds its own.
-pub fn scanExtra(ix: *Index, io: std.Io, dirs: []const []const u8) void {
-    for (dirs) |d| switch (builtin.os.tag) {
-        .macos => ix.scanDir(io, d, 1),
-        .windows => @import("apps_win.zig").scanDir(ix, io, d, 1),
-        else => @import("apps_linux.zig").scanDir(ix, io, d, 1),
-    };
+/// Listed with an empty query before anything was opened: names the
+/// backend's scan lists. Tests list the Mac's on every OS, as their apps
+/// are named after them.
+const starters: []const []const u8 = if (builtin.is_test)
+    &.{ "Safari", "Notes", "Calendar", "System Settings", "Finder" }
+else
+    backend.starters;
+
+/// Finds this machine's apps, and those in the folders config.toml names,
+/// found as this OS finds its own. `Index.finish` comes after the last scan.
+pub fn scan(ix: *Index, io: std.Io, env: *const Env, extra_dirs: []const []const u8) void {
+    ix.env = env;
+    backend.scan(ix.sink(), io, env);
+    for (extra_dirs) |d| backend.scanDir(ix.sink(), io, d, 1);
 }
 
 /// An address for the browser or the system (a pane of System Settings),
@@ -75,97 +53,9 @@ pub fn isUrl(target: []const u8) bool {
     return false;
 }
 
-/// Opens an app found by `scanSystem` (or a file, a folder).
+/// Opens an app `scan` found (or a file, a folder).
 pub fn launch(io: std.Io, path: []const u8) bool {
-    if (builtin.os.tag == .linux and
-        std.mem.endsWith(u8, path, ".desktop")) return @import("apps_linux.zig").launch(io, path);
-    if (mac and std.mem.endsWith(u8, path, ".app")) {
-        openApp(path);
-        return true;
-    }
-    return nanoui.shell.openPath(path);
-}
-
-/// A scan looks at most this many folders below the one it is given.
-pub const max_scan_depth = 2;
-/// Longer paths are passed over.
-const max_scan_path = 1024;
-
-/// What a scan does after an entry `walk` found: on to the next, into it
-/// (a folder, if the depth allows), or no further at all.
-pub const Step = enum { next, descend, stop };
-
-/// An entry `walk` found: `entry` in the open folder `dir`, whose path is
-/// `folder`; `full` is the entry's own path.
-pub const Found = struct {
-    dir: std.Io.Dir,
-    folder: []const u8,
-    full: []const u8,
-    entry: std.Io.Dir.Entry,
-};
-
-/// Hands `visit` everything in `root`, and in each folder it descends into
-/// up to `depth` below, depth first in the order they are listed. Each open
-/// folder is a frame on a fixed stack, not a call; one that cannot be
-/// opened is passed over.
-pub fn walk(
-    io: std.Io,
-    root: []const u8,
-    depth: u8,
-    ctx: anytype,
-    comptime visit: fn (@TypeOf(ctx), Found) Step,
-) void {
-    assert(depth <= max_scan_depth);
-    const Frame = struct {
-        dir: std.Io.Dir,
-        it: std.Io.Dir.Iterator,
-        path: [max_scan_path]u8,
-        len: usize,
-        depth: u8,
-    };
-    var stack: [max_scan_depth + 1]Frame = undefined;
-    if (root.len > max_scan_path) return;
-    const first = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch return;
-    stack[0] = .{
-        .dir = first,
-        .it = first.iterate(),
-        .path = undefined,
-        .len = root.len,
-        .depth = depth,
-    };
-    @memcpy(stack[0].path[0..root.len], root);
-    var n: usize = 1;
-    defer for (stack[0..n]) |*f| f.dir.close(io);
-    while (n > 0) {
-        const top = &stack[n - 1];
-        const e = (top.it.next(io) catch null) orelse {
-            top.dir.close(io);
-            n -= 1;
-            continue;
-        };
-        const folder = top.path[0..top.len];
-        var buf: [max_scan_path]u8 = undefined;
-        const parts = .{ folder, std.fs.path.sep, e.name };
-        const full = std.fmt.bufPrint(&buf, "{s}{c}{s}", parts) catch continue;
-        switch (visit(ctx, .{ .dir = top.dir, .folder = folder, .full = full, .entry = e })) {
-            .next => {},
-            .stop => return,
-            .descend => {
-                if (top.depth == 0 or e.kind != .directory) continue;
-                const sub = top.dir.openDir(io, e.name, .{ .iterate = true }) catch continue;
-                assert(n < stack.len);
-                stack[n] = .{
-                    .dir = sub,
-                    .it = sub.iterate(),
-                    .path = undefined,
-                    .len = full.len,
-                    .depth = top.depth - 1,
-                };
-                @memcpy(stack[n].path[0..full.len], full);
-                n += 1;
-            },
-        }
-    }
+    return backend.launch(io, path);
 }
 
 pub const Index = struct {
@@ -175,8 +65,10 @@ pub const Index = struct {
     /// Counts in the store for apps this scan did not find (a volume not
     /// mounted, say): written back with the rest, so they are not lost.
     missed: std.ArrayList(Launch) = .empty,
-    /// Listed with an empty query before anything was opened.
-    starters: []const []const u8 = default_starters,
+    /// Apps a scan found but memory left out (`finish` says so).
+    lost: u32 = 0,
+    /// The environment the apps were found in, for their icons.
+    env: ?*const Env = null,
 
     pub fn init(gpa: std.mem.Allocator) Index {
         return .{ .gpa = gpa, .arena = .init(gpa) };
@@ -192,65 +84,31 @@ pub const Index = struct {
         ix.arena.deinit();
     }
 
+    /// Where a scan adds its apps. The index must stay put while it is used.
+    pub fn sink(ix: *Index) app_scan.Sink {
+        return .{
+            .gpa = ix.gpa,
+            .arena = ix.arena.allocator(),
+            .apps = &ix.apps,
+            .lost = &ix.lost,
+        };
+    }
+
     /// Adds an app unless one of its name is there already, its folder
     /// the one it is in.
     pub fn add(ix: *Index, name: []const u8, path: []const u8) !void {
-        return ix.addIn(name, path, std.fs.path.basename(std.fs.path.dirname(path) orelse ""));
+        return ix.addIn(name, path, app_scan.folderOf(path));
     }
 
     /// Adds an app, its row saying `folder` ("Applications", "Start").
     pub fn addIn(ix: *Index, name: []const u8, path: []const u8, folder: []const u8) !void {
-        if (ix.find(name) != null) return;
-        const a = ix.arena.allocator();
-        try ix.apps.append(ix.gpa, .{
-            .name = try a.dupe(u8, name),
-            .path = try a.dupe(u8, path),
-            .folder = try a.dupe(u8, folder),
-        });
+        return ix.sink().put(name, path, folder);
     }
 
-    /// Finds the apps on this machine; `home` adds ~/Applications.
-    pub fn scan(ix: *Index, io: std.Io, home: ?[]const u8) void {
-        for (roots) |r| ix.scanDir(io, r, 1);
-        // best effort: only memory can fail here, and the other apps still list.
-        ix.add("Finder", "/System/Library/CoreServices/Finder.app") catch {};
-        if (home) |h| {
-            var buf: [512]u8 = undefined;
-            if (std.fmt.bufPrint(
-                &buf,
-                "{s}/Applications",
-                .{h},
-            )) |p| ix.scanDir(io, p, 1) else |_| {}
-        }
+    /// After the scans: the apps sorted, and those memory left out logged.
+    pub fn finish(ix: *Index) void {
+        if (ix.lost > 0) std.log.warn("nanolight: {d} apps not listed: out of memory", .{ix.lost});
         ix.sort();
-        ix.localize();
-    }
-
-    /// Localized display names and pinyin keys for search (macOS only).
-    pub fn localize(ix: *Index) void {
-        if (!mac) return;
-        const a = ix.arena.allocator();
-        for (ix.apps.items) |*app| {
-            if (!wantsLocalizedDisplayName(app.path)) continue;
-            if (displayNameInto(a, app.path)) |display_name| {
-                const loc = withoutAppSuffix(display_name);
-                if (loc.len > 0 and !std.ascii.eqlIgnoreCase(loc, app.name)) app.name = loc;
-            }
-            if (search.hasCjk(app.name)) app.pinyin = pinyinKey(a, app.name) orelse "";
-        }
-        ix.sort();
-    }
-
-    fn scanDir(ix: *Index, io: std.Io, dir_path: []const u8, depth: u8) void {
-        walk(io, dir_path, depth, ix, visitBundle);
-    }
-
-    fn visitBundle(ix: *Index, f: Found) Step {
-        const name = f.entry.name;
-        if (name.len == 0 or name[0] == '.') return .next;
-        if (!std.mem.endsWith(u8, name, ".app")) return .descend;
-        ix.add(name[0 .. name.len - 4], f.full) catch return .stop;
-        return .next;
     }
 
     /// Alphabetical, case-insensitive; each app's count and icon go with it.
@@ -274,10 +132,7 @@ pub const Index = struct {
     }
 
     pub fn find(ix: *const Index, name: []const u8) ?u32 {
-        for (ix.apps.items, 0..) |a, i| {
-            if (std.ascii.eqlIgnoreCase(a.name, name)) return @intCast(i);
-        }
-        return null;
+        return app_scan.findName(ix.apps.items, name);
     }
 
     pub fn findPath(ix: *const Index, path: []const u8) ?u32 {
@@ -285,8 +140,15 @@ pub const Index = struct {
         return null;
     }
 
-    /// Up to `out.len` apps for an empty query: the most opened, else a
-    /// few every Mac has.
+    /// The app a launch count is for: by its path, else (older rows, older
+    /// synced records) by its name.
+    pub fn resolve(ix: *const Index, path: []const u8, name: []const u8) ?u32 {
+        if (path.len > 0) if (ix.findPath(path)) |i| return i;
+        return ix.find(name);
+    }
+
+    /// Up to `out.len` apps for an empty query: the most opened, else the
+    /// starters there are.
     pub fn suggestions(ix: *const Index, out: []u32) usize {
         var n: usize = 0;
         // Most opened first: a few passes from the highest count down.
@@ -303,7 +165,7 @@ pub const Index = struct {
             };
             best = next;
         }
-        for (ix.starters) |s| {
+        for (starters) |s| {
             if (n == out.len) break;
             const i = ix.find(s) orelse continue;
             if (std.mem.indexOfScalar(u32, out[0..n], i) == null) {
@@ -321,7 +183,7 @@ pub const Index = struct {
     }
 
     /// Keeps every count in `kv` (as `opened` does, and a sync after it):
-    /// the apps' and those `missed`, the `max_launches` most opened.
+    /// the apps' and those `missed`, the `counts.max` most opened.
     pub fn save(ix: *Index, kv: nanoui.kv.Store) void {
         var list: std.ArrayList(Launch) = .empty;
         defer list.deinit(ix.gpa);
@@ -331,7 +193,7 @@ pub const Index = struct {
             list.appendAssumeCapacity(.{ .key = a.path, .count = a.launches });
         };
         list.appendSliceAssumeCapacity(ix.missed.items);
-        const kept = mostOpened(list.items);
+        const kept = counts.mostOpened(list.items);
         var aw: std.Io.Writer.Allocating = .init(ix.gpa);
         defer aw.deinit();
         // best effort: out of memory leaves the stored counts as they were.
@@ -342,7 +204,7 @@ pub const Index = struct {
 
     /// The counts `opened` kept. Keys are app paths; older rows used
     /// display names and are still read once. Rows for apps not found
-    /// are kept in `missed`, at most `max_launches` of them.
+    /// are kept in `missed`, at most `counts.max` of them.
     pub fn load(ix: *Index, store: nanoui.kv.Store) void {
         ix.missed.clearRetainingCapacity();
         const v = prefs.text(store, ix.gpa, .launches) orelse return;
@@ -352,21 +214,24 @@ pub const Index = struct {
             if (line.len == 0) continue;
             const tab = std.mem.indexOfScalar(u8, line, '\t') orelse continue;
             const key = line[0..tab];
-            const count = std.fmt.parseInt(u16, line[tab + 1 ..], 10) catch 0;
-            if (resolveLaunchKey(ix, key)) |i| {
+            const count = std.fmt.parseInt(u16, line[tab + 1 ..], 10) catch |err| {
+                std.log.warn("nanolight: launch count of {s} not read: {t}", .{ key, err });
+                continue;
+            };
+            if (ix.resolve(key, key)) |i| {
                 ix.apps.items[i].launches = count;
                 continue;
             }
             if (count > 0) ix.keepMissed(key, count);
         }
-        assert(ix.missed.items.len <= max_launches);
+        assert(ix.missed.items.len <= counts.max);
     }
 
-    /// Keeps a stored count no app here has; once `max_launches` are kept,
+    /// Keeps a stored count no app here has; once `counts.max` are kept,
     /// only in place of the least opened, if it beats it.
     fn keepMissed(ix: *Index, key: []const u8, count: u16) void {
         var slot: ?usize = null;
-        if (ix.missed.items.len == max_launches) {
+        if (ix.missed.items.len == counts.max) {
             var least: usize = 0;
             for (ix.missed.items, 0..) |l, i| if (l.count < ix.missed.items[least].count) {
                 least = i;
@@ -392,14 +257,8 @@ pub const Index = struct {
             .none => return null,
             .unloaded => {},
         }
-        const png = png: switch (builtin.os.tag) {
-            .macos => iconPng(ix.gpa, app.path),
-            .windows => @import("apps_win.zig").icon(ix.gpa, app.path),
-            else => {
-                const io = std.Io.Threaded.global_single_threaded.io();
-                break :png @import("apps_linux.zig").icon(ix.gpa, io, app.path);
-            },
-        };
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const png = backend.icon(ix.gpa, io, ix.env, app.path);
         app.icon = if (png) |p| .{ .png = p } else .none;
         return png;
     }
@@ -430,159 +289,10 @@ pub fn rankApps(query: []const u8, ix: *const Index, out: []search.Ranked) usize
     return top.n;
 }
 
-/// At most this many launch counts are stored: the most opened (the same
-/// cap as a synced record's).
-pub const max_launches = @import("settings.zig").max_launches;
-
-/// A stored launch count: an app's path (or, in older rows, its name).
-pub const Launch = struct { key: []const u8, count: u16 };
-
-/// `list` sorted most opened first (ties by key, the same every run), cut
-/// to `max_launches`.
-fn mostOpened(list: []Launch) []const Launch {
-    std.sort.pdq(Launch, list, {}, struct {
-        fn f(_: void, a: Launch, b: Launch) bool {
-            if (a.count != b.count) return a.count > b.count;
-            return std.mem.lessThan(u8, a.key, b.key);
-        }
-    }.f);
-    return list[0..@min(list.len, max_launches)];
-}
-
-fn resolveLaunchKey(ix: *const Index, key: []const u8) ?u32 {
-    if (ix.findPath(key)) |i| return i;
-    return ix.find(key);
-}
-
-/// Opens the Mac app at `path` without waiting for it: LaunchServices
-/// answers when the app has started, which can take seconds (an app
-/// reinstalled while Nanolight ran, issue #7), and `openURL:` waited on
-/// the main thread meanwhile, with the panel frozen in front.
-fn openApp(path: []const u8) void {
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const url = objc.msg(
-        objc.Object,
-        objc.class("NSURL"),
-        "fileURLWithPath:",
-        .{objc.nsString(path)},
-    );
-    const config = objc.msg(
-        objc.Object,
-        objc.class("NSWorkspaceOpenConfiguration"),
-        "configuration",
-        .{},
-    );
-    const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
-    objc.msg(
-        void,
-        ws,
-        "openApplicationAtURL:configuration:completionHandler:",
-        .{ url, config, @as(?*anyopaque, null) },
-    );
-}
-
-fn wantsLocalizedDisplayName(path: []const u8) bool {
-    if (std.mem.indexOf(u8, path, "zig-cache") != null) return false;
-    for (roots) |r| if (std.mem.startsWith(u8, path, r)) return true;
-    return std.mem.indexOf(u8, path, "/Applications/") != null;
-}
-
-/// Finder can include the bundle extension in its localized display name.
-fn withoutAppSuffix(name: []const u8) []const u8 {
-    const suffix = ".app";
-    if (name.len >= suffix.len and
-        std.ascii.eqlIgnoreCase(
-            name[name.len - suffix.len ..],
-            suffix,
-        )) return name[0 .. name.len - suffix.len];
-    return name;
-}
-
-/// The Finder's icon for `path`, drawn at 64 pixels and encoded as PNG.
-fn displayNameInto(a: std.mem.Allocator, path: []const u8) ?[]const u8 {
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const fm = objc.msg(objc.Object, objc.class("NSFileManager"), "defaultManager", .{});
-    const ns = objc.msg(objc.Object, fm, "displayNameAtPath:", .{objc.nsString(path)});
-    const utf8 = objc.msg(?[*]const u8, ns, "UTF8String", .{}) orelse return null;
-    return a.dupe(u8, std.mem.sliceTo(utf8, 0)) catch null;
-}
-
-fn pinyinKey(a: std.mem.Allocator, name: []const u8) ?[]const u8 {
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const ns = objc.nsString(name);
-    const step1 = objc.msg(
-        objc.Object,
-        ns,
-        "stringByApplyingTransform:reverse:",
-        .{ objc.nsString("Mandarin-Latin"), objc.NO },
-    );
-    const step2 = objc.msg(
-        objc.Object,
-        step1,
-        "stringByApplyingTransform:reverse:",
-        .{ objc.nsString("Latin-ASCII"), objc.NO },
-    );
-    const latin = objc.msg(?[*]const u8, step2, "UTF8String", .{}) orelse return null;
-    var buf: [128]u8 = undefined;
-    var n: usize = 0;
-    for (std.mem.sliceTo(latin, 0)) |ch| {
-        if (ch == ' ' or ch == '\'') continue;
-        if (n == buf.len) break;
-        buf[n] = std.ascii.toLower(ch);
-        n += 1;
-    }
-    if (n == 0) return null;
-    return a.dupe(u8, buf[0..n]) catch null;
-}
-
-pub fn iconPng(gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
-    const img = objc.msg(objc.Object, ws, "iconForFile:", .{objc.nsString(path)});
-    var rect: objc.CGRect = .{ .size = .{ .width = 64, .height = 64 } };
-    const cg = objc.msg(
-        ?*anyopaque,
-        img,
-        "CGImageForProposedRect:context:hints:",
-        .{ &rect, @as(?objc.Object, null), @as(?objc.Object, null) },
-    ) orelse
-        return null;
-    const rep = objc.msg(objc.Object, objc.alloc("NSBitmapImageRep"), "initWithCGImage:", .{cg});
-    defer objc.release(rep);
-    const props = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{});
-    // NSBitmapImageFileTypePNG
-    const data = objc.msg(
-        ?objc.Object,
-        rep,
-        "representationUsingType:properties:",
-        .{ @as(objc.NSUInteger, 4), props },
-    ) orelse
-        return null;
-    const len = objc.msg(objc.NSUInteger, data, "length", .{});
-    const bytes = objc.msg(?[*]const u8, data, "bytes", .{}) orelse return null;
-    return gpa.dupe(u8, bytes[0..len]) catch null;
-}
-
-test "localized Mac names omit the app suffix" {
-    const t = std.testing;
-    try t.expectEqualStrings("Safari", withoutAppSuffix("Safari.app"));
-    try t.expectEqualStrings("微信", withoutAppSuffix("微信.APP"));
-    try t.expectEqualStrings("My.App", withoutAppSuffix("My.App.aPp"));
-    try t.expectEqualStrings("App", withoutAppSuffix("App"));
-    try t.expectEqualStrings("App.app helper", withoutAppSuffix("App.app helper"));
-    try t.expectEqualStrings("", withoutAppSuffix(""));
-    try t.expectEqualStrings("", withoutAppSuffix(".app"));
-}
-
 test "names are kept once, sorted, and opening one suggests it" {
     const t = std.testing;
     var ix: Index = .init(t.allocator);
     defer ix.deinit();
-    ix.starters = &.{ "Safari", "Notes", "Calendar" };
     try ix.add("Safari", "/Applications/Safari.app");
     try ix.add("notes", "/System/Applications/Notes.app");
     try ix.add("Notes", "/Applications/Notes.app");
@@ -666,66 +376,49 @@ test "past the cap, the least opened counts are dropped" {
     // More stored than kept, least opened first (an order `save` never writes).
     var aw: std.Io.Writer.Allocating = .init(t.allocator);
     defer aw.deinit();
-    for (0..max_launches + 10) |i| try aw.writer.print("/gone/{d}.app\t{d}\n", .{ i, i + 1 });
+    for (0..counts.max + 10) |i| try aw.writer.print("/gone/{d}.app\t{d}\n", .{ i, i + 1 });
     try mem.store().set(prefs.Key.launches.name(), aw.written());
     var ix: Index = .init(t.allocator);
     defer ix.deinit();
     try ix.add("Safari", "/Applications/Safari.app");
     ix.load(mem.store());
-    try t.expectEqual(@as(usize, max_launches), ix.missed.items.len);
+    try t.expectEqual(@as(usize, counts.max), ix.missed.items.len);
     for (ix.missed.items) |l| try t.expect(l.count > 10);
     // Safari, opened once, is the least opened of all: it is the one left out.
     ix.opened(0, mem.store());
     const v = (try mem.store().get(t.allocator, prefs.Key.launches.name())).?;
     defer t.allocator.free(v);
-    try t.expectEqual(@as(usize, max_launches), std.mem.count(u8, v, "\n"));
+    try t.expectEqual(@as(usize, counts.max), std.mem.count(u8, v, "\n"));
     try t.expect(std.mem.indexOf(u8, v, "Safari") == null);
     try t.expect(std.mem.startsWith(u8, v, "/gone/521.app\t522\n"));
 }
 
-test "a scan looks in folders down to its depth, without recursion" {
-    const t = std.testing;
-    var tmp = t.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.createDirPath(t.io, "Top.app");
-    try tmp.dir.createDirPath(t.io, "Suite/Inner.app");
-    try tmp.dir.createDirPath(t.io, "Suite/Deeper/Deep.app");
-    try tmp.dir.createDirPath(t.io, ".hidden/Hidden.app");
-    var buf: [128]u8 = undefined;
-    const root = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
-    var ix: Index = .init(t.allocator);
-    defer ix.deinit();
-    ix.scanDir(t.io, root, 1);
-    try t.expect(ix.find("Top") != null);
-    try t.expect(ix.find("Inner") != null);
-    try t.expectEqualStrings("Suite", ix.apps.items[ix.find("Inner").?].folder);
-    try t.expect(ix.find("Deep") == null);
-    try t.expect(ix.find("Hidden") == null);
-    var deeper: Index = .init(t.allocator);
-    defer deeper.deinit();
-    deeper.scanDir(t.io, root, max_scan_depth);
-    try t.expect(deeper.find("Deep") != null);
-}
-
 test "a second look tells an app installed since from no change (#15)" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
     const t = std.testing;
     var tmp = t.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(t.io, "Applications/Alpha.app");
     var buf: [128]u8 = undefined;
     const home = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var env: Env = .init(t.allocator);
+    defer env.deinit();
+    try env.put("HOME", home);
     var ix: Index = .init(t.allocator);
     defer ix.deinit();
-    ix.scan(t.io, home);
+    scan(&ix, t.io, &env, &.{});
+    ix.finish();
     var again: Index = .init(t.allocator);
     defer again.deinit();
-    again.scan(t.io, home);
+    scan(&again, t.io, &env, &.{});
+    again.finish();
     try t.expect(ix.same(&again));
     // DOSBox-X, installed while Nanolight ran.
     try tmp.dir.createDirPath(t.io, "Applications/DOSBox-X.app");
     var later: Index = .init(t.allocator);
     defer later.deinit();
-    later.scan(t.io, home);
+    scan(&later, t.io, &env, &.{});
+    later.finish();
     try t.expect(!ix.same(&later));
     try t.expect(later.find("DOSBox-X") != null);
 }

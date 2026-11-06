@@ -15,7 +15,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
-const Index = @import("apps.zig").Index;
+const app_scan = @import("app_scan.zig");
 const model = @import("raycast_model.zig");
 const windows = builtin.os.tag == .windows;
 
@@ -160,67 +160,51 @@ pub fn dir(gpa: std.mem.Allocator) ![]u8 {
 }
 
 /// Adds each script command in the folder and in `extra` (a folder down
-/// too) to `ix`, and the row that opens the folder.
-pub fn scan(ix: *Index, gpa: std.mem.Allocator, extra: []const []const u8) void {
-    // best effort: only memory can fail here, and the scripts still list.
-    ix.addIn("Script Commands Folder", folder_path, "Raycast") catch {};
+/// too) to the index, and the row that opens the folder.
+pub fn scan(sink: app_scan.Sink, gpa: std.mem.Allocator, extra: []const []const u8) void {
+    sink.add("Script Commands Folder", folder_path, "Raycast");
     if (dir(gpa)) |root| {
         defer gpa.free(root);
-        scanDir(ix, gpa, root);
-    } else |_| {}
-    for (extra) |d| scanDir(ix, gpa, d);
+        scanDir(sink, gpa, root);
+    } else |err| std.log.warn("nanolight: no script commands folder: {t}", .{err});
+    for (extra) |d| scanDir(sink, gpa, d);
 }
 
-/// The script commands in `root` and in the folders in it, no deeper: one
-/// loop for the folder, one inside it for a folder down.
-fn scanDir(ix: *Index, gpa: std.mem.Allocator, root: []const u8) void {
+/// The script commands in `root` and in the folders in it, no deeper.
+fn scanDir(sink: app_scan.Sink, gpa: std.mem.Allocator, root: []const u8) void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    const a = arena.allocator();
-    var top = std.Io.Dir.cwd().openDir(io(), root, .{ .iterate = true }) catch return;
-    defer top.close(io());
-    var it = top.iterate();
-    while (it.next(io()) catch null) |e| {
-        if (hidden(e.name)) continue;
-        if (e.kind != .directory) {
-            addScript(ix, a, .{ .dir = top, .folder = root, .name = e.name });
-            continue;
+    const Scan = struct {
+        sink: app_scan.Sink,
+        arena: std.mem.Allocator,
+
+        fn visit(s: @This(), f: app_scan.Found) app_scan.Step {
+            const name = f.entry.name;
+            if (name.len == 0 or name[0] == '.') return .next;
+            if (f.entry.kind == .directory) return .descend;
+            addScript(s, f);
+            return .next;
         }
-        const folder = std.fs.path.join(a, &.{ root, e.name }) catch continue;
-        var sub = top.openDir(io(), e.name, .{ .iterate = true }) catch continue;
-        defer sub.close(io());
-        var sub_it = sub.iterate();
-        while (sub_it.next(io()) catch null) |f| {
-            if (hidden(f.name) or f.kind == .directory) continue;
-            addScript(ix, a, .{ .dir = sub, .folder = folder, .name = f.name });
+
+        /// Lists `f` if its header says it is a script command.
+        fn addScript(s: @This(), f: app_scan.Found) void {
+            // The header is in the first lines: the file's first 8 KB.
+            var buf: [8192]u8 = undefined;
+            const head = f.dir.readFile(io(), f.entry.name, &buf) catch |err| {
+                std.log.warn("nanolight: {s} could not be read: {t}", .{ f.full, err });
+                return;
+            };
+            const m = parse(s.arena, head) orelse return;
+            const row = std.fmt.allocPrint(s.arena, "{s}{s}", .{ prefix, f.full }) catch {
+                s.sink.lost.* += 1;
+                return;
+            };
+            const package = if (m.package.len > 0) m.package else "Script Command";
+            s.sink.add(m.title, row, package);
         }
-    }
-}
-
-fn hidden(name: []const u8) bool {
-    return name.len == 0 or name[0] == '.';
-}
-
-/// A file in a folder being scanned.
-const Entry = struct {
-    /// The folder, open.
-    dir: std.Io.Dir,
-    /// The folder's path.
-    folder: []const u8,
-    name: []const u8,
-};
-
-/// Lists `entry` if its header says it is a script command.
-fn addScript(ix: *Index, a: std.mem.Allocator, entry: Entry) void {
-    // The header is in the first lines: the file's first 8 KB.
-    var buf: [8192]u8 = undefined;
-    const head = entry.dir.readFile(io(), entry.name, &buf) catch return;
-    const m = parse(a, head) orelse return;
-    const full = std.fs.path.join(a, &.{ entry.folder, entry.name }) catch return;
-    const row = std.fmt.allocPrint(a, "{s}{s}", .{ prefix, full }) catch return;
-    const package = if (m.package.len > 0) m.package else "Script Command";
-    // best effort: out of memory leaves the script unlisted
-    ix.addIn(m.title, row, package) catch {};
+    };
+    const ctx: Scan = .{ .sink = sink, .arena = arena.allocator() };
+    app_scan.walk(io(), root, 1, ctx, Scan.visit);
 }
 
 /// How to run `file`: its shebang's interpreter (`#!/usr/bin/env python3`),
@@ -343,9 +327,9 @@ test "a folder named in config.toml is scanned for script commands, a folder dow
     try tmp.dir.writeFile(t.io, .{ .sub_path = "sub/old/far.sh", .data = header ++ "Two Down\n" });
     var buf: [128]u8 = undefined;
     const path = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
-    var ix: Index = .init(t.allocator);
+    var ix: @import("apps.zig").Index = .init(t.allocator);
     defer ix.deinit();
-    scanDir(&ix, t.allocator, path);
+    scanDir(ix.sink(), t.allocator, path);
     try t.expectEqual(@as(usize, 2), ix.apps.items.len);
     try t.expect(ix.find("Say Hello") != null and ix.find("Two Down") == null);
     const near = ix.apps.items[ix.find("One Down").?];

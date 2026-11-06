@@ -8,6 +8,7 @@
 //! the higher count of the two, so what you open most anywhere comes up first.
 const std = @import("std");
 const keys = @import("keys.zig");
+const counts = @import("launch_counts.zig");
 
 pub const Launch = struct {
     name: []const u8,
@@ -67,9 +68,6 @@ pub fn quicklinkProblem(i: usize, q: Quicklink) ?[]const u8 {
     return null;
 }
 
-/// A record keeps at most this many launch counts: the most opened.
-pub const max_launches = 512;
-
 pub const Settings = struct {
     /// 2 added `quicklinks`; a record of 1 still decodes.
     v: u8 = 2,
@@ -87,8 +85,8 @@ pub fn encode(gpa: std.mem.Allocator, s: Settings) ![]u8 {
     return std.json.Stringify.valueAlloc(gpa, s, .{});
 }
 
-/// A record's body, or null when it isn't one of ours. Past `max_launches`,
-/// the least opened apps are left out.
+/// A record's body, or null when it isn't one of ours. Past `counts.max`
+/// launches, the least opened apps are left out.
 pub fn decode(arena: std.mem.Allocator, body: []const u8) ?Settings {
     const options: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
     var s = std.json.parseFromSliceLeaky(Settings, arena, body, options) catch return null;
@@ -152,18 +150,20 @@ fn sortByKey(launches: []Launch) void {
 fn sortByCount(launches: []Launch) void {
     std.sort.pdq(Launch, launches, {}, struct {
         fn f(_: void, a: Launch, b: Launch) bool {
-            if (a.count != b.count) return a.count > b.count;
-            return std.mem.lessThan(u8, launchSortKey(a), launchSortKey(b));
+            return counts.before(
+                .{ .key = launchSortKey(a), .count = a.count },
+                .{ .key = launchSortKey(b), .count = b.count },
+            );
         }
     }.f);
 }
 
-/// `launches`, or past `max_launches` the most opened of them, in key order.
+/// `launches`, or past `counts.max` the most opened of them, in key order.
 fn mostOpened(arena: std.mem.Allocator, launches: []const Launch) ![]const Launch {
-    if (launches.len <= max_launches) return launches;
+    if (launches.len <= counts.max) return launches;
     const ranked = try arena.dupe(Launch, launches);
     sortByCount(ranked);
-    const kept = ranked[0..max_launches];
+    const kept = ranked[0..counts.max];
     sortByKey(kept);
     return kept;
 }
@@ -333,19 +333,19 @@ test "a record too big for the limit sheds its least opened apps" {
     try std.testing.expectEqualStrings(whole, (try encodeWithin(a, s, whole.len)).?);
 }
 
-test "a record keeps the most opened apps, at most max_launches" {
+test "a record keeps the most opened apps, at most the cap" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const launches = try a.alloc(Launch, max_launches + 50);
+    const launches = try a.alloc(Launch, counts.max + 50);
     for (launches, 0..) |*l, i| {
         const path = try std.fmt.allocPrint(a, "/Applications/{d:0>4}", .{i});
         l.* = .{ .name = "App", .path = path, .count = @intCast(i + 1) };
     }
     const s: Settings = .{ .hotkey = "cmd_space", .suggest = true, .at = 1, .launches = launches };
     const got = decode(a, try encode(a, s)).?;
-    try std.testing.expectEqual(@as(usize, max_launches), got.launches.len);
+    try std.testing.expectEqual(@as(usize, counts.max), got.launches.len);
     for (got.launches) |l| try std.testing.expect(l.count > 50);
     // Merged with itself, no more than the cap either.
-    try std.testing.expectEqual(@as(usize, max_launches), (try merge(a, s, s, false)).launches.len);
+    try std.testing.expectEqual(@as(usize, counts.max), (try merge(a, s, s, false)).launches.len);
 }
