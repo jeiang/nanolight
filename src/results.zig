@@ -157,6 +157,28 @@ pub fn google(ql: []const Quicklink) ?u16 {
     return null;
 }
 
+/// The answer card's: `text`, the query without the operators it ends
+/// with, and what that works out to.
+pub const Math = struct {
+    text: []const u8,
+    answer: union(enum) { value: f64, conversion: convert.Answer },
+};
+
+/// The card for `query`, converting money by `rates` when in hand. Operators
+/// it ends with are left off ("2 + 3 *", "500 usd to eur *"), so the card
+/// stays while the next number is typed.
+pub fn math(query: []const u8, rates: ?*const convert.Rates) ?Math {
+    const text = calc.trimOps(std.mem.trim(u8, query, " "));
+    if (calc.eval(text)) |v| return .{ .text = text, .answer = .{ .value = v } };
+    const a = convert.answer(text, rates) orelse return null;
+    return .{ .text = text, .answer = .{ .conversion = a } };
+}
+
+/// Whether `query` shows the answer card: then it is not searched for.
+pub fn isMath(query: []const u8, rates: ?*const convert.Rates) bool {
+    return math(query, rates) != null;
+}
+
 pub const Results = struct {
     rows: [@max(max_rows, max_candidates)]Row = undefined,
     n: usize = 0,
@@ -223,16 +245,14 @@ pub const Results = struct {
             );
             return;
         }
-        // "2 + 3 *" or "500 usd to eur *": the answer so far, so the card
-        // stays while the next number is typed.
-        const math = std.mem.trimEnd(u8, query, " +-*/%^×÷");
-        if (calc.eval(math)) |v| {
-            r.calcRow(v, math, query.len);
-        } else if (convert.answer(math, r.rates)) |a| {
-            r.pending = a == .pending;
-            r.convertRow(a);
-            r.push(.{ .kind = .calc });
-        }
+        if (math(query, r.rates)) |m| switch (m.answer) {
+            .value => |v| r.calcRow(v, m.text, query.len),
+            .conversion => |a| {
+                r.pending = a == .pending;
+                r.convertRow(a);
+                r.push(.{ .kind = .calc });
+            },
+        };
         const local_start = r.n;
         var ranked: [max_apps]search.Ranked = undefined;
         const n = apps.rankApps(query, ix, &ranked);
@@ -299,13 +319,13 @@ pub const Results = struct {
     }
 
     /// The math's card for `v`: shown, copied, in hexadecimal when whole,
-    /// and, when `math` is the start of a longer query, the expression so far.
-    fn calcRow(r: *Results, v: f64, math: []const u8, query_len: usize) void {
+    /// and, when `text` is the start of a longer query, the expression so far.
+    fn calcRow(r: *Results, v: f64, text: []const u8, query_len: usize) void {
         r.answer = calc.format(&r.answer_buf, v, true);
         r.copy = calc.format(&r.copy_buf, v, false);
-        if (math.len < query_len and math.len <= r.expr_buf.len) {
-            @memcpy(r.expr_buf[0..math.len], math);
-            r.expr = r.expr_buf[0..math.len];
+        if (text.len < query_len and text.len <= r.expr_buf.len) {
+            @memcpy(r.expr_buf[0..text.len], text);
+            r.expr = r.expr_buf[0..text.len];
         }
         r.hex = if (v >= 0 and v < 1e15 and v == @round(v))
             std.fmt.bufPrint(&r.hex_buf, "0x{X}", .{@as(u64, @intFromFloat(v))}) catch ""
@@ -835,4 +855,19 @@ test "Clipboard History competes with apps by its name's match" {
     r.clip_on = false;
     r.build("cli", &ix, &.{}, &.{}, defaults);
     for (r.slice()) |row| try t.expect(row.kind != .clipboard);
+}
+
+test "math is what the card takes: trailing operators, conversions, money by the table" {
+    const t = std.testing;
+    for ([_][]const u8{ "2 + 3", "2 + 3 *", " 2 * 3 − ", "10 km to mi", "10 km to mi *" }) |q|
+        try t.expect(isMath(q, null));
+    // "2 +" is "2" so far: no operator, no card.
+    for ([_][]const u8{ "", "42", "2 +", "safari", "10 km report", "10 m to min" }) |q|
+        try t.expect(!isMath(q, null));
+    // Money waits for a table; with one, only the codes it has convert.
+    try t.expect(isMath("100 usd to xyz", null));
+    var rates = convert.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1}}").?;
+    defer rates.deinit();
+    try t.expect(isMath("100 usd to usd", &rates));
+    try t.expect(!isMath("100 usd to xyz", &rates));
 }
