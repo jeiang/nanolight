@@ -139,6 +139,56 @@ test "Settings' Open at Login flips what the system says, not a copy" {
     try std.testing.expect(prefs.login_on);
 }
 
+test "recording a key: idle, recording, refused, and never without a recorder" {
+    if (!mac) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var prefs: tests.Prefs = .{};
+    prefs.init();
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = prefs.host();
+    s.openSettings();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = view.max_height,
+        .dark = true,
+    });
+    defer t.deinit();
+    t.settle(1);
+    const ui_s = &s.settings_ui;
+    const shortcut = @import("shortcut.zig");
+    // Return on the shortcut row: recording, the recorder with it.
+    ui_s.activateSelected(&s);
+    try std.testing.expectEqual(settings_view.KeyInput.recording, ui_s.key_input);
+    try std.testing.expect(prefs.recording);
+    // A letter alone is refused; it still waits.
+    ui_s.took(&s, shortcut.recorded(7, 0, 'x'));
+    try std.testing.expectEqual(settings_view.KeyInput.refused, ui_s.key_input);
+    try std.testing.expect(prefs.recording);
+    // ⌥X is taken: idle, the recorder stopped, the key applied.
+    ui_s.took(&s, shortcut.recorded(7, 1 << 19, 'x'));
+    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    try std.testing.expect(!prefs.recording);
+    try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = 1 << 11 }));
+    // Esc while recording: idle, nothing applied.
+    prefs.applied = null;
+    ui_s.activateSelected(&s);
+    ui_s.took(&s, shortcut.recorded(53, 0, 0));
+    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    try std.testing.expect(prefs.applied == null and !prefs.recording);
+    // A key pressed while idle is no one's.
+    ui_s.took(&s, shortcut.recorded(7, 1 << 19, 'x'));
+    try std.testing.expect(prefs.applied == null);
+    // The recorder could not start: not recording.
+    prefs.can_record = false;
+    ui_s.activateSelected(&s);
+    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    try std.testing.expect(!prefs.recording);
+}
+
 test "Settings' header picks the panel's theme, and keeps it" {
     const gpa = std.testing.allocator;
     var ix: Index = .init(gpa);

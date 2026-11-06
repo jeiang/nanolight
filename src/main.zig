@@ -48,8 +48,8 @@ pub fn applyChoice(ctx: *anyopaque, choice: shortcut.Choice) void {
     Live.apply(ctx, choice);
 }
 
-pub fn recordKey(ctx: *anyopaque, on: bool) void {
-    Live.record(ctx, on);
+pub fn recordKey(ctx: *anyopaque, on: bool) bool {
+    return Live.record(ctx, on);
 }
 
 pub fn loginItem(ctx: *anyopaque, set: ?bool) bool {
@@ -456,7 +456,7 @@ pub const Live = struct {
     fn keyChanged(ctx: *anyopaque, w: *nanoui.Window) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (w.isFocused()) return;
-        if (l.recorder.active()) record(l, false);
+        if (l.recorder.active()) _ = record(l, false);
         l.s.hid(account.now());
         l.through.stop();
         l.s.note = "";
@@ -523,17 +523,20 @@ pub const Live = struct {
     }
 
     /// Settings records a key: until it has one, keys pressed go to it,
-    /// and the current key is let go (pressed, it is recorded too).
-    pub fn record(ctx: *anyopaque, on: bool) void {
+    /// and the current key is let go (pressed, it is recorded too) once
+    /// the recorder runs. Whether it is recording now.
+    pub fn record(ctx: *anyopaque, on: bool) bool {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (on) {
+            // No recorder, no recording: the key stays registered.
+            if (!l.recorder.start(.{ .ctx = l, .func = recorded })) return false;
             hotkey.unregister();
-            l.recorder.start(.{ .ctx = l, .func = recorded });
-            return;
+            return true;
         }
         l.recorder.stop();
-        l.s.settings_ui.recording = false;
+        l.s.settings_ui.key_input = .idle;
         l.useKey(l.choice);
+        return false;
     }
 
     fn recorded(ctx: *anyopaque, r: shortcut.Recorded) void {

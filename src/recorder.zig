@@ -23,13 +23,18 @@ pub const Recorder = struct {
         return r.monitor != null;
     }
 
-    pub fn start(r: *Recorder, got: Got) void {
+    /// Whether the monitor is on: keys pressed go to `got` from now on.
+    pub fn start(r: *Recorder, got: Got) bool {
         r.got = got;
-        if (r.monitor != null) return;
+        if (r.monitor != null) return true;
         var b = objc.BlockRet(Recorder, &.{objc.Object}, ?objc.Object).init(r, seen);
-        const m = objc.msg(?objc.Object, objc.class("NSEvent"), "addLocalMonitorForEventsMatchingMask:handler:", .{ key_down, @as(*anyopaque, @ptrCast(&b)) }) orelse return;
+        const ns_event = objc.class("NSEvent");
+        const sel = "addLocalMonitorForEventsMatchingMask:handler:";
+        const block: *anyopaque = @ptrCast(&b);
+        const m = objc.msg(?objc.Object, ns_event, sel, .{ key_down, block }) orelse return false;
         objc.msg(void, m, "retain", .{});
         r.monitor = m;
+        return true;
     }
 
     pub fn stop(r: *Recorder) void {

@@ -419,6 +419,8 @@ pub const Prefs = struct {
     key: shortcut.Choice = .cmd_space,
     applied: ?shortcut.Choice = null,
     recording: bool = false,
+    /// Whether the recorder can start (an event monitor the system refused).
+    can_record: bool = true,
     login_on: bool = false,
     suggest_sets: u8 = 0,
     searches_out: ?bool = null,
@@ -469,8 +471,10 @@ pub const Prefs = struct {
         p.applied = c;
         p.key = c;
     }
-    fn record(ctx: *anyopaque, on: bool) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).recording = on;
+    fn record(ctx: *anyopaque, on: bool) bool {
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.recording = on and p.can_record;
+        return p.recording;
     }
     fn login(ctx: *anyopaque, set: ?bool) bool {
         const p: *Prefs = @ptrCast(@alignCast(ctx));

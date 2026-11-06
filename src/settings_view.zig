@@ -19,6 +19,10 @@ const nix = @import("build_options").nix_managed;
 
 const RowKind = enum { choice, suggest, files, browser, login, menu_bar, clipboard, clear_clipboard, updates, welcome, quit, theme };
 
+/// Recording a key of one's own: not, waiting for one, or waiting after
+/// one that was refused. Recording only while the host's recorder runs.
+pub const KeyInput = enum { idle, recording, refused };
+
 /// The rows that switch something on or off. Each reads and writes its
 /// owner: the panel's own fields, or the host's (no copy kept here).
 const Toggle = enum {
@@ -105,10 +109,9 @@ pub const Settings = struct {
     choice: Choice = .cmd_space,
     /// The last chip's key, recorded (this run or before), if any.
     custom: ?Choice = null,
-    /// Waiting for a key to be pressed for the last chip; the one pressed
-    /// last wasn't fit (no ⌘, ⌥ or ⌃).
-    recording: bool = false,
-    refused: bool = false,
+    /// Recording a key for the last chip, and whether the one pressed last
+    /// was refused (no ⌘, ⌥ or ⌃).
+    key_input: KeyInput = .idle,
     /// Whether this system has clipboard history (its section shows).
     clip_here: bool = false,
     cleared: bool = false,
@@ -129,7 +132,7 @@ pub const Settings = struct {
 
     pub fn hide(s: *Settings) void {
         s.open = false;
-        s.recording = false;
+        s.key_input = .idle;
     }
 
     /// The rows shown now: the clipboard's only where this system has it.
@@ -239,7 +242,7 @@ pub const Settings = struct {
         defer row.end();
         for (Choice.all) |ch| {
             ui.key(c, c.print("key-{d}-{d}", .{ ch.code, ch.mods }));
-            const on = ch.eql(s.choice) and !s.recording;
+            const on = ch.eql(s.choice) and s.key_input == .idle;
             const b = ui.div(c).row().h(36).px(14).itemsCenter().rounded(10).control()
                 .bg(if (on) p.sel else p.tile.alpha(0.5)).border(if (on) p.text.alpha(0.35) else p.rim);
             defer b.end();
@@ -250,29 +253,37 @@ pub const Settings = struct {
         // Carbon takes any key; a PC keeps to the four).
         if (!mac) return;
         ui.key(c, "key-own");
-        const on = s.recording or (s.custom != null and s.custom.?.eql(s.choice));
+        const recording = s.key_input != .idle;
+        const on = recording or (s.custom != null and s.custom.?.eql(s.choice));
         const b = ui.div(c).row().h(36).px(14).gap(6).itemsCenter().rounded(10).control()
             .bg(if (on) p.sel else p.tile.alpha(0.5)).border(if (on) p.text.alpha(0.35) else p.rim);
         defer b.end();
-        if (b.clicked()) s.record(n, !s.recording);
-        const text = if (s.refused) "Add ⌘, ⌥ or ⌃" else if (s.recording) "Type a shortcut" else if (s.custom) |k| c.print("{f}", .{k}) else "Record…";
-        ui.text(c, text, .{ .size = 13.5, .weight = if (on) .semibold else .medium, .color = if (on) p.text else p.sub });
-        if (s.recording) ui.kbd(c, "esc");
+        if (b.clicked()) s.record(n, !recording);
+        const text = switch (s.key_input) {
+            .refused => "Add ⌘, ⌥ or ⌃",
+            .recording => "Type a shortcut",
+            .idle => if (s.custom) |k| c.print("{f}", .{k}) else "Record…",
+        };
+        const weight: ui.Weight = if (on) .semibold else .medium;
+        ui.text(c, text, .{ .size = 13.5, .weight = weight, .color = if (on) p.text else p.sub });
+        if (recording) ui.kbd(c, "esc");
     }
 
-    /// Starts or stops waiting for a key of one's own.
+    /// Starts or stops waiting for a key of one's own. Recording only once
+    /// the host's recorder has started (none in tests: as asked).
     fn record(s: *Settings, n: *panel.Nanolight, on: bool) void {
-        s.recording = on;
-        s.refused = false;
-        const h = s.hooks(n) orelse return;
-        h.record(h.ctx, on);
+        const h = s.hooks(n) orelse {
+            s.key_input = if (on) .recording else .idle;
+            return;
+        };
+        s.key_input = if (h.record(h.ctx, on)) .recording else .idle;
     }
 
     /// A key pressed while recording: kept and used, or not.
     pub fn took(s: *Settings, n: *panel.Nanolight, r: shortcut.Recorded) void {
-        if (!s.recording) return;
+        if (s.key_input == .idle) return;
         switch (r) {
-            .unusable => s.refused = true,
+            .unusable => s.key_input = .refused,
             .cancel => s.record(n, false),
             .key => |k| {
                 s.record(n, false);
@@ -283,7 +294,7 @@ pub const Settings = struct {
     }
 
     fn pick(s: *Settings, n: *panel.Nanolight, ch: Choice) void {
-        if (s.recording) s.record(n, false);
+        if (s.key_input != .idle) s.record(n, false);
         s.choice = ch;
         const h = s.hooks(n) orelse return;
         h.apply(h.ctx, ch);
@@ -409,7 +420,7 @@ pub const Settings = struct {
         const h = s.hooks(n);
         switch (kind) {
             // ←/→ step through the four; Return records one's own.
-            .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, s.shown(), 1),
+            .choice => if (mac) s.record(n, s.key_input == .idle) else s.nudge(n, s.shown(), 1),
             inline .suggest, .files, .browser, .login, .menu_bar, .clipboard => |k| {
                 s.flip(n, @field(Toggle, @tagName(k)));
             },
