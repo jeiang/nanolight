@@ -1,7 +1,8 @@
 # Builds Nanolight for macOS (Apple silicon), Windows and Linux (x86_64 and
 # arm64, cross-compiled here) and attaches them, with the update feed the
-# app's updater reads (manifest.json, each archive's sha256), to the GitHub
-# release of the tag that was pushed.
+# app's updater reads (manifest.json, each file's sha256) and each build's
+# debug symbols, to the GitHub release of the tag that was pushed: all of
+# it is `zig build package` (tools/package.zig).
 #
 # The release starts as a prerelease: the updater and the "latest" download
 # links don't see one. verify-release.yml then checks the published files on
@@ -10,14 +11,15 @@
 # prerelease, and nobody gets it: fix it and push a new tag, or rerun the
 # failed jobs if Apple or GitHub was the trouble. If a pushed tag's run never
 # starts (GitHub has dropped the event), `gh workflow run release.yml --ref vX`
-# does the same.
+# does the same. One release runs at a time, so that two close tags can't
+# race for "latest"; a tag older than the latest is never made the latest.
 #
 # Signing and notarization use these repository secrets of jeiang/nanolight.
 # All are optional. With all five, the app and image are signed with
 # a Developer ID and notarized; without them, they are signed ad hoc
 # (Gatekeeper asks once, and the app can't update itself): the Signing
 # identity and Notary credentials steps are skipped when MACOS_CERT_P12 is
-# empty, and macos/package.sh then signs with "codesign --sign -".
+# empty, and `zig build package` then signs with "codesign --sign -".
 #   MACOS_CERT_P12       base64 of a "Developer ID Application" .p12
 #   MACOS_CERT_PASSWORD  its password
 #   AC_API_KEY_P8        an App Store Connect API key (the .p8's contents)
@@ -32,6 +34,12 @@ on:
 
 permissions:
   contents: write
+
+# A tag pushed while another's release runs waits for it (a newer tag still
+# waiting replaces an older one).
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   macos:
@@ -80,48 +88,20 @@ jobs:
             echo "NOTARY_ISSUER_ID=$AC_API_ISSUER_ID"
           } >> "$GITHUB_ENV"
 
+      # The Mac's app, disk image and update (signed, notarized and stapled
+      # with the credentials above, then checked), Windows' and Linux'
+      # archives, each build's debug symbols, and the feed naming them.
       - name: Package
         run: |
           version="${GITHUB_REF_NAME#v}"
           case "$GITHUB_REF" in refs/tags/*) ;; *) version="0.0.0-${GITHUB_SHA::7}" ;; esac
-          VERSION="$version" sh macos/package.sh
-
-      - name: Windows and Linux
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          case "$GITHUB_REF" in refs/tags/*) ;; *) version="0.0.0-${GITHUB_SHA::7}" ;; esac
-          VERSION="$version" sh pc/package.sh
-
-      - name: Check
-        run: |
-          codesign --verify --strict --verbose=2 zig-out/package/Nanolight.app
-          hdiutil verify zig-out/package/nanolight-macos-arm64.dmg
-          if [ -n "${NOTARY_KEY_PATH:-}" ]; then
-            # Validating asks Apple's CloudKit too, which drops the
-            # connection now and then (error 68): a few tries, as stapling.
-            validate() {
-              for try in 1 2 3 4 5; do
-                xcrun stapler validate "$1" && return 0
-                echo "validating $1 failed (try $try); retrying" >&2
-                sleep $((try * 10))
-              done
-              return 1
-            }
-            validate zig-out/package/Nanolight.app
-            validate zig-out/package/nanolight-macos-arm64.dmg
-          fi
+          zig build package -Dversion="$version"
 
       - uses: actions/upload-artifact@v4
         with:
           name: nanolight-macos-arm64
           path: |
-            zig-out/package/nanolight-macos-arm64.dmg
-            zig-out/package/nanolight-macos-arm64.dmg.sha256
-            zig-out/package/nanolight-macos-arm64.zip
-            zig-out/package/nanolight-windows-x86_64.zip
-            zig-out/package/nanolight-linux-x86_64.tar.gz
-            zig-out/package/nanolight-linux-aarch64.tar.gz
-            zig-out/package/*.sha256
+            zig-out/package/nanolight-*
             zig-out/package/manifest.json
 
       - name: Attach to the release
@@ -131,11 +111,10 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
           cd zig-out/package
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --prerelease --title "Nanolight ${tag#v}" --notes "Nanolight ${tag#v} for macOS 14 and later (Apple silicon: open the disk image and drag Nanolight to Applications), Windows 10 and later (x86_64: unzip and run nanolight.exe) and Linux (x86_64, arm64; X11, GTK 3: unpack and run nanolight)."
-          gh release upload "$tag" nanolight-macos-arm64.dmg nanolight-macos-arm64.dmg.sha256 nanolight-macos-arm64.zip \
-            nanolight-windows-x86_64.zip nanolight-linux-x86_64.tar.gz nanolight-linux-aarch64.tar.gz \
-            nanolight-windows-x86_64.zip.sha256 nanolight-linux-x86_64.tar.gz.sha256 nanolight-linux-aarch64.tar.gz.sha256 \
-            manifest.json --clobber
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --prerelease --title "Nanolight ${tag#v}" --notes "Nanolight ${tag#v} for macOS 14 and later (Apple silicon: open the disk image and drag Nanolight to Applications), Windows 10 and later (x86_64: unzip and run nanolight.exe) and Linux (x86_64, arm64; X11, GTK 3: unpack and run nanolight). The -symbols files hold each build's debug symbols, for reading a crash."
+          # Every file the package made: the disk image, the updates, the
+          # symbols, each one's .sha256, and the manifest.
+          gh release upload "$tag" nanolight-* manifest.json --clobber
 
   verify:
     needs: macos
@@ -148,6 +127,21 @@ jobs:
     needs: verify
     runs-on: ubuntu-24.04
     steps:
+      # A tag older than the latest release (a late dispatch, or a slow run)
+      # would take "latest" back to it: it stays a prerelease, and says so.
+      - name: Newer than the latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" -q .tag_name 2>/dev/null || true)
+          if [ -n "$latest" ] && [ "$latest" != "$GITHUB_REF_NAME" ]; then
+            newest=$(printf '%s\n%s\n' "$latest" "$GITHUB_REF_NAME" | sort -V | tail -1)
+            if [ "$newest" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::$GITHUB_REF_NAME is older than the latest release, $latest: not made the latest"
+              exit 1
+            fi
+          fi
+
       - name: The latest release, for everyone
         env:
           GH_TOKEN: ${{ github.token }}
