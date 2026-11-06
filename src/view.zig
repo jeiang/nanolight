@@ -13,6 +13,7 @@ const files_view = @import("files_view.zig");
 const answers = @import("answers.zig");
 const suggest = @import("suggest.zig");
 const rates = @import("rates.zig");
+const rates_table = @import("rates_table.zig");
 const search = @import("search.zig");
 const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
@@ -414,7 +415,7 @@ pub const Nanolight = struct {
 
     /// Lists the query's rows with `status`; true when they list a currency
     /// conversion, which asks for the rates.
-    fn buildRows(s: *Nanolight, status: rates.Status) bool {
+    fn buildRows(s: *Nanolight, status: rates_table.Status) bool {
         var sug: [results.max_apps]u32 = undefined;
         const ns = s.index.suggestions(&sug);
         var web: [suggest.max_rows][]const u8 = undefined;
@@ -423,7 +424,7 @@ pub const Nanolight = struct {
         return s.res.need_rates;
     }
 
-    pub fn ratesTable(s: *const Nanolight) ?*const rates.Rates {
+    pub fn ratesTable(s: *const Nanolight) ?*const rates_table.Rates {
         return if (s.rates) |r| r.feed.table() else null;
     }
 

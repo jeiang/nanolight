@@ -246,7 +246,7 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/search.zig` | Text: fuzzy matching and ranking (allocation-free), UTF-8 cutting, URL escaping |
 | `src/calc.zig` | The calculator, and the math read around a conversion's units |
 | `src/convert.zig` | Unit and currency conversion: the parser and unit table, money by the rates it is handed |
-| `src/rates.zig` | Currency rates: the table, when to refetch it, its fetch and its copy on disk |
+| `src/rates_table.zig`, `src/rates.zig` | Currency rates: the table and its JSON; when to refetch it, its fetch and its copy on disk |
 | `src/suggest.zig` | Google's completions: the privacy guard, decoding, the cache (after [browse](https://github.com/justrach/browse)) |
 | `src/preview.zig` | The results page in the panel (WKWebView, the Mac) |
 | `src/platform.zig` | Each OS's parts, picked once, and what it can do; `src/pc_stubs.zig` stands in for the Mac's, checked against them |

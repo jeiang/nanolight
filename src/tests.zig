@@ -19,6 +19,7 @@ test {
     _ = @import("calc.zig");
     _ = @import("convert.zig");
     _ = @import("rates.zig");
+    _ = @import("rates_table.zig");
     _ = @import("results.zig");
     _ = @import("suggest.zig");
     _ = @import("settings.zig");
@@ -160,6 +161,7 @@ test "the panel finds, moves, answers and hands off" {
 const suggest = @import("suggest.zig");
 const results = @import("results.zig");
 const rates = @import("rates.zig");
+const rates_table = @import("rates_table.zig");
 
 test "a pending currency card is not the default row, and Return acts on the search under it" {
     const gpa = std.testing.allocator;
@@ -200,7 +202,7 @@ test "a pending currency card is not the default row, and Return acts on the sea
     try std.testing.expect(t.hasText("Loading rates…"));
     // The rates land: the card is the answer, and selected.
     const body = "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}";
-    feed.landed(rates.Rates.parse(gpa, body).?, 1 + rates.retry_after);
+    feed.landed(rates_table.Rates.parse(gpa, body).?, 1 + rates.retry_after);
     s.ratesLanded();
     t.settle(1);
     try std.testing.expect(!s.res.pending);

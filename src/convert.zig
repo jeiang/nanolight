@@ -2,7 +2,7 @@
 //! MB", "100 usd to ttd", "$20 in eur", with math around them: "35 * 7 ttd
 //! to usd" converts 245 TTD, "10 km to mi / 2" halves the miles. All of it
 //! is pure parsing; calc.zig works out the math. Money is converted by
-//! whatever rates `answer` is handed (a `Lookup`; rates.zig's table).
+//! whatever rates `answer` is handed (a `Lookup`; rates_table.zig's table).
 const std = @import("std");
 const calc = @import("calc.zig");
 
@@ -118,7 +118,7 @@ const symbols = [_]struct { sym: []const u8, code: []const u8 }{
 };
 
 /// The lowercase currency code `word` is: three letters, or a symbol.
-pub fn code(word: []const u8, buf: *[3]u8) ?[]const u8 {
+fn code(word: []const u8, buf: *[3]u8) ?[]const u8 {
     for (symbols) |s| if (std.mem.eql(u8, word, s.sym)) return s.code;
     if (word.len != 3) return null;
     for (word, 0..) |c, i| {

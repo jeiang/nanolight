@@ -1,95 +1,26 @@
-//! Currency rates: the table (`Rates`, the JSON of
-//! github.com/fawazahmed0/exchange-api: lowercase codes, each worth of one
-//! USD) convert.zig converts money with; `Feed`, which says when to fetch
-//! it; and the running app's side (`Live`): the table kept on disk with its
-//! day, read the first time a conversion asks, fetched when none is in hand
-//! or it is a day old, the panel told when it lands.
+//! Currency rates fetched and kept: `Feed`, which says when to fetch the
+//! table (rates_table.zig), and the running app's side (`Live`): the table
+//! kept on disk with its day, read the first time a conversion asks,
+//! fetched when none is in hand or it is a day old, the panel told when it
+//! lands.
 const std = @import("std");
 const nanoui = @import("nanoui");
-const convert = @import("convert.zig");
 const prefs = @import("prefs.zig");
+const rates_table = @import("rates_table.zig");
+const Rates = rates_table.Rates;
+const Status = rates_table.Status;
 const assert = std.debug.assert;
 
 pub const urls = [_][]const u8{
     "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.min.json",
     "https://latest.currency-api.pages.dev/v1/currencies/usd.min.json",
 };
-/// A longer table is not read.
-pub const max_bytes = 512 * 1024;
 /// Rates are fetched at most this often (seconds) once they are in hand.
 pub const max_age = 24 * 3600;
 /// A failed fetch is tried again after this long (seconds).
 pub const retry_after = 600;
 /// Seconds without a byte before a fetch gives up.
 const timeout = 10;
-
-/// Currency rates, each worth of one USD, by lowercase three-letter code.
-pub const Rates = struct {
-    arena: std.heap.ArenaAllocator,
-    map: std.StringHashMapUnmanaged(f64) = .empty,
-    /// YYYY-MM-DD, the day the table is for.
-    date: [10]u8,
-
-    pub fn deinit(r: *Rates) void {
-        r.arena.deinit();
-    }
-
-    /// The table in `body` (`{"date":"2026-11-03","usd":{"eur":0.86,…}}`),
-    /// or null if it isn't one. Names longer than three letters are left out.
-    pub fn parse(gpa: std.mem.Allocator, body: []const u8) ?Rates {
-        if (body.len > max_bytes) return null;
-        var tmp: std.heap.ArenaAllocator = .init(gpa);
-        defer tmp.deinit();
-        const v = std.json.parseFromSliceLeaky(
-            std.json.Value,
-            tmp.allocator(),
-            body,
-            .{},
-        ) catch return null;
-        if (v != .object) return null;
-        const day = v.object.get("date") orelse return null;
-        const table = v.object.get("usd") orelse return null;
-        if (day != .string or day.string.len != 10 or table != .object) return null;
-        for (day.string, 0..) |c, i| if (if (i == 4 or
-            i == 7) c != '-' else !std.ascii.isDigit(c)) return null;
-        var r: Rates = .{ .arena = .init(gpa), .date = day.string[0..10].* };
-        const a = r.arena.allocator();
-        var it = table.object.iterator();
-        while (it.next()) |e| {
-            var b: [3]u8 = undefined;
-            const k = convert.code(e.key_ptr.*, &b) orelse continue;
-            const x: f64 = switch (e.value_ptr.*) {
-                .integer => |n| @floatFromInt(n),
-                .float => |f| f,
-                else => continue,
-            };
-            if (!(x > 0) or !std.math.isFinite(x)) continue;
-            const key = a.dupe(u8, k) catch {
-                r.deinit();
-                return null;
-            };
-            r.map.put(a, key, x) catch {
-                r.deinit();
-                return null;
-            };
-        }
-        if (r.map.count() == 0) {
-            r.deinit();
-            return null;
-        }
-        return r;
-    }
-
-    /// What `convert.answer` converts money by.
-    pub fn lookup(r: *const Rates) convert.Lookup {
-        return .{ .ctx = r, .perUsd = perUsd, .date = r.date };
-    }
-
-    fn perUsd(ctx: *const anyopaque, c: []const u8) ?f64 {
-        const r: *const Rates = @ptrCast(@alignCast(ctx));
-        return r.map.get(c);
-    }
-};
 
 /// The rates in hand and their fetching: when they were fetched and when a
 /// fetch last began (Unix seconds, 0 for never), and whether one is out.
@@ -161,12 +92,6 @@ pub const Feed = struct {
     }
 };
 
-/// What rows are built with: the table in hand, and whether it could not be had.
-pub const Status = struct {
-    table: ?*const Rates = null,
-    failed: bool = false,
-};
-
 /// The rates the panel converts with, and their reading, keeping and fetching.
 pub const Live = struct {
     feed: Feed = .{},
@@ -229,7 +154,7 @@ pub const Live = struct {
         var table: ?Rates = null;
         if (path(env)) |file| {
             defer env.gpa.free(file);
-            const limit: std.Io.Limit = .limited(max_bytes);
+            const limit: std.Io.Limit = .limited(rates_table.max_bytes);
             const read = std.Io.Dir.cwd().readFileAlloc(env.io, file, env.gpa, limit);
             if (read catch null) |body| {
                 defer env.gpa.free(body);
@@ -298,35 +223,6 @@ const sample =
 ++
     \\"zzz":0,"bad":"x"}}
 ;
-
-test "rates read the fetched table" {
-    var r = Rates.parse(testing.allocator, sample).?;
-    defer r.deinit();
-    const l = r.lookup();
-    try testing.expectEqualStrings("2026-11-03", &l.date);
-    try testing.expectEqual(@as(f64, 6.785), l.perUsd(l.ctx, "ttd").?);
-    try testing.expectEqual(@as(f64, 1), l.perUsd(l.ctx, "usd").?);
-    try testing.expect(l.perUsd(l.ctx, "1inch") == null);
-    try testing.expect(l.perUsd(l.ctx, "zzz") == null);
-    for ([_][]const u8{
-        "",
-        "<html>",
-        "[]",
-        "{\"usd\":{\"eur\":1}}",
-        "{\"date\":\"2026-11-03\"}",
-        "{\"date\":\"tomorrow!!\",\"usd\":{\"eur\":1}}",
-        "{\"date\":\"2026-11-03\",\"usd\":{}}",
-    }) |bad|
-        try testing.expect(Rates.parse(testing.allocator, bad) == null);
-}
-
-test "the table converts money" {
-    var r = Rates.parse(testing.allocator, sample).?;
-    defer r.deinit();
-    const m = convert.answer("100 USD in TTD", r.lookup()).?.money;
-    try testing.expectApproxEqRel(@as(f64, 678.5), m.value, 1e-12);
-    try testing.expectEqualStrings("2026-11-03", &m.date);
-}
 
 test "rates are fetched when missing or a day old, one at a time, not in a loop" {
     var f: Feed = .{};
