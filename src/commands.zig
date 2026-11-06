@@ -180,10 +180,6 @@ fn listed(i: usize) bool {
     return chosen[i] != none;
 }
 
-/// Below this, a match is letters in order or a typo: too loose for a
-/// command, which would list under nearly every query.
-const min_score = 500;
-
 /// The commands `query` asks for, best first (table order among equals),
 /// into `out`: how many.
 pub fn rank(query: []const u8, out: []search.Ranked) usize {
@@ -192,7 +188,7 @@ pub fn rank(query: []const u8, out: []search.Ranked) usize {
     var top: search.Top = .init(out);
     for (all, 0..) |c, i| {
         if (!listed(i)) continue;
-        const m = search.scoreNamed(q, c.name, c.keywords, min_score) orelse continue;
+        const m = search.scoreNamed(q, c.name, c.keywords, search.min_loose) orelse continue;
         top.offer(.{ .index = @intCast(i), .match = m });
     }
     return top.n;

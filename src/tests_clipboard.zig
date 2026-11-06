@@ -342,7 +342,10 @@ test "an entry added while the screen is open appears at once" {
     try testing.expect(t.hasText("Text · firefox · just now"));
     // The selection stayed on the image, which moved down a row.
     try testing.expectEqual(@as(usize, 2), s.clip_ui.sel);
-    try testing.expectEqual(image, f.store.entries.items[s.clip_ui.found[s.clip_ui.sel]].hash);
+    try testing.expectEqual(
+        image,
+        f.store.entries.items[s.clip_ui.found[s.clip_ui.sel].index].hash,
+    );
 }
 
 test "Settings: the clipboard rows toggle recording and clear the history" {

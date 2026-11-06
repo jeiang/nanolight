@@ -342,10 +342,6 @@ fn strip(query: []const u8) []const u8 {
     return q;
 }
 
-/// Below this, a match is letters in order or a typo: too loose for a
-/// pane, which would list under nearly every query.
-const min_score = 500;
-
 /// The panes `query` asks for, best first (table order among equals),
 /// into `out`; how many.
 pub fn rank(query: []const u8, out: []search.Ranked) usize {
@@ -353,7 +349,7 @@ pub fn rank(query: []const u8, out: []search.Ranked) usize {
     if (q.len < 2) return 0;
     var top: search.Top = .init(out);
     for (all, 0..) |p, i| {
-        const m = search.scoreNamed(q, p.name, p.keywords, min_score) orelse continue;
+        const m = search.scoreNamed(q, p.name, p.keywords, search.min_loose) orelse continue;
         if (!present(i)) continue;
         top.offer(.{ .index = @intCast(i), .match = m });
     }

@@ -9,7 +9,7 @@
 //! its way the answer to fewer letters stands in for it, cut to what still
 //! begins with what is typed: the rows don't blink at every key.
 const std = @import("std");
-const results = @import("results.zig");
+const search = @import("search.zig");
 
 /// At most this many completions are listed.
 pub const max_rows = 4;
@@ -43,7 +43,7 @@ pub fn url(buf: *[url_max]u8, typed: []const u8) []const u8 {
     std.debug.assert(typed.len <= max_len);
     var w: std.Io.Writer = .fixed(buf);
     w.writeAll(url_base) catch unreachable;
-    results.escape(&w, typed, true);
+    search.percentEncode(&w, std.mem.trim(u8, typed, " "), .{ .plus = true }) catch unreachable;
     return w.buffered();
 }
 

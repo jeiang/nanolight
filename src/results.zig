@@ -15,7 +15,8 @@ const convert = @import("convert.zig");
 const panes = @import("settings_panes.zig");
 const commands = @import("commands.zig");
 const mac = @import("builtin").os.tag == .macos;
-const Index = @import("apps.zig").Index;
+const apps = @import("apps.zig");
+const Index = apps.Index;
 pub const Quicklink = @import("settings.zig").Quicklink;
 
 /// The key held for the panel's shortcuts (⌘1, ⌘↩, ⌘,): Ctrl on a PC.
@@ -230,7 +231,7 @@ pub const Results = struct {
         }
         const local_start = r.n;
         var ranked: [max_apps]search.Ranked = undefined;
-        const n = search.rankApps(query, ix, &ranked);
+        const n = apps.rankApps(query, ix, &ranked);
         for (ranked[0..n]) |x| r.push(.{ .kind = .app, .app = x.index, .match = x.match });
         if (isSettings(query)) r.push(.{
             .kind = .settings,
@@ -355,7 +356,7 @@ pub const Results = struct {
     fn isClipboard(query: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(query, "clip")) return true;
         const m = search.score(query, "Clipboard History") orelse return false;
-        return query.len >= 3 and m.score >= 500;
+        return query.len >= 3 and m.score >= search.min_loose;
     }
 
     /// "settings" and "preferences", the words people type for this.
@@ -421,24 +422,12 @@ pub fn url(buf: []u8, template: []const u8, argument: []const u8) []const u8 {
     var rest = template;
     while (std.mem.indexOf(u8, rest, mark)) |i| {
         w.writeAll(rest[0..i]) catch return "";
-        escape(&w, argument, false);
+        // best effort: the address is cut where `buf` is full.
+        search.percentEncode(&w, std.mem.trim(u8, argument, " "), .{}) catch {};
         rest = rest[i + mark.len ..];
     }
     w.writeAll(rest) catch return "";
     return w.buffered();
-}
-
-/// `query`, trimmed, as URL text: spaces as `+` when `plus` (query values
-/// only; a path needs `%20`), the rest of what isn't plain as `%XX`. Stops
-/// where `w` is full.
-pub fn escape(w: *std.Io.Writer, query: []const u8, plus: bool) void {
-    for (std.mem.trim(u8, query, " ")) |ch| {
-        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
-            w.writeByte(ch) catch break;
-        } else if (ch == ' ' and plus) {
-            w.writeByte('+') catch break;
-        } else w.print("%{X:0>2}", .{ch}) catch break;
-    }
 }
 
 fn testIndex(a: std.mem.Allocator, names: []const []const u8) !Index {

@@ -269,23 +269,6 @@ pub fn command(bytes: []const u8, file: []const u8, out: *[8][]const u8) [][]con
     return out[0 .. n + 1];
 }
 
-/// `value` percent-encoded (an argument with `percentEncoded`).
-pub fn encode(buf: []u8, value: []const u8) []const u8 {
-    var n: usize = 0;
-    for (value) |ch| {
-        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
-            if (n + 1 > buf.len) break;
-            buf[n] = ch;
-            n += 1;
-        } else {
-            if (n + 3 > buf.len) break;
-            _ = std.fmt.bufPrint(buf[n..][0..3], "%{X:0>2}", .{ch}) catch break;
-            n += 3;
-        }
-    }
-    return buf[0..n];
-}
-
 test "a script command's header" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
@@ -329,8 +312,6 @@ test "a script command's header" {
         if (windows) "sh" else "/bin/sh",
         command("echo", "x", &out)[0],
     );
-    var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("a%20b%26c", encode(&buf, "a b&c"));
 }
 
 test "a folder named in config.toml is scanned for script commands, a folder down too" {
