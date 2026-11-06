@@ -261,7 +261,9 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 
 The icon is drawn by `tools/icon.py`.
 
-New and changed Zig code follows [TigerStyle](docs/TIGER_STYLE.md).
+Zig code follows [TigerStyle](docs/TIGER_STYLE.md), as its first section applies it, and
+`zig build lint` checks the rules a machine can. Code written before TigerStyle was adopted does
+not pass yet.
 
 ## License
 

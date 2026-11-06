@@ -1,9 +1,49 @@
 # TigerStyle
 
-> Nanolight's Zig style guide. Everything after this note is copied unchanged from TigerBeetle's
+> Nanolight's Zig style guide. From "The Essence Of Style" on, the text is copied unchanged from
+> TigerBeetle's
 > [docs/TIGER_STYLE.md](https://github.com/tigerbeetle/tigerbeetle/blob/ba8d4b347cbb29057fd52243d2909b7a830f9336/docs/TIGER_STYLE.md)
-> (commit `ba8d4b3`). This file is under TigerBeetle's
-> [Apache License 2.0](https://github.com/tigerbeetle/tigerbeetle/blob/main/LICENSE), not Nanolight's MIT license.
+> (commit `ba8d4b3`). That text is under TigerBeetle's
+> [Apache License 2.0](https://github.com/tigerbeetle/tigerbeetle/blob/main/LICENSE), not
+> Nanolight's MIT license.
+
+## How Nanolight applies TigerStyle
+
+Every rule below applies as written, except where this section changes it. `zig build lint`
+checks what a machine can: `zig fmt`, the 100-column limit, and a reason on every empty catch.
+
+- **Dependencies.** nanoui is the only exemption: the panel is drawn by it. Nothing else is
+  added, for the app or for its tools.
+- **Tooling.** As written: tools are Zig, run as `zig build` steps or kept in `tools/`.
+- **Recursion.** None, as written. Parsers and folder walks use loops and explicit stacks.
+- **Static allocation (adapted).** Memory may be allocated after startup, because the apps,
+  the clipboard history and a script's output are sized at run time. In its place: every
+  collection that grows has a named limit, checked where it grows; every arena has one owner;
+  and nothing is freed while a caller, or the frame being drawn, can still read it. Free it at
+  the next frame instead.
+- **Assertions (scoped).** Assert structural and memory invariants and the relationships of
+  compile-time constants, paired where data crosses a boundary. Data from disk, the network or
+  the person is an operating error: handle it, never assert it. Releases are built
+  `ReleaseSafe`, so assertions stay on, and each release keeps its debug symbols so that a crash
+  can be read.
+- **Explicitly sized types (adapted).** Anything stored or sent uses a sized integer. In-memory
+  indexes and lengths use `usize`, as Zig's slices do.
+- **Errors (tiered).** Saved data, privacy and security paths handle every error and report it.
+  Anywhere else an error may be dropped only with `// best effort: <why>` on its line or the
+  line above. Running out of memory may end a UI event handler early.
+- **External events (adapted).** A panel reacts to events. A callback never frees or replaces
+  state that its caller may still read in the same frame: it records the event, and the owner
+  applies it after the frame.
+- **Naming (adapted).** Functions keep Zig's camelCase, as the standard library and nanoui do.
+  A method's receiver may be one letter. Elsewhere, no abbreviations, and no name means two
+  things in one file. Units go last in internal names; the keys of `config.toml`
+  (`retention_days`, `max_entries`, `pop_to_root_seconds`) keep theirs, since configs use them.
+- **In-place initialization (narrowed).** Required for types that are pinned or that point
+  into themselves. Zig already passes large arguments by reference.
+- **Function length.** 70 lines, as written. A function that generates a compile-time table is
+  exempt.
+- **Line length.** 100 columns, as written. A table laid out by hand between
+  `// zig fmt: off` and `// zig fmt: on` may run past it.
 
 ## The Essence Of Style
 
