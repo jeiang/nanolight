@@ -104,8 +104,6 @@ pub const Live = struct {
     cmds: commands.Runner = undefined,
     /// Currency rates (convert.zig) and their fetching.
     rates: convert.Feed = .{},
-    /// The next `hide` is skipped: a command just took the panel.
-    keep_open: bool = false,
     /// Clipboard history (clipboard_live.zig): the store, null in headless runs
     /// and without a data directory, and the OS's watcher.
     clip: ?*clipboard.Store = null,
@@ -477,10 +475,6 @@ pub const Live = struct {
 
     pub fn hide(ctx: *anyopaque) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
-        if (l.keep_open) {
-            l.keep_open = false;
-            return;
-        }
         l.s.hid(account.now());
         if (l.window) |w| w.hide();
     }

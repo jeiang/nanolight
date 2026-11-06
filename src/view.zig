@@ -164,13 +164,11 @@ pub const Nanolight = struct {
         return s.pop_after > 0 and now - t > s.pop_after;
     }
 
-    /// The first screen again: no query, the first row, no Settings or page.
+    /// The first screen again: no query, the first row, no other screen.
     pub fn toRoot(s: *Nanolight) void {
         s.query.clear();
         s.sel = 0;
-        s.back();
-        s.settings_ui.hide();
-        s.clip_ui.hide();
+        s.leaveScreens();
     }
 
     /// The panel away: Escape, on any screen, closes it (and the screen)
@@ -673,15 +671,26 @@ pub const Nanolight = struct {
         show(h.ctx, u);
     }
 
+    /// Settings in place of the rows, the screen that was up closed.
     pub fn openSettings(s: *Nanolight) void {
-        s.back();
+        s.leaveScreens();
         s.settings_ui.show();
     }
 
-    /// Clipboard History in place of the rows.
+    /// Clipboard History in place of the rows, the screen that was up closed.
     pub fn openClipboard(s: *Nanolight) void {
-        s.back();
+        s.leaveScreens();
         s.clip_ui.show(s);
+    }
+
+    /// The rows again: the page, Settings, Clipboard History and a script's
+    /// screen (its script ended) all go, so one screen is up at a time. The
+    /// welcome is not a screen here: onboard.zig ends it.
+    fn leaveScreens(s: *Nanolight) void {
+        s.back();
+        s.settings_ui.hide();
+        s.clip_ui.hide();
+        if (s.ext) |e| e.close();
     }
 
     /// The rows again, the page gone.
@@ -694,6 +703,8 @@ pub const Nanolight = struct {
     fn go(s: *Nanolight, target: []const u8) void {
         const h = s.host orelse return;
         h.open(h.ctx, target);
+        // A script's row opened its screen in the panel, which stays.
+        if (s.ext) |e| if (e.open) return;
         h.hide(h.ctx);
     }
 };
