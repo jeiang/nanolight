@@ -35,8 +35,8 @@ test "on the Mac the panel's first frame is where it settles (issue #9)" {
     const r = try firstAndSettled(true);
     try std.testing.expectEqual(r[1].y, r[0].y);
     try std.testing.expectEqual(r[1].x, r[0].x);
-    // Over its own glass (the film, the promo) it still comes in: this is
-    // what the Mac's panel did over a glass that didn't.
+    // Without the window's fade (Windows and Linux) it still comes in: this
+    // is what the Mac's panel did over a glass that didn't.
     const own = try firstAndSettled(false);
     try std.testing.expect(own[0].y < own[1].y);
 }

@@ -12,7 +12,6 @@ test {
     _ = @import("convert.zig");
     _ = @import("results.zig");
     _ = @import("suggest.zig");
-    _ = @import("promo_camera.zig");
     _ = @import("settings.zig");
     _ = @import("server.zig");
     _ = @import("account.zig");

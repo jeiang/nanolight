@@ -7,8 +7,6 @@
 //!   zig build test           its search, math, suggestions and panel
 //!   zig build server         the sync server, zig-out/bin/nanolight-server
 //!   zig build clip-probe     the Linux clipboard watcher, run without the panel
-//!   zig build film           the walkthrough's renderer (tools/film.sh)
-//!   zig build promo          the promo's renderer (tools/promo.sh)
 //!   -Dnix=true               a Nix build: Nix owns updates and startup, so
 //!                            no updater and no login-item UI
 //!
@@ -108,26 +106,6 @@ pub fn build(b: *std.Build) void {
         }) });
         b.step("clip-probe", "Build the Linux clipboard probe (zig-out/bin/clip-probe)").dependOn(&b.addInstallArtifact(probe, .{}).step);
     }
-
-    // The walkthrough, rendered offscreen (src/film.zig, tools/film.sh).
-    const film = b.addExecutable(.{ .name = "nanolight-film", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/film.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    }) });
-    film.root_module.addOptions("build_options", opts);
-    b.step("film", "Build the walkthrough's renderer (zig-out/bin/nanolight-film)").dependOn(&b.addInstallArtifact(film, .{}).step);
-
-    // The promo's shots, rendered offscreen (src/promo.zig, tools/promo.sh).
-    const promo = b.addExecutable(.{ .name = "nanolight-promo", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/promo.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    }) });
-    promo.root_module.addOptions("build_options", opts);
-    b.step("promo", "Build the promo's renderer (zig-out/bin/nanolight-promo)").dependOn(&b.addInstallArtifact(promo, .{}).step);
 }
 
 /// Nanolight as a Mac app: its program, its icon, and an Info.plist that

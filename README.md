@@ -6,8 +6,6 @@ Apps, math, quicklinks (Google, Claude, Grok, X...) and Raycast script commands:
 
 <p align="center"><sub>Forked from <a href="https://github.com/justrach/nanolight">justrach/nanolight</a>, built on <a href="https://github.com/justrach/nanoui">nanoui</a>.</sub></p>
 
-<p align="center"><a href="https://github.com/jeiang/nanolight/raw/refs/heads/main/docs/promo.mp4"><img src="docs/promo-preview.gif" alt="Introducing Nanolight 2.0, now on Mac, Windows and Linux, in 40 seconds: a MacBook Air and a Dell XPS 13 side by side, then Settings, a script command on a MacBook Air, then Windows and Linux on a Dell XPS 13" width="760"></a><br><sub><a href="https://github.com/jeiang/nanolight/raw/refs/heads/main/docs/promo.mp4"><b>Watch it with sound →</b></a> · <a href="docs/promo.md">How it was made</a> (the cut predates the removal of Raycast extension support)</sub></p>
-
 <p align="center"><img src="docs/images/nanolight.jpg" alt="Nanolight's panel has found Safari from &quot;saf&quot;" width="760"></p>
 
 ## What it does
@@ -260,10 +258,8 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 | `src/toml.zig`, `src/config.zig` | `config.toml`: the TOML subset parser, the typed schema and loader, and how the file seeds settings |
 | `src/onboard.zig`, `src/shortcut.zig`, `src/recorder.zig` | The welcome, which key is free, recording one's own |
 | `flake.nix`, `nix/` | The packages, the NixOS, nix-darwin and home-manager modules, the server module, and the flake's checks |
-| `src/film.zig`, `src/stage.zig`, `tools/film.sh` | The walkthrough, rendered offscreen |
-| `src/promo.zig`, `src/promo_scene.zig`, `src/promo_camera.zig`, `tools/promo.sh`, `tools/promo/` | The promo: nanoui's shots, Blender's laptops, the Windows and Linux recordings ([docs/promo.md](docs/promo.md)) |
 
-The icon is drawn by `tools/icon.py`. `src/backdrop.jpg` (the film's cover art) was made with OpenAI's image model.
+The icon is drawn by `tools/icon.py`.
 
 New and changed Zig code follows [TigerStyle](docs/TIGER_STYLE.md).
 

@@ -14,7 +14,7 @@ const account = @import("account.zig");
 const Palette = panel.Palette;
 
 /// What the screen asks of the app. Without it the screen says history is
-/// not available (tests and the film draw it so).
+/// not available (tests draw it so).
 pub const Host = struct {
     ctx: *anyopaque,
     store: *clipboard.Store,

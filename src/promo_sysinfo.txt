@@ -1,5 +1,0 @@
-Darwin 27.0.0 on arm64
-Up: 17:17
-
-Filesystem      Size   Used  Avail  Capacity
-/dev/disk3s1s1  1.8Ti  18Gi  525Gi  4%
