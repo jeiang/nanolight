@@ -117,7 +117,8 @@ pub const Choice = struct {
     pub fn name(c: Choice, buf: *[name_max]u8) []const u8 {
         if (c.preset()) |i| return presets[i].name;
         std.debug.assert(c.usable());
-        return std.fmt.bufPrint(buf, "key:{d}:{d}:{d}", .{ c.code, c.mods, c.ch }) catch unreachable;
+        const fields = .{ c.code, c.mods, c.ch };
+        return std.fmt.bufPrint(buf, "key:{d}:{d}:{d}", fields) catch unreachable;
     }
 
     pub fn parse(s: []const u8) ?Choice {

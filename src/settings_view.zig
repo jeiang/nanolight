@@ -47,7 +47,10 @@ const Toggle = enum {
             // Without a host (tests): as a fresh install has them.
             .login => if (h) |host| host.login(host.ctx, null) else false,
             .menu_bar => if (h) |host| host.menu_bar(host.ctx, null) else true,
-            .clipboard => if (h) |host| host.clipboard_enabled(host.ctx, null) orelse false else false,
+            .clipboard => blk: {
+                const host = h orelse break :blk false;
+                break :blk host.clipboard_enabled(host.ctx, null) orelse false;
+            },
         };
     }
 
@@ -218,8 +221,12 @@ pub const Settings = struct {
         label(c, p, "Search");
         s.switchRow(c, n, p, rows, .suggest, "Google Suggestions");
         if (present(.files, clip)) s.switchRow(c, n, p, rows, .files, "File Search");
-        if (present(.browser, clip)) s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
-        if (present(.login, clip) or present(.menu_bar, clip)) label(c, p, "This " ++ @import("results.zig").machine);
+        if (present(.browser, clip)) {
+            s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
+        }
+        if (present(.login, clip) or present(.menu_bar, clip)) {
+            label(c, p, "This " ++ @import("results.zig").machine);
+        }
         if (present(.login, clip)) s.switchRow(c, n, p, rows, .login, "Open at Login");
         if (present(.menu_bar, clip)) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
         if (present(.clipboard, clip)) {

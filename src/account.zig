@@ -116,7 +116,10 @@ pub const Account = struct {
                 const line = std.fmt.bufPrint(buf, "Sync: {s}, last synced {s}", .{ host, when });
                 break :blk line catch off_text;
             },
-            .failed => |*r| std.fmt.bufPrint(buf, "Sync: error {s}", .{r.text()}) catch "Sync: error",
+            .failed => |*r| blk: {
+                const line = std.fmt.bufPrint(buf, "Sync: error {s}", .{r.text()});
+                break :blk line catch "Sync: error";
+            },
         };
     }
 

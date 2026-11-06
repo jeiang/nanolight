@@ -319,7 +319,10 @@ test "Google's answer landing after suggestions are turned off lists nothing" {
     s.host = web.host();
     s.reveal();
     var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height });
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = view.max_height,
+    });
     defer t.deinit();
     t.frame();
     t.textOps(&.{.{ .insert = "liq" }});
