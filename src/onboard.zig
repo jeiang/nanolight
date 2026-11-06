@@ -74,7 +74,7 @@ pub const Onboard = struct {
 
     /// Looks again at who holds the keys (after a fix, on each showing).
     pub fn refresh(o: *Onboard) void {
-        // Without hooks (tests, the film) what the caller set is kept.
+        // Without hooks (tests) what the caller set is kept.
         const h = o.hooks orelse return;
         o.system = shortcut.systemKeys(&o.system_buf);
         o.others = shortcut.runningLaunchers();

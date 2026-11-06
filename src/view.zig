@@ -21,7 +21,7 @@ const settings = @import("settings.zig");
 const commands = @import("commands.zig");
 const clipboard_view = @import("clipboard_view.zig");
 
-/// What the panel asks of whatever shows it (the window, or the film).
+/// What the panel asks of whatever shows it (the window, or a test).
 pub const Host = struct {
     ctx: *anyopaque,
     /// Opens an app's path or a URL.
@@ -50,7 +50,7 @@ pub const Host = struct {
 
 pub const width: f32 = 680;
 
-/// The app's icon (icon.png, made smaller), for the panel and the film.
+/// The app's icon (icon.png, made smaller), for the panel.
 pub const icon_png = @embedFile("icon-256.png");
 
 /// The app's icon, `size` points square.
@@ -91,9 +91,6 @@ pub const Nanolight = struct {
     /// The query the rows were built for.
     built: u64 = 1,
     host: ?Host = null,
-    /// Draws its own Liquid Glass (over a desktop nanoui painted, as the
-    /// film does); otherwise the window's system glass is under it.
-    own_glass: bool = false,
     /// Clear room round the panel in its window, for its shadow.
     margin: f32 = 0,
     /// The window fades in as it shows, the system's glass with it
@@ -218,18 +215,13 @@ pub const Nanolight = struct {
     pub fn panel(s: *Nanolight, c: *ui.Context) void {
         const p = palette(c.theme.dark, s.theme);
         const shell = ui.div(c).column().w(width).rounded(18).border(p.hair).clip();
-        if (s.own_glass) {
-            _ = shell.glass(.{ .tint = @import("palette.zig").tint(c.theme.dark, s.theme) })
-                .shadows(&.{ .{ .color = .{ .a = 0.22 }, .blur = 4, .y = 1 }, .{ .color = .{ .a = 0.28 }, .blur = 40, .y = 18 } });
-        } else {
-            // The system's shadow is off (its outline drew a black ring
-            // round the panel): this one is soft, and outside the panel
-            // only, so the glass under it stays clear.
-            _ = shell.bg(p.fill).shadows(&.{
-                .{ .color = .{ .a = 0.16 }, .blur = 3, .y = 1, .knockout = true },
-                .{ .color = .{ .a = 0.24 }, .blur = 28, .y = 12, .knockout = true },
-            });
-        }
+        // The system's shadow is off (its outline drew a black ring round
+        // the panel): this one is soft, and outside the panel only, so the
+        // glass under it stays clear.
+        _ = shell.bg(p.fill).shadows(&.{
+            .{ .color = .{ .a = 0.16 }, .blur = 3, .y = 1, .knockout = true },
+            .{ .color = .{ .a = 0.24 }, .blur = 28, .y = 12, .knockout = true },
+        });
         defer shell.end();
         if (s.onboard) |o| if (o.active) {
             const h = s.follow(o.height());

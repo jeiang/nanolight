@@ -74,12 +74,6 @@ pub fn palette(dark: bool, theme: Theme) Palette {
     };
 }
 
-/// The glass's tint, where the panel draws its own (`Nanolight.own_glass`).
-pub fn tint(dark: bool, theme: Theme) ui.Color {
-    const h = theme.hue(dark) orelse return if (dark) ui.Color.black.alpha(0.42) else ui.Color.white.alpha(0.5);
-    return if (dark) ui.Color.black.mix(h, 0.22).alpha(0.55) else ui.Color.white.mix(h, 0.12).alpha(0.6);
-}
-
 fn grey(dark: bool) Palette {
     return if (dark) .{
         .text = .hex(0xeeeeee),

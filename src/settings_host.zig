@@ -1,7 +1,7 @@
 //! What the Settings screen (settings_view.zig) asks of the app: the
 //! shortcut, opening at login, the sync status, updates. Optional,
-//! like the panel's other host callbacks: tests, the film and the promo
-//! draw Settings with defaults and call nothing.
+//! like the panel's other host callbacks: tests draw Settings with
+//! defaults and call nothing.
 const shortcut = @import("shortcut.zig");
 const Theme = @import("palette.zig").Theme;
 
