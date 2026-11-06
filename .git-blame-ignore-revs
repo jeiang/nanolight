@@ -1,0 +1,5 @@
+# Formatting-only commits. Use with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# style: zig fmt src/shortcut.zig
+de670b91b29bdc14d6f843214d522d364771dc76
+# style: wrap to 100 columns
+80afd44f995b3e57fb2901f25874e47bfd3e3ba9
