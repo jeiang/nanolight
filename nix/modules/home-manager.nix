@@ -5,7 +5,7 @@ self: {
   ...
 }: let
   cfg = config.programs.nanolight;
-  configFile = "${config.xdg.configHome}/nanolight/config.toml";
+  configPath = "${config.xdg.configHome}/nanolight/config.toml";
   exe = lib.getExe cfg.package;
 in {
   imports = [(import ./client-options.nix self)];
@@ -13,7 +13,7 @@ in {
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
       home.packages = [cfg.package];
-      xdg.configFile."nanolight/config.toml".source = (pkgs.formats.toml {}).generate "nanolight-config.toml" cfg.settings;
+      xdg.configFile."nanolight/config.toml".source = cfg.configFile;
     }
     (lib.mkIf pkgs.stdenv.hostPlatform.isLinux {
       systemd.user.services.nanolight = {
@@ -24,7 +24,7 @@ in {
         };
         Service = {
           ExecStart = exe;
-          Environment = ["NANOLIGHT_CONFIG=${configFile}"];
+          Environment = ["NANOLIGHT_CONFIG=${configPath}"];
           Restart = "on-failure";
         };
         Install.WantedBy = ["graphical-session.target"];
@@ -33,13 +33,7 @@ in {
     (lib.mkIf pkgs.stdenv.hostPlatform.isDarwin {
       launchd.agents.nanolight = {
         enable = true;
-        config = {
-          ProgramArguments = [exe];
-          RunAtLoad = true;
-          KeepAlive.SuccessfulExit = false;
-          EnvironmentVariables.NANOLIGHT_CONFIG = configFile;
-          ProcessType = "Interactive";
-        };
+        config = import ./launch-agent.nix {inherit exe configPath;};
       };
     })
   ]);

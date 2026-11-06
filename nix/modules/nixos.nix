@@ -1,17 +1,16 @@
 self: {
   config,
   lib,
-  pkgs,
   ...
 }: let
   cfg = config.programs.nanolight;
-  configFile = "/etc/nanolight/config.toml";
+  configPath = "/etc/nanolight/config.toml";
 in {
   imports = [(import ./client-options.nix self)];
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [cfg.package];
-    environment.etc."nanolight/config.toml".source = (pkgs.formats.toml {}).generate "nanolight-config.toml" cfg.settings;
+    environment.etc."nanolight/config.toml".source = cfg.configFile;
 
     systemd.user.services.nanolight = {
       description = "Nanolight launcher";
@@ -20,7 +19,7 @@ in {
       after = ["graphical-session.target"];
       # The default path would pin PATH to coreutils and friends; the unit must see the session PATH.
       path = lib.mkForce [];
-      environment.NANOLIGHT_CONFIG = configFile;
+      environment.NANOLIGHT_CONFIG = configPath;
       serviceConfig = {
         ExecStart = lib.getExe cfg.package;
         Restart = "on-failure";

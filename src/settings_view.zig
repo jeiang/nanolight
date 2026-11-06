@@ -18,6 +18,81 @@ const mac = @import("builtin").os.tag == .macos;
 const nix = @import("build_options").nix_managed;
 
 const RowKind = enum { choice, suggest, files, browser, login, menu_bar, clipboard, clear_clipboard, updates, welcome, quit, theme };
+
+/// Recording a key of one's own: not, waiting for one, or waiting after
+/// one that was refused. Recording only while the host's recorder runs.
+pub const KeyInput = enum { idle, recording, refused };
+
+/// The rows that switch something on or off. Each reads and writes its
+/// owner: the panel's own fields, or the host's (no copy kept here).
+const Toggle = enum {
+    suggest,
+    files,
+    browser,
+    login,
+    menu_bar,
+    clipboard,
+
+    fn row(t: Toggle) RowKind {
+        return switch (t) {
+            inline else => |x| @field(RowKind, @tagName(x)),
+        };
+    }
+
+    fn get(t: Toggle, n: *const panel.Nanolight, h: ?*const SettingsHost) bool {
+        return switch (t) {
+            .suggest => n.suggest_on,
+            .files => n.files_on,
+            .browser => n.searches_out,
+            // Without a host (tests): as a fresh install has them.
+            .login => if (h) |host| host.login(host.ctx, null) else false,
+            .menu_bar => if (h) |host| host.menu_bar(host.ctx, null) else true,
+            .clipboard => blk: {
+                const host = h orelse break :blk false;
+                break :blk host.clipboard_enabled(host.ctx, null) orelse false;
+            },
+        };
+    }
+
+    fn set(t: Toggle, n: *panel.Nanolight, h: ?*const SettingsHost, on: bool) void {
+        switch (t) {
+            .suggest => if (h) |host| host.suggest(host.ctx, on) else {
+                n.suggest_on = on;
+                n.built = 1;
+            },
+            .files => {
+                n.files_on = on;
+                n.built = 1;
+                const key = @import("files.zig").enabled_key;
+                // A failure is logged; file search follows the switch this run either way.
+                if (n.kv) |kv| _ = @import("config.zig").kvSet(kv, key, if (on) "1" else "0");
+            },
+            .browser => if (h) |host| host.searches_out(host.ctx, on) else {
+                n.searches_out = on;
+            },
+            .login => if (h) |host| {
+                _ = host.login(host.ctx, on);
+            },
+            .menu_bar => if (h) |host| {
+                _ = host.menu_bar(host.ctx, on);
+            },
+            .clipboard => if (h) |host| {
+                _ = host.clipboard_enabled(host.ctx, on);
+            },
+        }
+    }
+};
+
+/// Whether this build shows `kind`, with or without the clipboard's rows:
+/// the one rule for the keyboard's order and the drawing.
+fn present(kind: RowKind, clip: bool) bool {
+    return switch (kind) {
+        .files, .browser, .menu_bar => mac,
+        .login, .updates => !nix,
+        .clipboard, .clear_clipboard => clip,
+        .choice, .suggest, .welcome, .quit, .theme => true,
+    };
+}
 const Theme = @import("palette.zig").Theme;
 
 /// As tall as its sections, never past the window. The Mac has three rows
@@ -28,6 +103,10 @@ const base_height: f32 = if (mac) 620 else 512;
 const clip_height: f32 = if (mac) 110 else 116;
 /// The tallest it gets (with the clipboard's section).
 pub const height: f32 = base_height + clip_height;
+comptime {
+    // The window is never resized: Settings fits in it.
+    @import("std").debug.assert(height <= panel.max_height);
+}
 
 pub const Settings = struct {
     open: bool = false,
@@ -37,18 +116,10 @@ pub const Settings = struct {
     choice: Choice = .cmd_space,
     /// The last chip's key, recorded (this run or before), if any.
     custom: ?Choice = null,
-    /// Waiting for a key to be pressed for the last chip; the one pressed
-    /// last wasn't fit (no ⌘, ⌥ or ⌃).
-    recording: bool = false,
-    refused: bool = false,
-    suggest: bool = true,
-    files: bool = false,
-    /// Return sends searches to the browser (`Nanolight.searches_out`).
-    browser: bool = false,
-    login: bool = false,
-    menu_bar: bool = true,
-    /// Clipboard history recording; `clip_here` is whether this system has it.
-    clip: bool = true,
+    /// Recording a key for the last chip, and whether the one pressed last
+    /// was refused (no ⌘, ⌥ or ⌃).
+    key_input: KeyInput = .idle,
+    /// Whether this system has clipboard history (its section shows).
     clip_here: bool = false,
     cleared: enum { idle, done, failed } = .idle,
     sync: []const u8 = @import("account.zig").off_text,
@@ -68,7 +139,7 @@ pub const Settings = struct {
 
     pub fn hide(s: *Settings) void {
         s.open = false;
-        s.recording = false;
+        s.key_input = .idle;
     }
 
     /// The rows shown now: the clipboard's only where this system has it.
@@ -83,16 +154,10 @@ pub const Settings = struct {
     }
 
     fn pull(s: *Settings, n: *panel.Nanolight) void {
-        s.suggest = n.suggest_on;
-        s.files = n.files_on;
-        s.browser = n.searches_out;
         const h = s.hooks(n) orelse return;
-        s.menu_bar = h.menu_bar(h.ctx, null);
         s.choice = h.choice(h.ctx);
         if (s.choice.preset() == null) s.custom = s.choice;
-        s.login = h.login(h.ctx, null);
         s.clip_here = h.clipboard_enabled(h.ctx, null) != null;
-        s.clip = h.clipboard_enabled(h.ctx, null) orelse false;
         s.sync = h.sync_status(h.ctx);
         s.version = h.version(h.ctx);
         s.ready = h.ready(h.ctx);
@@ -148,18 +213,23 @@ pub const Settings = struct {
     }
 
     fn body(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
+        const clip = s.clip_here;
         const col = ui.div(c).column().wFull().px(20).pt(2).pb(6).gap(if (mac) 8 else 10).grow();
         defer col.end();
         label(c, p, "Open Nanolight with");
         s.choices(c, n, p);
         label(c, p, "Search");
         s.switchRow(c, n, p, rows, .suggest, "Google Suggestions");
-        if (mac) s.switchRow(c, n, p, rows, .files, "File Search");
-        if (mac) s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
-        if (mac or !nix) label(c, p, "This " ++ @import("results.zig").machine);
-        if (!nix) s.switchRow(c, n, p, rows, .login, "Open at Login");
-        if (mac) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
-        if (s.clip_here) {
+        if (present(.files, clip)) s.switchRow(c, n, p, rows, .files, "File Search");
+        if (present(.browser, clip)) {
+            s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
+        }
+        if (present(.login, clip) or present(.menu_bar, clip)) {
+            label(c, p, "This " ++ @import("results.zig").machine);
+        }
+        if (present(.login, clip)) s.switchRow(c, n, p, rows, .login, "Open at Login");
+        if (present(.menu_bar, clip)) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
+        if (present(.clipboard, clip)) {
             label(c, p, "Clipboard History");
             s.switchRow(c, n, p, rows, .clipboard, "Record Copied Items");
             s.button(c, n, p, rows, .clear_clipboard, switch (s.cleared) {
@@ -168,9 +238,9 @@ pub const Settings = struct {
                 .failed => "Could Not Clear History",
             });
         }
-        label(c, p, if (@import("builtin").os.tag == .macos) "Sync Across Macs" else "Sync Across Computers");
+        label(c, p, if (mac) "Sync Across Macs" else "Sync Across Computers");
         ui.text(c, s.sync, .{ .size = 12.5, .color = p.sub });
-        if (!nix) {
+        if (present(.updates, clip)) {
             label(c, p, "Updates");
             s.updates(c, n, p, rows);
         }
@@ -187,7 +257,7 @@ pub const Settings = struct {
         defer row.end();
         for (Choice.all) |ch| {
             ui.key(c, c.print("key-{d}-{d}", .{ ch.code, ch.mods }));
-            const on = ch.eql(s.choice) and !s.recording;
+            const on = ch.eql(s.choice) and s.key_input == .idle;
             const b = ui.div(c).row().h(36).px(14).itemsCenter().rounded(10).control()
                 .bg(if (on) p.sel else p.tile.alpha(0.5)).border(if (on) p.text.alpha(0.35) else p.rim);
             defer b.end();
@@ -198,29 +268,37 @@ pub const Settings = struct {
         // Carbon takes any key; a PC keeps to the four).
         if (!mac) return;
         ui.key(c, "key-own");
-        const on = s.recording or (s.custom != null and s.custom.?.eql(s.choice));
+        const recording = s.key_input != .idle;
+        const on = recording or (s.custom != null and s.custom.?.eql(s.choice));
         const b = ui.div(c).row().h(36).px(14).gap(6).itemsCenter().rounded(10).control()
             .bg(if (on) p.sel else p.tile.alpha(0.5)).border(if (on) p.text.alpha(0.35) else p.rim);
         defer b.end();
-        if (b.clicked()) s.record(n, !s.recording);
-        const text = if (s.refused) "Add ⌘, ⌥ or ⌃" else if (s.recording) "Type a shortcut" else if (s.custom) |k| c.print("{f}", .{k}) else "Record…";
-        ui.text(c, text, .{ .size = 13.5, .weight = if (on) .semibold else .medium, .color = if (on) p.text else p.sub });
-        if (s.recording) ui.kbd(c, "esc");
+        if (b.clicked()) s.record(n, !recording);
+        const text = switch (s.key_input) {
+            .refused => "Add ⌘, ⌥ or ⌃",
+            .recording => "Type a shortcut",
+            .idle => if (s.custom) |k| c.print("{f}", .{k}) else "Record…",
+        };
+        const weight: ui.Weight = if (on) .semibold else .medium;
+        ui.text(c, text, .{ .size = 13.5, .weight = weight, .color = if (on) p.text else p.sub });
+        if (recording) ui.kbd(c, "esc");
     }
 
-    /// Starts or stops waiting for a key of one's own.
+    /// Starts or stops waiting for a key of one's own. Recording only once
+    /// the host's recorder has started (none in tests: as asked).
     fn record(s: *Settings, n: *panel.Nanolight, on: bool) void {
-        s.recording = on;
-        s.refused = false;
-        const h = s.hooks(n) orelse return;
-        h.record(h.ctx, on);
+        const h = s.hooks(n) orelse {
+            s.key_input = if (on) .recording else .idle;
+            return;
+        };
+        s.key_input = if (h.record(h.ctx, on)) .recording else .idle;
     }
 
     /// A key pressed while recording: kept and used, or not.
     pub fn took(s: *Settings, n: *panel.Nanolight, r: shortcut.Recorded) void {
-        if (!s.recording) return;
+        if (s.key_input == .idle) return;
         switch (r) {
-            .unusable => s.refused = true,
+            .unusable => s.key_input = .refused,
             .cancel => s.record(n, false),
             .key => |k| {
                 s.record(n, false);
@@ -231,28 +309,28 @@ pub const Settings = struct {
     }
 
     fn pick(s: *Settings, n: *panel.Nanolight, ch: Choice) void {
-        if (s.recording) s.record(n, false);
+        if (s.key_input != .idle) s.record(n, false);
         s.choice = ch;
         const h = s.hooks(n) orelse return;
         h.apply(h.ctx, ch);
     }
 
-    fn switchRow(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind, kind: RowKind, title: []const u8) void {
-        const on = isSel(rows, s.sel, kind);
+    fn switchRow(
+        s: *Settings,
+        c: *ui.Context,
+        n: *panel.Nanolight,
+        p: Palette,
+        rows: []const RowKind,
+        t: Toggle,
+        title: []const u8,
+    ) void {
+        const on = isSel(rows, s.sel, t.row());
         const d = ui.div(c).row().wFull().h(36).px(4).gap(10).itemsCenter().rounded(10).control().bg(if (on) p.sel else p.fill.alpha(0));
         defer d.end();
-        if (d.clicked()) s.flip(n, kind);
+        if (d.clicked()) s.flip(n, t);
         ui.text(c, title, .{ .size = 13.5, .weight = .medium, .color = p.text });
         ui.spacer(c);
-        mark(c, p, switch (kind) {
-            .suggest => s.suggest,
-            .files => s.files,
-            .browser => s.browser,
-            .login => s.login,
-            .menu_bar => s.menu_bar,
-            .clipboard => s.clip,
-            else => false,
-        });
+        mark(c, p, t.get(n, s.hooks(n)));
     }
 
     /// A quiet on/off mark. Not `ui.toggle`: that flips on its own click,
@@ -267,40 +345,9 @@ pub const Settings = struct {
         if (!on) ui.spacer(c);
     }
 
-    fn flip(s: *Settings, n: *panel.Nanolight, kind: RowKind) void {
+    fn flip(s: *Settings, n: *panel.Nanolight, t: Toggle) void {
         const h = s.hooks(n);
-        switch (kind) {
-            .suggest => {
-                n.suggest_on = !n.suggest_on;
-                s.suggest = n.suggest_on;
-                n.built = 1;
-                if (h) |host| host.suggest(host.ctx, s.suggest);
-            },
-            .files => {
-                n.files_on = !n.files_on;
-                s.files = n.files_on;
-                n.built = 1;
-                if (n.kv) |kv| kv.set(@import("files.zig").enabled_key, if (n.files_on) "1" else "0") catch {};
-            },
-            .browser => {
-                n.searches_out = !n.searches_out;
-                s.browser = n.searches_out;
-                if (h) |host| host.searches_out(host.ctx, s.browser);
-            },
-            .login => {
-                const next = !s.login;
-                s.login = if (h) |host| host.login(host.ctx, next) else next;
-            },
-            .menu_bar => {
-                const next = !s.menu_bar;
-                s.menu_bar = if (h) |host| host.menu_bar(host.ctx, next) else next;
-            },
-            .clipboard => {
-                const next = !s.clip;
-                s.clip = if (h) |host| host.clipboard_enabled(host.ctx, next) orelse next else next;
-            },
-            else => {},
-        }
+        t.set(n, h, !t.get(n, h));
     }
 
     fn updates(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
@@ -388,8 +435,10 @@ pub const Settings = struct {
         const h = s.hooks(n);
         switch (kind) {
             // ←/→ step through the four; Return records one's own.
-            .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, s.shown(), 1),
-            .suggest, .files, .browser, .login, .menu_bar, .clipboard => s.flip(n, kind),
+            .choice => if (mac) s.record(n, s.key_input == .idle) else s.nudge(n, s.shown(), 1),
+            inline .suggest, .files, .browser, .login, .menu_bar, .clipboard => |k| {
+                s.flip(n, @field(Toggle, @tagName(k)));
+            },
             .clear_clipboard => {
                 const ok = if (h) |host| host.clipboard_clear(host.ctx) else true;
                 s.cleared = if (ok) .done else .failed;
@@ -411,13 +460,13 @@ pub const Settings = struct {
 /// The theme's swatches, in the header, are the last for ↑/↓.
 fn visible(comptime clip: bool) []const RowKind {
     const T = struct {
+        /// In `RowKind`'s order, which is the drawing's.
         const rows = blk: {
-            var list: [12]RowKind = undefined;
+            const all = @import("std").enums.values(RowKind);
+            var list: [all.len]RowKind = undefined;
             var n: usize = 0;
-            for ([_]RowKind{ .choice, .suggest, .files, .browser, .login, .menu_bar, .clipboard, .clear_clipboard, .updates, .welcome, .quit, .theme }) |k| {
-                if (!mac and (k == .files or k == .browser or k == .menu_bar)) continue;
-                if (nix and (k == .login or k == .updates)) continue;
-                if (!clip and (k == .clipboard or k == .clear_clipboard)) continue;
+            for (all) |k| {
+                if (!present(k, clip)) continue;
                 list[n] = k;
                 n += 1;
             }
