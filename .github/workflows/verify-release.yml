@@ -25,16 +25,7 @@ on:
         required: false
   pull_request:
     paths:
-      - tools/verify_release.zig
-      - tools/verify_update.zig
-      - tools/verify_typing.zig
-      - tools/feed_server.zig
-      - tools/screen.zig
-      - tools/macos.zig
-      - tools/command.zig
-      - tools/archive.zig
-      - tools/png.zig
-      - tools/release.zig
+      - tools/**
       - .github/workflows/verify-release.yml
 
 permissions:
@@ -52,9 +43,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Zig: build.zig.zon's minimum_zig_version.
       - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
 
       # "from" is the published release just before "to" in the release list
       # (newest first), so that an older tag is never updated to from a newer

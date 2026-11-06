@@ -720,12 +720,8 @@ const RatesAsk = struct {
     }
 };
 
-/// This platform's archive in each release (named in tools/release.zig).
-const asset = switch (builtin.os.tag) {
-    .macos => "nanolight-macos-arm64.zip",
-    .windows => "nanolight-windows-x86_64.zip",
-    else => "nanolight-linux-" ++ @tagName(builtin.cpu.arch) ++ ".tar.gz",
-};
+/// This platform's file in each release.
+const asset = @import("build_options").asset;
 const version = @import("build_options").version;
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
@@ -887,7 +883,7 @@ fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
 fn startUpdater(init: std.process.Init, live: *Live) ?*nanoui.Updater {
     if (nix_managed) return null;
     const u = nanoui.Updater.start(init, .{
-        .repo = "jeiang/nanolight",
+        .repo = @import("build_options").repo,
         .asset = asset,
         .version = version,
         .name = "Nanolight",

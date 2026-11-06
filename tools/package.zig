@@ -33,8 +33,6 @@ const release = @import("release.zig");
 /// The largest program, or debug file, an archive takes.
 const file_bytes_max = 512 << 20;
 const icon_bytes_max = 1 << 20;
-/// The macOS the app is built for (build.zig's package target).
-const macos_min = "14.0";
 
 const desktop_entry =
     \\[Desktop Entry]
@@ -151,7 +149,7 @@ const Mac = struct {
     io: Io,
     arena: std.mem.Allocator,
     out: []const u8,
-    /// Nanolight.app as `zig build` made it, with its program's debug information.
+    /// The app as `zig build` made it, with its program's debug information.
     app: []const u8,
 
     fn path(mac: Mac, name: []const u8) []const u8 {
@@ -165,7 +163,7 @@ const Mac = struct {
             .ad_hoc;
         const notary = notaryOf(environ, identity);
         try mac.checkMinimum();
-        const bundle = mac.path("Nanolight.app");
+        const bundle = mac.path(release.bundle_name);
         // The build's copy is read-only (the build cache's files): a writable one.
         try command.run(mac.io, &.{ "ditto", mac.app, bundle });
         try command.run(mac.io, &.{ "chmod", "-R", "u+w", bundle });
@@ -174,7 +172,7 @@ const Mac = struct {
 
         try macos.sign(mac.io, bundle, identity);
         if (notary) |service| {
-            const upload = mac.path("Nanolight.zip");
+            const upload = mac.path(release.app_name ++ ".zip");
             try command.run(mac.io, &.{ "ditto", "-c", "-k", "--keepParent", bundle, upload });
             try macos.notarize(mac.io, upload, service);
             try macos.staple(mac.io, bundle);
@@ -197,18 +195,13 @@ const Mac = struct {
         try mac.check(bundle, .{ .disk_image = disk_image, .notarized = notary != null });
     }
 
-    /// For macOS 14 and Apple silicon from the M1 on: a native build would
-    /// need the macOS and the CPU it was built on.
+    /// For `release.macos_min` and Apple silicon from the M1 on: a native
+    /// build would need the macOS and the CPU it was built on.
     fn checkMinimum(mac: Mac) !void {
-        const program = try std.fs.path.join(mac.arena, &.{ mac.app, "Contents/MacOS/nanolight" });
-        const argv = [_][]const u8{ "vtool", "-show-build", program };
-        const shown = try command.capture(mac.arena, mac.io, &argv, .{});
-        var lines = std.mem.splitScalar(u8, shown.stdout, '\n');
-        while (lines.next()) |line| {
-            if (std.mem.endsWith(u8, line, "minos " ++ macos_min)) return;
-        }
-        command.complain(mac.io, "Nanolight is not built for macOS {s}:\n{s}", .{
-            macos_min, shown.text,
+        const program = try std.fs.path.join(mac.arena, &.{ mac.app, release.bundle_program });
+        const shown = try macos.forMinimum(mac.arena, mac.io, program) orelse return;
+        command.complain(mac.io, "{s} is not built for macOS {s}:\n{s}", .{
+            release.app_name, release.macos_min_text, shown,
         });
         return error.WrongMinimumMacos;
     }
@@ -217,8 +210,8 @@ const Mac = struct {
     /// app, and strips the program that ships. Both keep the build's UUID,
     /// which ties a crash report to its symbols.
     fn splitSymbols(mac: Mac, bundle: []const u8) !void {
-        const program = try std.fs.path.join(mac.arena, &.{ bundle, "Contents/MacOS/nanolight" });
-        const dsym = mac.path("Nanolight.app.dSYM");
+        const program = try std.fs.path.join(mac.arena, &.{ bundle, release.bundle_program });
+        const dsym = mac.path(release.bundle_name ++ ".dSYM");
         try command.run(mac.io, &.{ "xcrun", "dsymutil", program, "-o", dsym });
         try command.run(mac.io, &.{ "xcrun", "strip", program });
         const symbols = mac.path(release.macos_symbols);
@@ -230,13 +223,13 @@ const Mac = struct {
     fn makeDiskImage(mac: Mac, bundle: []const u8, disk_image: []const u8) !void {
         const stage = mac.path("dmg");
         try Io.Dir.cwd().createDirPath(mac.io, stage);
-        const staged = try std.fs.path.join(mac.arena, &.{ stage, "Nanolight.app" });
+        const staged = try std.fs.path.join(mac.arena, &.{ stage, release.bundle_name });
         try command.run(mac.io, &.{ "ditto", bundle, staged });
         const link = try std.fs.path.join(mac.arena, &.{ stage, "Applications" });
         try Io.Dir.cwd().symLink(mac.io, "/Applications", link, .{ .is_directory = true });
         try command.run(mac.io, &.{
-            "hdiutil", "create", "-quiet",  "-volname", "Nanolight", "-srcfolder", stage,
-            "-fs",     "HFS+",   "-format", "UDZO",     "-ov",       disk_image,
+            "hdiutil", "create", "-quiet",  "-volname", release.app_name, "-srcfolder", stage,
+            "-fs",     "HFS+",   "-format", "UDZO",     "-ov",            disk_image,
         });
         try Io.Dir.cwd().deleteTree(mac.io, stage);
     }
@@ -251,8 +244,7 @@ const Mac = struct {
         try command.run(mac.io, &.{ "hdiutil", "verify", options.disk_image });
         if (!options.notarized) return;
         for ([_][]const u8{ bundle, options.disk_image }) |stapled_path| {
-            const tries = macos.staple_tries_default;
-            if (try macos.stapled(mac.arena, mac.io, stapled_path, tries)) |said| {
+            if (try macos.stapled(mac.arena, mac.io, stapled_path)) |said| {
                 command.complain(mac.io, "no ticket stapled to {s}:\n{s}", .{ stapled_path, said });
                 return error.NotStapled;
             }
@@ -401,12 +393,6 @@ fn writeFeed(arena: std.mem.Allocator, io: Io, out: Io.Dir, options: FeedOptions
     try release.writeManifest(&manifest.writer, options.version, entries[0..updates_count]);
     try out.writeFile(io, .{ .sub_path = release.manifest_name, .data = manifest.written() });
     try options.report.writeAll(manifest.written());
-}
-
-test {
-    _ = archive;
-    _ = macos;
-    _ = release;
 }
 
 test "a plan takes the Mac's app and each other build, in any order" {
