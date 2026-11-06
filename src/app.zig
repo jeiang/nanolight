@@ -16,6 +16,7 @@ const panel = platform.panel;
 const single = @import("single.zig");
 const account = @import("account.zig");
 const apps = @import("apps.zig");
+const Target = @import("results.zig").Target;
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 const after = @import("after.zig");
@@ -42,10 +43,11 @@ pub const Hook = struct {
     }
 };
 
-/// A feature that opens some rows' targets itself: true when `target` was one.
+/// A feature that opens script commands' rows (script_live.zig).
 pub const Opens = struct {
     ctx: *anyopaque,
-    func: *const fn (ctx: *anyopaque, target: []const u8) bool,
+    /// A script (`Target.script`) or their folder (`Target.folder`).
+    func: *const fn (ctx: *anyopaque, target: Target) void,
 };
 
 /// Where the features join the panel's comings and goings.
@@ -58,7 +60,7 @@ pub const Hooks = struct {
     rescan: ?Hook = null,
     /// It reopens at the root: a script command running in it ends.
     popped: ?Hook = null,
-    /// A row's target that is a script command.
+    /// Script commands' rows: a script, and their folder.
     opens: ?Opens = null,
     /// It went away unfocused: an update that is ready may go in
     /// (update_live.zig).
@@ -117,24 +119,27 @@ pub const App = struct {
         };
     }
 
-    /// A row's target: an address, a script command, Nanolight itself, or an app.
-    pub fn open(ctx: *anyopaque, target: []const u8) void {
+    /// A row's target: an address, a pane, a script command, Nanolight
+    /// itself, or an app (a file, a folder).
+    pub fn open(ctx: *anyopaque, target: Target) void {
         const a = from(ctx);
-        if (apps.isUrl(target)) {
-            _ = nanoui.shell.openUrl(target);
-            return;
+        switch (target) {
+            .url => |u| _ = nanoui.shell.openUrl(u),
+            .pane => |i| _ = nanoui.shell.openUrl(settings_panes.urls[i]),
+            .script, .folder => if (a.hooks.opens) |h| h.func(h.ctx, target),
+            .app => |path| {
+                if (platform.Single.isSelf(path)) {
+                    // Nanolight is already open: the panel comes back, empty,
+                    // rather than macOS starting a second copy.
+                    a.s.query.clear();
+                    after.oneShot(reopen_ms, @as(*anyopaque, a), toggle);
+                    return;
+                }
+                _ = apps.launch(a.app.io, path);
+                // Its count went up: the other Macs suggest it too.
+                if (a.acct) |x| x.changed();
+            },
         }
-        if (a.hooks.opens) |h| if (h.func(h.ctx, target)) return;
-        if (platform.Single.isSelf(target)) {
-            // Nanolight is already open: the panel comes back, empty,
-            // rather than macOS starting a second copy.
-            a.s.query.clear();
-            after.oneShot(reopen_ms, @as(*anyopaque, a), toggle);
-            return;
-        }
-        _ = apps.launch(a.app.io, target);
-        // Its count went up: the other Macs suggest it too.
-        if (a.acct) |x| x.changed();
     }
 
     pub fn hide(ctx: *anyopaque) void {
@@ -196,7 +201,7 @@ pub const App = struct {
             },
             .open_out => {
                 var buf: [2048]u8 = undefined;
-                open(a, a.preview.current(&buf) orelse a.s.preview_url);
+                open(a, .{ .url = a.preview.current(&buf) orelse a.s.preview_url });
                 hide(a);
             },
         }

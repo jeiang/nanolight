@@ -39,7 +39,7 @@ const Fake = struct {
         return .{ .ctx = f, .open = open, .hide = hide, .clipboard = &f.ch };
     }
 
-    fn open(_: *anyopaque, _: []const u8) void {}
+    fn open(_: *anyopaque, _: @import("results.zig").Target) void {}
 
     fn hide(ctx: *anyopaque) void {
         @as(*Fake, @ptrCast(@alignCast(ctx))).hidden = true;

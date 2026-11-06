@@ -35,7 +35,7 @@ pub fn filesAnswered(s: *Nanolight, typed: []const u8, found: *files.List) void 
 }
 
 pub fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
-    const e = &s.found.entries[r.file];
+    const e = &s.found.entries[r.item];
     var buf: [files.max_path]u8 = undefined;
     const parent = paths.parent(&buf, e.path());
     chrome.nameDetail(c, p, e.name(), s.highlight(i, r, p), parent, .ellipsis);
@@ -43,9 +43,9 @@ pub fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
 }
 
 pub fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
-    const e = &s.found.entries[r.file];
+    const e = &s.found.entries[r.item];
     if (e.png.len > 0) return chrome.iconImage(c, e.path(), e.png);
-    chrome.tile(c, p, if (e.folder) "folder" else "doc");
+    chrome.tile(c, p, if (e.folder) "folder" else results.providers.get(.file).symbol);
 }
 
 /// Retain matching rows while the worker answers the new query. A query
@@ -63,6 +63,6 @@ pub fn rebuild(s: *Nanolight) void {
 pub fn takeOnTab(s: *Nanolight, c: *ui.Context) bool {
     if (s.sel >= s.res.n or s.res.rows[s.sel].kind != .file or
         !paths.isPath(s.query.text())) return false;
-    if (c.shortcut(.{ .key = ui.Shortcut.tab })) takeFile(s, s.res.rows[s.sel].file);
+    if (c.shortcut(.{ .key = ui.Shortcut.tab })) takeFile(s, s.res.rows[s.sel].item);
     return true;
 }

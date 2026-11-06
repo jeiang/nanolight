@@ -5,7 +5,9 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const sc = @import("script_commands.zig");
 const apps = @import("apps.zig");
+const launchers = @import("launchers.zig");
 const config = @import("config.zig");
+const Target = @import("results.zig").Target;
 const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
 const Opens = @import("app.zig").Opens;
@@ -20,6 +22,8 @@ pub const Scripts = struct {
     screen: @import("raycast_view.zig").Ext,
     /// Raycast script commands, run by Nanolight itself (script_run.zig).
     runner: @import("script_run.zig").Runner,
+    /// The script commands found, listed among the apps (the panel's `scripts`).
+    list: sc.List,
 
     pub fn init(
         sx: *Scripts,
@@ -38,12 +42,16 @@ pub const Scripts = struct {
             .screen = sx.screen.asScreen(),
             .hooks = .{ .ctx = sx, .hide = hide, .redraw = redraw, .copy = copy, .footer = footer },
         };
+        sx.list = .init(gpa);
         core.s.ext = &sx.screen;
+        core.s.scripts = &sx.list;
     }
 
     pub fn deinit(sx: *Scripts) void {
         sx.runner.deinit();
         sx.screen.deinit();
+        sx.core.s.scripts = null;
+        sx.list.deinit();
     }
 
     /// The core's `opens`: a command's row runs it in the panel.
@@ -63,45 +71,48 @@ pub const Scripts = struct {
 
     /// A command's row was chosen: it runs in the panel, which stays up while
     /// its screen is open (view.zig `go`).
-    fn start(sx: *Scripts, target: []const u8) void {
+    fn start(sx: *Scripts, target: Target) void {
         const gpa = sx.core.app.gpa;
-        if (std.mem.eql(u8, target, sc.folder_path)) {
-            const d = sc.dir(gpa) catch return;
-            defer gpa.free(d);
-            _ = nanoui.shell.openPath(d);
-            return;
+        switch (target) {
+            .folder => {
+                const d = sc.dir(gpa) catch return;
+                defer gpa.free(d);
+                _ = nanoui.shell.openPath(d);
+            },
+            .script => |i| {
+                const x = sx.list.items.items[i];
+                sx.core.s.query.clear();
+                sx.runner.start(.{ .file = x.file.?, .title = x.title, .icon = sx.list.icon(i) });
+            },
+            .app, .url, .pane => unreachable, // The core opens these itself.
         }
-        const ix = sx.core.s.index;
-        var title: []const u8 = "Script";
-        var png: ?[]const u8 = null;
-        for (ix.apps.items, 0..) |a, i| if (std.mem.eql(u8, a.path, target)) {
-            title = a.name;
-            png = ix.icon(@intCast(i));
-            break;
-        };
-        sx.core.s.query.clear();
-        sx.runner.start(.{ .path = target, .title = title, .icon = png });
     }
 
     /// The apps and script commands found again, their counts kept.
     pub fn rescan(sx: *Scripts) void {
+        const gpa = sx.core.app.gpa;
         const ix = sx.core.s.index;
         ix.deinit();
-        ix.* = .init(sx.core.app.gpa);
-        sx.fill(ix);
+        ix.* = .init(gpa);
+        sx.list.deinit();
+        sx.list = .init(gpa);
+        sx.fill(ix, &sx.list);
         sx.changed();
     }
 
-    fn fill(sx: *Scripts, ix: *apps.Index) void {
+    /// The apps first: a script whose title an app has is not listed.
+    fn fill(sx: *Scripts, ix: *apps.Index, list: *sc.List) void {
         apps.scan(ix, sx.core.app.io, sx.env, sx.cfg.apps.extra_dirs);
-        sc.scan(ix.sink(), sx.core.app.gpa, sx.cfg.script_commands.dirs);
         ix.finish();
-        ix.load(sx.core.kv);
+        sc.scan(list, ix.apps.items, ix.env, sx.cfg.script_commands.dirs);
+        list.finish();
     }
 
-    /// The rows again at once: theirs are places in the old index.
+    /// The rows again at once: theirs are places in the old lists. Older
+    /// counts kept by name are their app's or script's from now on.
     fn changed(sx: *Scripts) void {
         const s = sx.core.s;
+        launchers.adopt(&s.counts, s.index.gpa, s.launchable());
         s.built = 1;
         s.rebuild();
         sx.core.redraw();
@@ -112,24 +123,29 @@ fn from(ctx: *anyopaque) *Scripts {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn open(ctx: *anyopaque, target: []const u8) bool {
-    const command = std.mem.startsWith(u8, target, sc.prefix) or
-        std.mem.eql(u8, target, sc.folder_path);
-    if (command) from(ctx).start(target);
-    return command;
+fn open(ctx: *anyopaque, target: Target) void {
+    from(ctx).start(target);
 }
 
 /// As the panel opens: an app installed or removed since Nanolight started
 /// is found (#15; after omerdikyol's #4). A look at a few folders; when it
-/// finds what the index has, the index stays, its icons with it.
+/// finds what the lists have, they stay, their icons with them.
 fn refresh(ctx: *anyopaque) void {
     const sx = from(ctx);
     const s = sx.core.s;
-    var fresh: apps.Index = .init(sx.core.app.gpa);
-    sx.fill(&fresh);
-    if (s.index.same(&fresh)) return fresh.deinit();
+    const gpa = sx.core.app.gpa;
+    var fresh: apps.Index = .init(gpa);
+    var list: sc.List = .init(gpa);
+    sx.fill(&fresh, &list);
+    if (s.index.same(&fresh) and sx.list.same(&list)) {
+        fresh.deinit();
+        list.deinit();
+        return;
+    }
     s.index.deinit();
     s.index.* = fresh;
+    sx.list.deinit();
+    sx.list = list;
     sx.changed();
 }
 

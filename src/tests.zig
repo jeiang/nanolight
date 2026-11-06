@@ -55,6 +55,8 @@ test {
     _ = @import("tests_prefs.zig");
     _ = @import("tests_files.zig");
     _ = @import("platform.zig");
+    _ = @import("web.zig");
+    _ = @import("launchers.zig");
     _ = @import("single.zig");
     switch (@import("builtin").os.tag) {
         .macos => {
@@ -110,7 +112,7 @@ test "the panel finds, moves, answers and hands off" {
     // An exact app name beats panes that may outrank its initials.
     press(t, &.{.{ .insert = "system settings" }});
     try std.testing.expect(t.hasText("System Settings"));
-    try std.testing.expectEqual(@as(u32, ix.find("System Settings").?), s.res.rows[0].app);
+    try std.testing.expectEqual(@as(u32, ix.find("System Settings").?), s.res.rows[0].item);
     // Down and back up, then Return opens the first.
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.down }));
     try std.testing.expectEqual(@as(usize, 1), s.sel);
@@ -121,12 +123,12 @@ test "the panel finds, moves, answers and hands off" {
         probe.opened[0..probe.opened_len],
     );
     try std.testing.expect(probe.hidden);
-    try std.testing.expectEqual(@as(u16, 1), ix.apps.items[ix.find("System Settings").?].launches);
+    try std.testing.expectEqual(@as(u16, 1), s.counts.of("/Applications/System Settings.app"));
 
     // ⌘2 opens the second row at once: Safari, under System Settings,
     // which was just opened.
     retype(t, "s");
-    try std.testing.expect(t.hasText(results.mod ++ "2"));
+    try std.testing.expect(t.hasText(@import("platform.zig").mod ++ "2"));
     try std.testing.expect(t.shortcut(.{ .key = '2', .cmd = true }));
     try std.testing.expectEqualStrings(
         "/Applications/Safari.app",
@@ -275,7 +277,7 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(onFirstQuicklink(s));
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
-    try std.testing.expectEqual(@as(u16, 2), s.res.rows[s.sel].ql);
+    try std.testing.expectEqual(@as(u32, 2), s.res.rows[s.sel].item);
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid glass", "liquid glass apple" }) |w| said.push(w);
     s.answered("liquid gl", &said);
@@ -283,7 +285,7 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(t.hasText("Search"));
     try std.testing.expect(t.hasText("liquid glass apple"));
     try std.testing.expectEqual(results.Kind.suggest, s.res.rows[1].kind);
-    try std.testing.expectEqual(@as(u16, 2), s.res.rows[s.sel].ql);
+    try std.testing.expectEqual(@as(u32, 2), s.res.rows[s.sel].item);
     // The first completion shows faintly in the field; Tab takes it.
     try std.testing.expect(t.hasText("ass"));
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.tab }));
@@ -295,7 +297,7 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expectEqual(results.Kind.suggest, s.res.rows[1].kind);
     try std.testing.expect(onFirstQuicklink(s));
     // ⌘2 is Google's first completion.
-    try std.testing.expect(t.hasText(results.mod ++ "2"));
+    try std.testing.expect(t.hasText(@import("platform.zig").mod ++ "2"));
     // One more letter: the answer so far stands in, and nothing is asked
     // again for words already answered.
     web.asked_len = 0;

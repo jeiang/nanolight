@@ -11,12 +11,12 @@ pub const Commands = struct {
 
     /// The commands this machine can run (on `PATH`), and their runner.
     pub fn init(cm: *Commands, core: *App, env: *const std.process.Environ.Map) void {
-        commands.init(core.app.io, env);
         cm.* = .{
             .core = core,
             .runner = .{
                 .io = core.app.io,
                 .hooks = .{ .ctx = core, .footer = App.footer, .done = App.hide },
+                .installed = commands.installed(core.app.io, env),
             },
         };
     }
@@ -25,9 +25,9 @@ pub const Commands = struct {
         cm.runner.deinit();
     }
 
-    /// What the panel runs a command with.
+    /// What the panel runs a command with, and lists the commands of.
     pub fn entry(cm: *Commands) view.Host.Run {
-        return .{ .ctx = cm, .func = run };
+        return .{ .ctx = cm, .func = run, .installed = &cm.runner.installed };
     }
 
     fn run(ctx: *anyopaque, i: usize) void {

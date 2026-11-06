@@ -3,7 +3,7 @@
 //! default stands; a write that fails is logged and returns false.
 const std = @import("std");
 const nanoui = @import("nanoui");
-const Quicklink = @import("settings.zig").Quicklink;
+const Quicklink = @import("web.zig").Quicklink;
 const Theme = @import("palette.zig").Theme;
 const keys = @import("keys.zig");
 const Choice = keys.Choice;

@@ -11,6 +11,8 @@ const std = @import("std");
 const assert = std.debug.assert;
 const keys = @import("keys.zig");
 const counts = @import("launch_counts.zig");
+const web = @import("web.zig");
+const Quicklink = web.Quicklink;
 
 pub const Launch = struct {
     name: []const u8,
@@ -18,32 +20,6 @@ pub const Launch = struct {
     path: []const u8 = "",
     count: u16,
 };
-
-pub const Quicklink = struct {
-    name: []const u8,
-    /// `{argument}` is where the typed words go, escaped.
-    url: []const u8,
-    keyword: []const u8 = "",
-};
-
-/// What Nanolight searches with when no quicklinks are set; the first is
-/// the search for what was typed, and Google's suggestions go with Google.
-pub const default_quicklinks = [_]Quicklink{
-    .{ .name = "Google", .url = "https://www.google.com/search?q={argument}" },
-    .{ .name = "DuckDuckGo", .url = "https://duckduckgo.com/?q={argument}", .keyword = "ddg" },
-    .{ .name = "Claude", .url = "https://claude.ai/new?q={argument}" },
-    .{ .name = "Grok", .url = "https://grok.com/?q={argument}" },
-    .{ .name = "X", .url = "https://x.com/search?f=live&q={argument}" },
-};
-
-/// A quicklink opens in a browser or the panel: http and https only.
-pub fn webUrl(url: []const u8) bool {
-    inline for (.{ "http://", "https://" }) |scheme| {
-        if (url.len > scheme.len and
-            std.ascii.eqlIgnoreCase(url[0..scheme.len], scheme)) return true;
-    }
-    return false;
-}
 
 const max_quicklinks = 64;
 const max_quicklink_field = 512;
@@ -66,7 +42,7 @@ pub fn quicklinkProblem(i: usize, q: Quicklink) ?[]const u8 {
         "a name and an address are needed, each at most {d} bytes",
         .{max_quicklink_field},
     );
-    if (!webUrl(q.url)) return "only http and https addresses work";
+    if (!web.webUrl(q.url)) return "only http and https addresses work";
     return null;
 }
 
@@ -376,15 +352,6 @@ test "a v1 record decodes with no quicklinks, and the quicklinks go with the lat
     try std.testing.expectEqual(@as(u8, 2), (try merge(a, old, old, false)).v);
 }
 
-test "only http and https quicklinks are web addresses" {
-    try std.testing.expect(webUrl("https://x.com/?q={argument}"));
-    try std.testing.expect(webUrl("HTTP://a/b"));
-    try std.testing.expect(!webUrl("file:///etc/passwd"));
-    try std.testing.expect(!webUrl("javascript:alert(1)"));
-    try std.testing.expect(!webUrl("https://"));
-    for (default_quicklinks) |q| try std.testing.expect(webUrl(q.url));
-}
-
 test "a record too big for the limit sheds its least opened apps" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
@@ -454,7 +421,7 @@ test "a record is gathered from, and handed to, one method per synced field" {
         .suggest = false,
         .at = 7,
         .launches = &.{.{ .name = "Mail", .count = 2 }},
-        .quicklinks = default_quicklinks[0..1],
+        .quicklinks = web.default_quicklinks[0..1],
     } };
     const got = snapshot(&here, arena.allocator());
     try std.testing.expect(same(got, here.record));

@@ -13,6 +13,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const apps = @import("apps.zig");
+const launchers = @import("launchers.zig");
 const Index = apps.Index;
 const Nanolight = @import("view.zig").Nanolight;
 const chrome = @import("chrome.zig");
@@ -53,7 +54,6 @@ pub fn main(init: std.process.Init) !void {
     apps.scan(&index, init.io, init.environ_map, &.{});
     index.finish();
     const kv = nanoui.kv.standard();
-    index.load(kv);
     // A headless run is no one's: neither their config nor their settings.
     var cfg_arena: std.heap.ArenaAllocator = .init(init.gpa);
     defer cfg_arena.deinit();
@@ -73,6 +73,8 @@ pub fn main(init: std.process.Init) !void {
         .pop_after = cfg.pop_to_root_seconds,
     };
     defer s.deinit();
+    launchers.load(&s.counts, init.gpa, kv);
+    launchers.adopt(&s.counts, init.gpa, s.launchable());
     var core: App = .{
         .app = app,
         .s = &s,

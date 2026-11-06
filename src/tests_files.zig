@@ -58,10 +58,10 @@ test "files share the local results' head and fit the original window" {
             );
             // Every quicklink still follows, X's last, and one search for what was typed.
             try std.testing.expectEqual(results.Kind.quicklink, s.res.rows[s.res.n - 1].kind);
-            try std.testing.expectEqual(@as(u16, 4), s.res.rows[s.res.n - 1].ql);
+            try std.testing.expectEqual(@as(u32, 4), s.res.rows[s.res.n - 1].item);
             var google: usize = 0;
             for (s.res.slice()) |row| {
-                if (row.kind == .quicklink and row.ql == 0) google += 1;
+                if (row.kind == .quicklink and row.item == 0) google += 1;
             }
             try std.testing.expectEqual(@as(usize, 1), google);
         }
@@ -216,7 +216,7 @@ test "apps, panes, files and quicklinks share the window budget" {
             .pane => panes = true,
             .file => files = true,
             .quicklink => {
-                google = google or row.ql == 0;
+                google = google or row.item == 0;
                 links += 1;
             },
             else => {},
@@ -306,8 +306,8 @@ fn rowOf(s: *const view.Nanolight, kind: results.Kind, text: []const u8) ?usize 
     for (s.res.slice(), 0..) |r, i| {
         if (r.kind != kind) continue;
         const shown = switch (kind) {
-            .file => s.found.entries[r.file].path(),
-            .suggest => s.web.get(r.web),
+            .file => s.found.entries[r.item].path(),
+            .suggest => s.web.get(r.item),
             else => unreachable,
         };
         if (std.mem.eql(u8, shown, text)) return i;
@@ -369,7 +369,7 @@ const FileAsks = struct {
     fn host(a: *FileAsks) view.Host {
         return .{ .ctx = a, .open = open, .hide = hide, .files = .{ .ctx = a, .func = ask } };
     }
-    fn open(_: *anyopaque, _: []const u8) void {}
+    fn open(_: *anyopaque, _: @import("results.zig").Target) void {}
     fn hide(_: *anyopaque) void {}
     fn ask(ctx: *anyopaque, q: []const u8) void {
         const a: *FileAsks = @ptrCast(@alignCast(ctx));

@@ -1,12 +1,14 @@
 //! The selected row, held across a refill of the list (completions or files
 //! landing): the selection stays on the same row wherever that row now is,
-//! so Return a moment after typing does what the panel showed. Apps, panes,
-//! commands and quicklinks are the same row by index; a file by its path
-//! and a completion by its words, since their indexes move with each answer.
+//! so Return a moment after typing does what the panel showed. A row is the
+//! same row by what its provider says (`results.Identity`): apps, panes,
+//! commands and quicklinks by their place in their lists; a file by its path
+//! and a completion by its words, since their places move with each answer.
 const std = @import("std");
 const files = @import("files.zig");
 const suggest = @import("suggest.zig");
-const Row = @import("results.zig").Row;
+const results = @import("results.zig");
+const Row = results.Row;
 const Nanolight = @import("view.zig").Nanolight;
 const assert = std.debug.assert;
 
@@ -24,11 +26,7 @@ pub const Anchor = struct {
         if (s.sel >= s.res.n) return a;
         const r = s.res.rows[s.sel];
         a.row = r;
-        const text: []const u8 = switch (r.kind) {
-            .file => s.found.entries[r.file].path(),
-            .suggest => s.web.get(r.web),
-            else => "",
-        };
+        const text = textOf(s, r);
         assert(text.len <= max_text);
         @memcpy(a.text[0..text.len], text);
         a.len = text.len;
@@ -41,15 +39,25 @@ pub const Anchor = struct {
         const text = a.text[0..a.len];
         for (s.res.slice(), 0..) |now, i| {
             if (now.kind != r.kind) continue;
-            const same = switch (r.kind) {
-                .app, .pane, .command => now.app == r.app,
-                .quicklink => now.ql == r.ql,
-                .file => std.mem.eql(u8, s.found.entries[now.file].path(), text),
-                .suggest => suggest.same(s.web.get(now.web), text),
-                else => true,
+            const identity = results.providers.get(r.kind).identity;
+            const same = switch (identity) {
+                .item => now.item == r.item,
+                .path => std.mem.eql(u8, textOf(s, now), text),
+                .words => suggest.same(textOf(s, now), text),
+                .kind => true,
             };
             if (same) return i;
         }
         return null;
     }
 };
+
+/// The file's path or the completion's words; empty for the rest.
+fn textOf(s: *const Nanolight, r: Row) []const u8 {
+    const identity = results.providers.get(r.kind).identity;
+    return switch (identity) {
+        .path => s.found.entries[r.item].path(),
+        .words => s.web.get(r.item),
+        .item, .kind => "",
+    };
+}

@@ -21,6 +21,11 @@ pub const record = keys.any_key;
 /// so after (`updatedFrom`); elsewhere update_live.zig and prefs' `.updated` do.
 pub const native_autorestart = mac;
 
+/// The key held for the panel's shortcuts (⌘1, ⌘↩, ⌘,): Ctrl on a PC.
+pub const mod = if (mac) "⌘" else "Ctrl+";
+/// What the panel calls the computer it runs on.
+pub const machine = if (mac) "Mac" else "PC";
+
 /// The panel's window: adjust, setup, place, resize, shown, showing,
 /// lostKeys, prepare.
 pub const panel = if (mac) @import("panel_mac.zig") else @import("panel_pc.zig");

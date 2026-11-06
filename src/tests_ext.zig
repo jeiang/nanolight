@@ -10,6 +10,8 @@ const chrome = @import("chrome.zig");
 const support = @import("test_support.zig");
 const model = @import("raycast_model.zig");
 const rv = @import("raycast_view.zig");
+const script_commands = @import("script_commands.zig");
+const Target = @import("results.zig").Target;
 const Ext = rv.Ext;
 
 /// What a host was told, a line each: "pop", "run", "field 1 Rach".
@@ -136,8 +138,8 @@ const Rig = struct {
     prefs: support.Prefs,
     opts: Options,
     hidden: bool,
-
-    const row = "script:/scripts/greet.sh";
+    /// The script's row, among the apps.
+    scripts: script_commands.List,
 
     const Options = struct {
         /// The host's first view; none leaves "Starting…".
@@ -165,8 +167,11 @@ const Rig = struct {
         r.host = .{ .ext = &r.ext, .backing = opts.backing };
         r.prefs = .{};
         r.prefs.init();
+        r.scripts = .init(gpa);
         errdefer r.deinit();
-        try r.panel.ix.add("Greet", row);
+        r.scripts.add(r.panel.ix.apps.items, "Greet", "scripts", "/scripts/greet.sh");
+        r.scripts.finish();
+        r.s.scripts = &r.scripts;
         r.s.host = .{ .ctx = r, .open = open, .hide = hide, .settings = &r.prefs.box };
         r.s.reveal();
         if (!opts.rows) r.script();
@@ -180,9 +185,9 @@ const Rig = struct {
         if (r.opts.first) |first| r.host.show(first);
     }
 
-    fn open(ctx: *anyopaque, target: []const u8) void {
+    fn open(ctx: *anyopaque, target: Target) void {
         const r: *Rig = @ptrCast(@alignCast(ctx));
-        if (std.mem.eql(u8, target, row)) r.script();
+        if (target == .script) r.script();
     }
 
     fn hide(ctx: *anyopaque) void {
@@ -194,6 +199,7 @@ const Rig = struct {
         r.panel.unmount();
         r.ext.deinit();
         r.panel.deinit();
+        r.scripts.deinit();
     }
 
     fn heard(r: *const Rig, what: []const u8) bool {

@@ -7,8 +7,11 @@ const nanoui = @import("nanoui");
 const account = @import("account.zig");
 const settings = @import("settings.zig");
 const Settings = settings.Settings;
+const web = @import("web.zig");
+const Quicklink = web.Quicklink;
 const keys = @import("keys.zig");
 const prefs = @import("prefs.zig");
+const launchers = @import("launchers.zig");
 const suggest_live = @import("suggest_live.zig");
 const App = @import("app.zig").App;
 
@@ -22,7 +25,7 @@ pub const Sync = struct {
     label: [192]u8 = undefined,
     /// The quicklinks from the config or sync, empty for the built-in ones
     /// (`setQuicklinks`), and the arena they live in.
-    quicklinks: []const settings.Quicklink = &.{},
+    quicklinks: []const Quicklink = &.{},
     arena: ?*std.heap.ArenaAllocator = null,
 
     pub fn deinit(sy: *Sync) void {
@@ -59,7 +62,7 @@ pub const Sync = struct {
     /// Lists `list` (those `settings.quicklinkProblem` lets through) in the panel,
     /// or the built-in quicklinks when none. False when nothing changed, or the list
     /// could not be copied (logged; the old one stays).
-    pub fn setQuicklinks(sy: *Sync, list: []const settings.Quicklink) bool {
+    pub fn setQuicklinks(sy: *Sync, list: []const Quicklink) bool {
         const gpa = sy.core.app.gpa;
         const arena = gpa.create(std.heap.ArenaAllocator) catch return false;
         arena.* = .init(gpa);
@@ -81,7 +84,7 @@ pub const Sync = struct {
         sy.arena = arena;
         sy.quicklinks = keep;
         const s = sy.core.s;
-        s.quicklinks = if (keep.len > 0) keep else &settings.default_quicklinks;
+        s.quicklinks = if (keep.len > 0) keep else &web.default_quicklinks;
         s.built = 1;
         return true;
     }
@@ -94,9 +97,9 @@ fn from(ctx: *anyopaque) *Sync {
 /// The quicklinks of `list` that can be listed, copied into `arena`.
 fn copyQuicklinks(
     arena: std.mem.Allocator,
-    list: []const settings.Quicklink,
-) ![]const settings.Quicklink {
-    var keep: std.ArrayList(settings.Quicklink) = .empty;
+    list: []const Quicklink,
+) ![]const Quicklink {
+    var keep: std.ArrayList(Quicklink) = .empty;
     for (list, 0..) |q, i| {
         if (settings.quicklinkProblem(i, q)) |why| {
             std.log.warn("nanolight: quicklink \"{s}\": {s}; ignored", .{ q.name, why });
@@ -134,15 +137,10 @@ const Here = struct {
     }
 
     pub fn launches(h: *Here, arena: std.mem.Allocator) []const settings.Launch {
-        var list: std.ArrayList(settings.Launch) = .empty;
-        for (h.sy.core.s.index.apps.items) |a| if (a.launches > 0) {
-            const one: settings.Launch = .{ .name = a.name, .path = a.path, .count = a.launches };
-            list.append(arena, one) catch break;
-        };
-        return list.items;
+        return h.sy.core.s.launchable().launches(arena);
     }
 
-    pub fn quicklinks(h: *Here, _: std.mem.Allocator) []const settings.Quicklink {
+    pub fn quicklinks(h: *Here, _: std.mem.Allocator) []const Quicklink {
         return h.sy.quicklinks;
     }
 };
@@ -153,7 +151,7 @@ fn applySynced(ctx: *anyopaque, st: Settings) void {
     const core = sy.core;
     var take: Take = .{ .sy = sy };
     settings.apply(st, &take);
-    core.s.index.save(core.kv);
+    launchers.save(&core.s.counts, core.s.index.gpa, core.kv);
     core.s.built = 1;
     core.menuChanged();
     core.redraw();
@@ -181,13 +179,15 @@ const Take = struct {
     }
 
     pub fn launches(t: *Take, list: []const settings.Launch) void {
-        const ix = t.sy.core.s.index;
-        for (list) |la| if (ix.resolve(la.path, la.name)) |i| {
-            ix.apps.items[i].launches = @max(ix.apps.items[i].launches, la.count);
-        };
+        const s = t.sy.core.s;
+        const here = s.launchable();
+        for (list) |la| {
+            const x = here.find(la.path, la.name) orelse continue;
+            s.counts.raise(s.index.gpa, here.key(x), la.count);
+        }
     }
 
-    pub fn quicklinks(t: *Take, list: []const settings.Quicklink) void {
+    pub fn quicklinks(t: *Take, list: []const Quicklink) void {
         const sy = t.sy;
         if (sy.setQuicklinks(list)) prefs.setQuicklinks(sy.core.kv, sy.core.app.gpa, sy.quicklinks);
     }

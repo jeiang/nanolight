@@ -37,8 +37,7 @@ const done_actions = actions: {
 
 /// The row a script is opened from.
 pub const Row = struct {
-    /// `script:<file>`.
-    path: []const u8,
+    file: []const u8,
     title: []const u8,
     /// Its PNG, for the header.
     icon: ?[]const u8 = null,
@@ -92,7 +91,7 @@ pub const Runner = struct {
         r.drop();
         r.arena = .init(r.gpa);
         const a = r.arena.?.allocator();
-        r.file = a.dupe(u8, row.path[sc.prefix.len..]) catch return;
+        r.file = a.dupe(u8, row.file) catch return;
         r.title = a.dupe(u8, row.title) catch return;
         for (&r.args) |*x| x.clearRetainingCapacity();
         const command: model.Command = .{ .name = r.title, .icon = row.icon };
@@ -467,17 +466,17 @@ test "a script too big to read isn't run, since its header could ask first" {
     var r = quiet(&kept, &probe);
     defer r.deinit();
     var buf: [128]u8 = undefined;
-    const dir = try std.fmt.bufPrint(&buf, "{s}.zig-cache/tmp/{s}/", .{ sc.prefix, tmp.sub_path });
+    const dir = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}/", .{tmp.sub_path});
     var path_buf: [160]u8 = undefined;
 
     // Read whole, it asks before it runs.
     const small = try std.fmt.bufPrint(&path_buf, "{s}wipe.sh", .{dir});
-    r.start(.{ .path = small, .title = "Wipe" });
+    r.start(.{ .file = small, .title = "Wipe" });
     try t.expect(kept.open and r.proc.live == null);
     try t.expect(std.mem.indexOf(u8, kept.view.?.detail.body.markdown, "Run Wipe?") != null);
 
     // Unread, it says so and doesn't run.
-    r.start(.{ .path = try std.fmt.bufPrint(&path_buf, "{s}big.sh", .{dir}), .title = "Wipe" });
+    r.start(.{ .file = try std.fmt.bufPrint(&path_buf, "{s}big.sh", .{dir}), .title = "Wipe" });
     try t.expect(kept.open and r.proc.live == null);
     try t.expectEqualStrings("Couldn't read the script.", kept.note());
     try t.expect(std.mem.indexOf(u8, kept.view.?.detail.body.markdown, "Couldn't read") != null);
@@ -501,8 +500,8 @@ test "a dropdown's pick is kept and shown in the form; a typed value is only kep
     defer r.deinit();
     var buf: [160]u8 = undefined;
     const dir = ".zig-cache/tmp/";
-    const path = try std.fmt.bufPrint(&buf, "{s}{s}{s}/hi.sh", .{ sc.prefix, dir, tmp.sub_path });
-    r.start(.{ .path = path, .title = "Greet" });
+    const path = try std.fmt.bufPrint(&buf, "{s}{s}/hi.sh", .{ dir, tmp.sub_path });
+    r.start(.{ .file = path, .title = "Greet" });
     // Three fields, the password's masked, the third for argument 3 on its first choice.
     const asked = kept.view.?.form.fields;
     try t.expectEqual(@as(usize, 3), asked.len);

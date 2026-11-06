@@ -242,7 +242,9 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/suggest_live.zig`, `src/files_live.zig`, `src/commands_live.zig` | The app's side of Google's completions, file search and system commands |
 | `src/menu_live.zig`, `src/update_live.zig`, `src/settings_bind.zig` | The menu bar icon and its menu, updates, and Settings' answers |
 | `src/view.zig` | The panel: query, rows, footer, keys |
-| `src/results.zig` | What a query lists, in order |
+| `src/results.zig` | What a query lists, in order: one provider per kind of row, and the target Return opens |
+| `src/launchers.zig`, `src/launch_counts.zig` | The apps and script commands side by side, in one name order, and how often each was opened |
+| `src/web.zig` | Quicklinks: the defaults, keywords, Google's, and the address a search opens |
 | `src/search.zig` | Text: fuzzy matching and ranking (allocation-free), UTF-8 cutting, URL escaping |
 | `src/calc.zig` | The calculator, and the math read around a conversion's units |
 | `src/convert.zig` | Unit and currency conversion: the parser and unit table, money by the rates it is handed |

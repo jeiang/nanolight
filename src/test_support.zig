@@ -10,6 +10,7 @@ const view = @import("view.zig");
 const chrome = @import("chrome.zig");
 const Choice = @import("keys.zig").Choice;
 const SettingsHost = @import("settings_host.zig").SettingsHost;
+const Target = @import("results.zig").Target;
 
 /// A panel over its own index, drawn by a Tester once mounted. Pinned: the
 /// panel points at the index, so a Rig is initialized in place, and torn
@@ -101,10 +102,21 @@ pub const Probe = struct {
     pub fn host(p: *Probe) view.Host {
         return .{ .ctx = p, .open = open, .hide = hide };
     }
-    fn open(ctx: *anyopaque, target: []const u8) void {
+    fn open(ctx: *anyopaque, target: Target) void {
         const p: *Probe = @ptrCast(@alignCast(ctx));
-        @memcpy(p.opened[0..target.len], target);
-        p.opened_len = target.len;
+        const text = said(target);
+        @memcpy(p.opened[0..text.len], text);
+        p.opened_len = text.len;
+    }
+
+    /// The path or address `target` opens; a script's place in its list
+    /// is not one, and is recorded as nothing.
+    fn said(target: Target) []const u8 {
+        return switch (target) {
+            .app, .url => |text| text,
+            .pane => |i| @import("settings_panes.zig").urls[i],
+            .script, .folder => "",
+        };
     }
     fn hide(ctx: *anyopaque) void {
         const p: *Probe = @ptrCast(@alignCast(ctx));
@@ -115,7 +127,7 @@ pub const Probe = struct {
 /// The selected row is the first quicklink: the search for what was typed.
 pub fn onFirstQuicklink(s: *const view.Nanolight) bool {
     const r = s.res.rows[s.sel];
-    return r.kind == .quicklink and r.ql == 0;
+    return r.kind == .quicklink and r.item == 0;
 }
 
 pub fn press(t: *ui.Tester, ops: []const ui.TextOp) void {
@@ -145,7 +157,7 @@ pub const Web = struct {
             .preview = show,
         };
     }
-    fn open(ctx: *anyopaque, target: []const u8) void {
+    fn open(ctx: *anyopaque, target: Target) void {
         const w: *Web = @ptrCast(@alignCast(ctx));
         Probe.open(&w.probe, target);
     }
@@ -220,7 +232,7 @@ pub const Prefs = struct {
     pub fn host(p: *Prefs) view.Host {
         return .{ .ctx = p, .open = open, .hide = hide, .settings = &p.box };
     }
-    fn open(ctx: *anyopaque, target: []const u8) void {
+    fn open(ctx: *anyopaque, target: Target) void {
         Probe.open(&@as(*Prefs, @ptrCast(@alignCast(ctx))).probe, target);
     }
     fn hide(ctx: *anyopaque) void {

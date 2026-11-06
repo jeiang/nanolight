@@ -8,6 +8,13 @@ const ui = nanoui.ui;
 const motion = ui.motion;
 const Index = @import("apps.zig").Index;
 const results = @import("results.zig");
+const launchers = @import("launchers.zig");
+const launch_counts = @import("launch_counts.zig");
+const script_commands = @import("script_commands.zig");
+const settings_panes = @import("settings_panes.zig");
+const web = @import("web.zig");
+const platform = @import("platform.zig");
+const clipboard = @import("clipboard.zig");
 const files = @import("files.zig");
 const files_view = @import("files_view.zig");
 const answers = @import("answers.zig");
@@ -18,7 +25,8 @@ const search = @import("search.zig");
 const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Row = results.Row;
-const settings = @import("settings.zig");
+const Kind = results.Kind;
+const Target = results.Target;
 const commands = @import("commands.zig");
 const clipboard_view = @import("clipboard_view.zig");
 const chrome = @import("chrome.zig");
@@ -32,8 +40,8 @@ const Theme = palette_mod.Theme;
 /// window's answers share `ctx`; each feature's carries its own.
 pub const Host = struct {
     ctx: *anyopaque,
-    /// Opens an app's path or a URL.
-    open: *const fn (ctx: *anyopaque, target: []const u8) void,
+    /// Opens what a row opens.
+    open: *const fn (ctx: *anyopaque, target: Target) void,
     hide: *const fn (ctx: *anyopaque) void,
     /// The panel's height changed: a window follows it.
     resize: ?*const fn (ctx: *anyopaque, h: f32) void = null,
@@ -56,7 +64,12 @@ pub const Host = struct {
         ctx: *anyopaque,
         func: *const fn (ctx: *anyopaque, query: []const u8) void,
     };
-    pub const Run = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque, i: usize) void };
+    pub const Run = struct {
+        ctx: *anyopaque,
+        func: *const fn (ctx: *anyopaque, i: usize) void,
+        /// The commands it can run: those listed.
+        installed: *const commands.Installed,
+    };
 };
 
 /// The longest query kept: a longer paste is cut here, as math, ranking and
@@ -74,6 +87,10 @@ const slide: motion.Spring = .{ .stiffness = 700, .damping = 52 };
 
 pub const Nanolight = struct {
     index: *Index,
+    /// The script commands found, listed among the apps (script_live.zig).
+    scripts: ?*script_commands.List = null,
+    /// How often each app and script command was opened (launchers.zig).
+    counts: launch_counts.Counts = .{},
     query: ui.TextBuffer = .{},
     res: results.Results = .{},
     sel: usize = 0,
@@ -107,7 +124,7 @@ pub const Nanolight = struct {
     /// Google's completions: whether to ask, those listed, the answers.
     suggest_on: bool = true,
     /// The quicklinks listed under the apps (config.toml, or synced).
-    quicklinks: []const settings.Quicklink = &settings.default_quicklinks,
+    quicklinks: []const web.Quicklink = &web.default_quicklinks,
     web: suggest.List = .{},
     cache: suggest.Cache = .{},
     /// Currency rates and their fetching (rates.zig); without them none are fetched.
@@ -115,7 +132,9 @@ pub const Nanolight = struct {
     /// A search's page is in the panel, for the query as it was then.
     previewing: bool = false,
     preview_q: u64 = 0,
-    preview_buf: [1024]u8 = undefined,
+    /// A quicklink's address with the longest query, each byte escaped (3
+    /// bytes), and room for the address round it; a longer one is not opened.
+    preview_buf: [4 * max_query_bytes]u8 = undefined,
     preview_url: []const u8 = "",
     /// Settings, drawn in the panel in place of the rows.
     settings_ui: settings_view.Settings = .{},
@@ -127,10 +146,27 @@ pub const Nanolight = struct {
     away_at: ?i64 = null,
     pop_after: u32 = (@import("config.zig").Config{}).pop_to_root_seconds,
 
-    /// Frees what the panel holds: the files found and the field's text.
+    /// Frees what the panel holds: the files found, the counts and the
+    /// field's text.
     pub fn deinit(s: *Nanolight) void {
         s.found.deinit();
+        s.counts.deinit(s.index.gpa);
         s.query.deinit();
+    }
+
+    /// The apps and script commands, and how often each was opened.
+    pub fn launchable(s: *const Nanolight) launchers.Launchers {
+        return .{ .apps = s.index, .scripts = s.scriptList(), .counts = &s.counts };
+    }
+
+    fn scriptList(s: *const Nanolight) []script_commands.Script {
+        return if (s.scripts) |l| l.items.items else &.{};
+    }
+
+    /// One more opening of what `key` counts, kept.
+    fn opened(s: *Nanolight, key: []const u8) void {
+        s.counts.bump(s.index.gpa, key);
+        if (s.kv) |kv| launchers.save(&s.counts, s.index.gpa, kv);
     }
 
     /// Google's completions on or off: the rows again, with or without them.
@@ -201,7 +237,7 @@ pub const Nanolight = struct {
         if (s.res.n == 0) return h;
         h += 1 + chrome.list_pad * 2;
         for (s.res.slice(), 0..) |r, i| {
-            h += if (r.kind == .calc) calc_card.height else chrome.row_h;
+            h += row_views.get(r.kind).height();
             if (s.res.section(i) != null) h += chrome.section.h;
         }
         return h;
@@ -286,7 +322,7 @@ pub const Nanolight = struct {
     fn keys(s: *Nanolight, c: *ui.Context) void {
         const S = ui.Shortcut;
         if (s.previewing) {
-            if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.go(s.preview_url);
+            if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.go(.{ .url = s.preview_url });
             if (c.shortcut(.{ .key = S.escape })) {
                 s.back();
                 s.hidePanel();
@@ -354,17 +390,8 @@ pub const Nanolight = struct {
         const q = s.query.text();
         if (q.len == 0 or s.res.n == 0 or std.hash.Wyhash.hash(0, q) == s.revealed) return "";
         const r = s.res.rows[0];
-        if (r.kind == .app) {
-            const name = s.index.apps.items[r.app].name;
-            if (name.len <= q.len or !search.startsWithFold(name, q)) return "";
-            return name[q.len..];
-        }
-        if (r.kind != .quicklink or s.res.keyed != null or s.res.google != r.ql) return "";
-        for (0..s.web.n) |i| {
-            const w = s.web.get(i);
-            if (w.len > q.len and search.startsWithFold(w, q)) return w[q.len..];
-        }
-        return "";
+        const completes = row_views.get(r.kind).completes orelse return "";
+        return completes(s, r, q);
     }
 
     fn take(s: *Nanolight, more: []const u8) void {
@@ -410,17 +437,16 @@ pub const Nanolight = struct {
     pub fn fill(s: *Nanolight) void {
         s.res.clip_on = if (s.host) |h| h.clipboard != null else false;
         s.res.found = &s.found;
+        s.res.commands = if (s.host) |h| if (h.command) |run| run.installed else null else null;
         rates.fill(s.rates, s, buildRows);
     }
 
     /// Lists the query's rows with `status`; true when they list a currency
     /// conversion, which asks for the rates.
     fn buildRows(s: *Nanolight, status: rates_table.Status) bool {
-        var sug: [results.max_apps]u32 = undefined;
-        const ns = s.index.suggestions(&sug);
-        var web: [suggest.max_rows][]const u8 = undefined;
+        var words: [suggest.max_rows][]const u8 = undefined;
         s.res.rates = status;
-        s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web), s.quicklinks);
+        s.res.build(s.query.text(), s.launchable(), s.web.slices(&words), s.quicklinks);
         return s.res.need_rates;
     }
 
@@ -452,7 +478,7 @@ pub const Nanolight = struct {
         var sel_h: f32 = chrome.row_h;
         for (s.res.slice(), 0..) |r, i| {
             if (s.res.section(i) != null) y += chrome.section.h;
-            const rh: f32 = if (r.kind == .calc) calc_card.height else chrome.row_h;
+            const rh = row_views.get(r.kind).height();
             if (i == s.sel) {
                 sel_y = y;
                 sel_h = rh;
@@ -472,113 +498,23 @@ pub const Nanolight = struct {
     }
 
     fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
-        const big = r.kind == .calc;
-        const h: f32 = if (big) calc_card.height else chrome.row_h;
-        const d = ui.div(c).row().wFull().h(h).px(chrome.row_px).gap(chrome.row_gap).itemsCenter()
-            .control();
+        const v = row_views.get(r.kind);
+        const d = ui.div(c).row().wFull().h(v.height()).px(chrome.row_px).gap(chrome.row_gap)
+            .itemsCenter().control();
         defer d.end();
         if (d.clicked()) {
             s.sel = i;
             s.activate(c);
         }
-        if (big) return s.calcCard(c, p);
-        s.tile(c, p, r);
-        const q = s.query.text();
-        switch (r.kind) {
-            .calc => unreachable,
-            .app => {
-                const a = s.index.apps.items[r.app];
-                chrome.nameDetail(c, p, a.name, s.highlight(i, r, p), a.folder, .none);
-            },
-            .pane => {
-                const pane = @import("settings_panes.zig").all[r.app];
-                chrome.nameDetail(c, p, pane.name, s.highlight(i, r, p), "System Settings", .none);
-            },
-            .command => chrome.nameDetail(
-                c,
-                p,
-                commands.all[r.app].name,
-                s.highlight(i, r, p),
-                "System Command",
-                .none,
-            ),
-            .clipboard => {
-                ui.text(
-                    c,
-                    "Clipboard History",
-                    .{ .size = 13.5, .weight = .medium, .color = p.text },
-                );
-                ui.text(c, "Text, images and files you copied", p.detail());
-            },
-            .file => files_view.row(s, c, p, i, r),
-            .settings => {
-                ui.text(
-                    c,
-                    "Nanolight Settings",
-                    .{ .size = 13.5, .weight = .medium, .color = p.text },
-                );
-                ui.text(c, "Shortcut, sync, updates", p.detail());
-            },
-            .suggest => {
-                const w = s.web.get(r.web);
-                ui.richText(
-                    c,
-                    w,
-                    s.added(i, w, p),
-                    .{ .size = 13.5, .color = p.text.alpha(0.72), .truncate = .ellipsis },
-                );
-            },
-            .quicklink => {
-                const ql = s.quicklinks[r.ql];
-                ui.textf(
-                    c,
-                    .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis },
-                    "Search {s} for “{s}”",
-                    .{ ql.name, s.res.argument(q) },
-                );
-                ui.text(c, results.host(ql.url), p.detail());
-            },
-        }
+        if (v.card) return v.body(s, c, p, i, r);
+        v.picture(s, c, p, r);
+        v.body(s, c, p, i, r);
         ui.spacer(c);
         if (i == s.sel) {
-            ui.text(c, switch (r.kind) {
-                .app, .file, .settings, .pane, .clipboard => "Open",
-                .command => "Run",
-                else => "Go",
-            }, .{ .size = 12, .weight = .medium, .color = p.sub });
+            const hint = results.providers.get(r.kind).hint;
+            ui.text(c, hint, .{ .size = 12, .weight = .medium, .color = p.sub });
             ui.kbd(c, "↩");
-        } else if (i < 9) ui.textf(c, p.hint(), "{s}{d}", .{ results.mod, i + 1 });
-    }
-
-    fn calcCard(s: *Nanolight, c: *ui.Context, p: Palette) void {
-        calc_card.draw(
-            c,
-            p,
-            if (s.res.expr.len > 0) s.res.expr else s.query.text(),
-            s.res.answer,
-            s.res.hex,
-            s.res.note,
-            c.time - s.copied_at < 1.4,
-        );
-    }
-
-    /// The row's picture: the app's icon, or a symbol on a quiet tile.
-    fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
-        // A pane: System Settings' own icon.
-        const app = if (r.kind == .pane)
-            s.index.find("System Settings")
-        else if (r.kind == .app) r.app else null;
-        if (app) |a| if (s.index.icon(a)) |png|
-            return chrome.iconImage(c, s.index.apps.items[a].path, png);
-        if (r.kind == .file) return files_view.tile(s, c, p, r);
-        chrome.tile(c, p, switch (r.kind) {
-            .quicklink => "globe",
-            .suggest => "magnifyingglass",
-            .settings => "gearshape",
-            .clipboard => "doc.on.doc",
-            .command => "terminal",
-            else => "app.dashed",
-        });
+        } else if (i < 9) ui.textf(c, p.hint(), "{s}{d}", .{ platform.mod, i + 1 });
     }
 
     /// The matched letters, full strength and heavier.
@@ -623,7 +559,10 @@ pub const Nanolight = struct {
             c,
             p.caption(),
             "{s} · {d} apps",
-            .{ if (s.note.len > 0) s.note else "Nanolight", s.index.apps.items.len },
+            .{
+                if (s.note.len > 0) s.note else "Nanolight",
+                s.index.apps.items.len + s.scriptList().len,
+            },
         );
         ui.spacer(c);
         {
@@ -635,19 +574,16 @@ pub const Nanolight = struct {
             ui.text(c, "Settings", .{ .size = 1, .color = p.sub.alpha(0) });
         }
         if (s.previewing) {
-            chrome.footerKey(c, p, "Open in Browser", results.mod ++ "↩", true);
+            chrome.footerKey(c, p, "Open in Browser", platform.mod ++ "↩", true);
             chrome.keySep(c, p);
             chrome.footerKey(c, p, "Close", "esc", false);
             return;
         }
         if (s.res.n == 0) return;
         const sel = s.res.rows[s.res.actionable(s.sel)];
-        if (sel.kind == .quicklink) {
-            var cut = p.action();
-            cut.truncate = .ellipsis;
-            ui.textf(c, cut, "Search {s}", .{s.quicklinks[sel.ql].name});
-            ui.kbd(c, "↩");
-        } else chrome.footerKey(c, p, sel.kind.action(), "↩", true);
+        if (row_views.get(sel.kind).footer) |says| {
+            says(s, c, p, sel);
+        } else chrome.footerKey(c, p, results.providers.get(sel.kind).action, "↩", true);
         chrome.keySep(c, p);
         chrome.footerKey(c, p, "Close", "esc", false);
     }
@@ -656,40 +592,15 @@ pub const Nanolight = struct {
     pub fn activate(s: *Nanolight, c: *ui.Context) void {
         if (s.res.n == 0) return;
         const r = s.res.rows[s.res.actionable(s.sel)];
-        switch (r.kind) {
-            .calc => {
-                if (s.res.copy.len == 0) return;
-                c.clipboard.write(c.clipboard.ctx, s.res.copy);
-                s.copied_at = c.time;
-                return;
-            },
-            .app => {
-                s.index.opened(r.app, s.kv);
-                s.go(s.index.apps.items[r.app].path);
-            },
-            .file => s.go(s.found.entries[r.file].path()),
-            .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), !s.searches_out),
-            .settings => s.openSettings(),
-            .clipboard => s.openClipboard(),
-            .pane => s.go(@import("settings_panes.zig").urls[r.app]),
-            .command => if (s.host) |h| if (h.command) |run| run.func(run.ctx, r.app),
-            .suggest => {
-                // Its words fill the field, as a search box's would.
-                s.query.set(s.web.get(r.web));
-                s.searchWith(s.res.google orelse return, s.query.text(), !s.searches_out);
-            },
-        }
+        row_views.get(r.kind).activate(s, c, r);
     }
 
     /// ⌘↩ on the selected row: a search goes where Return doesn't send it.
     fn activateOut(s: *Nanolight, c: *ui.Context) void {
         if (s.res.n == 0) return;
         const r = s.res.rows[s.res.actionable(s.sel)];
-        switch (r.kind) {
-            .quicklink => s.searchWith(r.ql, s.res.argument(s.query.text()), s.searches_out),
-            .suggest => s.searchWith(s.res.google orelse return, s.web.get(r.web), s.searches_out),
-            else => s.activate(c),
-        }
+        const out = row_views.get(r.kind).out orelse return s.activate(c);
+        out(s, r);
     }
 
     /// Quicklink `ql`'s page for `words`: in the panel when `in_panel` and
@@ -697,8 +608,12 @@ pub const Nanolight = struct {
     fn searchWith(s: *Nanolight, ql: u16, words: []const u8, in_panel: bool) void {
         const h = s.host orelse return;
         if (ql >= s.quicklinks.len) return;
-        const u = results.url(&s.preview_buf, s.quicklinks[ql].url, words);
-        const show = (if (in_panel) h.preview else null) orelse return s.go(u);
+        const link = s.quicklinks[ql];
+        const u = web.url(&s.preview_buf, link.url, words) orelse {
+            std.log.warn("nanolight: the address of {s} for these words is too long", .{link.name});
+            return;
+        };
+        const show = (if (in_panel) h.preview else null) orelse return s.go(.{ .url = u });
         s.preview_url = u;
         s.previewing = true;
         s.preview_q = std.hash.Wyhash.hash(0, s.query.text());
@@ -734,7 +649,7 @@ pub const Nanolight = struct {
         if (s.host) |h| if (h.preview) |f| f(h.ctx, null);
     }
 
-    fn go(s: *Nanolight, target: []const u8) void {
+    fn go(s: *Nanolight, target: Target) void {
         const h = s.host orelse return;
         h.open(h.ctx, target);
         // A script's row opened its screen in the panel, which stays.
@@ -742,3 +657,241 @@ pub const Nanolight = struct {
         h.hide(h.ctx);
     }
 };
+
+/// How the panel draws and acts on each kind of row; what the rows are
+/// called and where they are listed is their provider's (results.zig).
+const RowView = struct {
+    /// The answer's card (calc_card.zig): taller, without a picture or a hint.
+    card: bool = false,
+    /// Its name and what it is, after its picture.
+    body: *const fn (s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void,
+    picture: *const fn (s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void = symbolTile,
+    /// Return on it.
+    activate: *const fn (s: *Nanolight, c: *ui.Context, r: Row) void,
+    /// ⌘↩ on it, where that differs from Return.
+    out: ?*const fn (s: *Nanolight, r: Row) void = null,
+    /// What the footer says Return does, where its provider's words need more.
+    footer: ?*const fn (s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void = null,
+    /// What the field finishes faintly when this row is first; empty for none.
+    completes: ?*const fn (s: *const Nanolight, r: Row, q: []const u8) []const u8 = null,
+
+    fn height(v: RowView) f32 {
+        return if (v.card) calc_card.height else chrome.row_h;
+    }
+};
+
+const row_views = std.enums.EnumArray(Kind, RowView).init(.{
+    .calc = .{ .card = true, .body = calcBody, .activate = copyAnswer },
+    .app = .{
+        .body = appBody,
+        .picture = appPicture,
+        .activate = openApp,
+        .completes = appCompletes,
+    },
+    .script = .{
+        .body = scriptBody,
+        .picture = scriptPicture,
+        .activate = openScript,
+        .completes = scriptCompletes,
+    },
+    .file = .{ .body = files_view.row, .picture = files_view.tile, .activate = openFile },
+    .pane = .{ .body = paneBody, .picture = panePicture, .activate = openPane },
+    .command = .{ .body = commandBody, .activate = runCommand },
+    .settings = .{ .body = settingsBody, .activate = openSettingsRow },
+    .clipboard = .{ .body = clipboardBody, .activate = openClipboardRow },
+    .quicklink = .{
+        .body = quicklinkBody,
+        .activate = searchQuicklink,
+        .out = searchQuicklinkOut,
+        .footer = quicklinkFooter,
+        .completes = quicklinkCompletes,
+    },
+    .suggest = .{
+        .body = completionBody,
+        .activate = searchCompletion,
+        .out = searchCompletionOut,
+    },
+});
+
+fn symbolTile(_: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
+    chrome.tile(c, p, results.providers.get(r.kind).symbol);
+}
+
+/// `png` named by `key`, or the provider's symbol when there is none.
+fn iconOr(c: *ui.Context, p: Palette, r: Row, key: []const u8, png: ?[]const u8) void {
+    const bytes = png orelse return chrome.tile(c, p, results.providers.get(r.kind).symbol);
+    chrome.iconImage(c, key, bytes);
+}
+
+fn appPicture(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
+    iconOr(c, p, r, s.index.apps.items[r.item].path, s.index.icon(r.item));
+}
+
+fn scriptPicture(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
+    const list = s.scripts.?;
+    iconOr(c, p, r, list.items.items[r.item].key, list.icon(r.item));
+}
+
+/// System Settings' own icon.
+fn panePicture(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
+    const app = s.index.findPath(settings_panes.app) orelse return symbolTile(s, c, p, r);
+    iconOr(c, p, r, settings_panes.app, s.index.icon(app));
+}
+
+fn calcBody(s: *Nanolight, c: *ui.Context, p: Palette, _: usize, _: Row) void {
+    calc_card.draw(
+        c,
+        p,
+        if (s.res.expr.len > 0) s.res.expr else s.query.text(),
+        s.res.answer,
+        s.res.hex,
+        s.res.note,
+        c.time - s.copied_at < 1.4,
+    );
+}
+
+fn appBody(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
+    const a = s.index.apps.items[r.item];
+    chrome.nameDetail(c, p, a.name, s.highlight(i, r, p), a.folder, .none);
+}
+
+fn scriptBody(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
+    const x = s.scriptList()[r.item];
+    chrome.nameDetail(c, p, x.title, s.highlight(i, r, p), x.package, .none);
+}
+
+fn paneBody(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
+    const name = settings_panes.all[r.item].name;
+    chrome.nameDetail(c, p, name, s.highlight(i, r, p), "System Settings", .none);
+}
+
+fn commandBody(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
+    const name = commands.all[r.item].name;
+    chrome.nameDetail(c, p, name, s.highlight(i, r, p), "System Command", .none);
+}
+
+fn ownBody(c: *ui.Context, p: Palette, title: []const u8, detail: []const u8) void {
+    ui.text(c, title, .{ .size = 13.5, .weight = .medium, .color = p.text });
+    ui.text(c, detail, p.detail());
+}
+
+fn settingsBody(_: *Nanolight, c: *ui.Context, p: Palette, _: usize, _: Row) void {
+    ownBody(c, p, "Nanolight Settings", "Shortcut, sync, updates");
+}
+
+fn clipboardBody(_: *Nanolight, c: *ui.Context, p: Palette, _: usize, _: Row) void {
+    ownBody(c, p, clipboard.title, "Text, images and files you copied");
+}
+
+fn completionBody(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
+    const w = s.web.get(r.item);
+    ui.richText(
+        c,
+        w,
+        s.added(i, w, p),
+        .{ .size = 13.5, .color = p.text.alpha(0.72), .truncate = .ellipsis },
+    );
+}
+
+fn quicklinkBody(s: *Nanolight, c: *ui.Context, p: Palette, _: usize, r: Row) void {
+    const ql = s.quicklinks[r.item];
+    ui.textf(
+        c,
+        .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis },
+        "Search {s} for “{s}”",
+        .{ ql.name, s.res.argument(s.query.text()) },
+    );
+    ui.text(c, web.host(ql.url), p.detail());
+}
+
+/// "Search Google": the quicklink by name.
+fn quicklinkFooter(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
+    var cut = p.action();
+    cut.truncate = .ellipsis;
+    const action = results.providers.get(.quicklink).action;
+    ui.textf(c, cut, "{s} {s}", .{ action, s.quicklinks[r.item].name });
+    ui.kbd(c, "↩");
+}
+
+fn copyAnswer(s: *Nanolight, c: *ui.Context, _: Row) void {
+    if (s.res.copy.len == 0) return;
+    c.clipboard.write(c.clipboard.ctx, s.res.copy);
+    s.copied_at = c.time;
+}
+
+fn openApp(s: *Nanolight, _: *ui.Context, r: Row) void {
+    const path = s.index.apps.items[r.item].path;
+    s.opened(path);
+    s.go(.{ .app = path });
+}
+
+fn openScript(s: *Nanolight, _: *ui.Context, r: Row) void {
+    const x = s.scriptList()[r.item];
+    s.opened(x.key);
+    s.go(if (x.file == null) .folder else .{ .script = r.item });
+}
+
+fn openFile(s: *Nanolight, _: *ui.Context, r: Row) void {
+    s.go(.{ .app = s.found.entries[r.item].path() });
+}
+
+fn openPane(s: *Nanolight, _: *ui.Context, r: Row) void {
+    s.go(.{ .pane = @intCast(r.item) });
+}
+
+fn runCommand(s: *Nanolight, _: *ui.Context, r: Row) void {
+    const h = s.host orelse return;
+    const run = h.command orelse return;
+    run.func(run.ctx, r.item);
+}
+
+fn openSettingsRow(s: *Nanolight, _: *ui.Context, _: Row) void {
+    s.openSettings();
+}
+
+fn openClipboardRow(s: *Nanolight, _: *ui.Context, _: Row) void {
+    s.openClipboard();
+}
+
+fn searchQuicklink(s: *Nanolight, _: *ui.Context, r: Row) void {
+    s.searchWith(@intCast(r.item), s.res.argument(s.query.text()), !s.searches_out);
+}
+
+fn searchQuicklinkOut(s: *Nanolight, r: Row) void {
+    s.searchWith(@intCast(r.item), s.res.argument(s.query.text()), s.searches_out);
+}
+
+/// Its words fill the field, as a search box's would.
+fn searchCompletion(s: *Nanolight, _: *ui.Context, r: Row) void {
+    s.query.set(s.web.get(r.item));
+    s.searchWith(s.res.google orelse return, s.query.text(), !s.searches_out);
+}
+
+fn searchCompletionOut(s: *Nanolight, r: Row) void {
+    s.searchWith(s.res.google orelse return, s.web.get(r.item), s.searches_out);
+}
+
+/// What `name` adds to `q`, when `q` starts it.
+fn rest(name: []const u8, q: []const u8) []const u8 {
+    if (name.len <= q.len or !search.startsWithFold(name, q)) return "";
+    return name[q.len..];
+}
+
+fn appCompletes(s: *const Nanolight, r: Row, q: []const u8) []const u8 {
+    return rest(s.index.apps.items[r.item].name, q);
+}
+
+fn scriptCompletes(s: *const Nanolight, r: Row, q: []const u8) []const u8 {
+    return rest(s.scriptList()[r.item].title, q);
+}
+
+/// Google's first completion that goes on from the words, under its quicklink.
+fn quicklinkCompletes(s: *const Nanolight, r: Row, q: []const u8) []const u8 {
+    const google = s.res.google orelse return "";
+    if (s.res.keyed != null or google != r.item) return "";
+    for (0..s.web.n) |i| {
+        const more = rest(s.web.get(i), q);
+        if (more.len > 0) return more;
+    }
+    return "";
+}

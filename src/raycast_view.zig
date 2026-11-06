@@ -9,7 +9,7 @@ const ui = nanoui.ui;
 const assert = std.debug.assert;
 const model = @import("raycast_model.zig");
 const pview = @import("view.zig");
-const results = @import("results.zig");
+const platform = @import("platform.zig");
 
 /// ⌘K on the Mac; Ctrl+K moves up on a PC, so the actions are on Ctrl+O.
 pub const actions_key: ui.Shortcut = if (@import("builtin").os.tag == .macos)
@@ -436,7 +436,7 @@ pub const Ext = struct {
             ui.text(c, a.title(), .{ .size = 13.5, .weight = .medium, .color = p.text });
             ui.spacer(c);
             if (i == model.return_at) ui.kbd(c, "↩") else if (i == model.cmd_return_at)
-                ui.kbd(c, results.mod ++ "↩");
+                ui.kbd(c, platform.mod ++ "↩");
             r.end();
         }
     }

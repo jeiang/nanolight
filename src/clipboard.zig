@@ -16,6 +16,9 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const search = @import("search.zig");
 
+/// The feature's name, as its row and its screen say it.
+pub const title = "Clipboard History";
+
 pub const Kind = enum {
     text,
     image,

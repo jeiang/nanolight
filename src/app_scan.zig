@@ -11,8 +11,6 @@ pub const App = struct {
     folder: []const u8,
     /// Mandarin reading as ASCII (scan time), for Latin queries.
     pinyin: []const u8 = "",
-    /// Times it was opened (kept in prefs' `.launches`).
-    launches: u16 = 0,
     /// Its icon, asked of the system the first time a row shows it.
     icon: Icon = .unloaded,
 };

@@ -100,6 +100,14 @@ const units = [_]Unit{
     .{ .family = .time, .names = "y,yr,yrs,year,years", .scale = 31556952 },
 };
 
+/// The longest unit name an answer gives (`first`), for the room it is shown in.
+pub const unit_name_len = blk: {
+    @setEvalBranchQuota(10_000);
+    var n: usize = 0;
+    for (&units) |*u| n = @max(n, first(u).len);
+    break :blk n;
+};
+
 /// The unit `name` is, in any case.
 fn unit(name: []const u8) ?*const Unit {
     if (name.len == 0) return null;

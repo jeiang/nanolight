@@ -15,7 +15,7 @@ const panel = @import("view.zig");
 const keys = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
 const shortcut_clash = @import("shortcut_clash.zig");
-const results = @import("results.zig");
+const platform = @import("platform.zig");
 const mac = @import("builtin").os.tag == .macos;
 const Choice = keys.Choice;
 const chrome = @import("chrome.zig");
@@ -209,7 +209,7 @@ pub const Onboard = struct {
                 c,
                 .{ .size = 13, .weight = .medium, .color = p.text },
                 "{s} is free on this {s}.",
-                .{ keys_text, results.machine },
+                .{ keys_text, platform.machine },
             );
             line.end();
             return;
@@ -404,7 +404,7 @@ pub const Onboard = struct {
                 // A shade stronger than the launcher's `hint`; kept as drawn.
                 var hint = p.hint();
                 hint.color = p.sub.alpha(0.55);
-                ui.textf(c, hint, "{s}{d}", .{ results.mod, i + 1 });
+                ui.textf(c, hint, "{s}{d}", .{ platform.mod, i + 1 });
             }
         }
         const home = ui.div(c).column().wFull().px(28).pt(16).gap(12);
@@ -417,7 +417,7 @@ pub const Onboard = struct {
             tile.end();
             ui.text(
                 c,
-                "Settings are on " ++ results.mod ++ ", and the gear" ++ if (mac)
+                "Settings are on " ++ platform.mod ++ ", and the gear" ++ if (mac)
                     ". It also lives in your menu bar."
                 else
                     " at the bottom of the panel.",

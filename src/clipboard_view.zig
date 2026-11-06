@@ -10,7 +10,7 @@ const ui = nanoui.ui;
 const panel = @import("view.zig");
 const clipboard = @import("clipboard.zig");
 const search = @import("search.zig");
-const results = @import("results.zig");
+const platform = @import("platform.zig");
 const account = @import("account.zig");
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;
@@ -177,7 +177,7 @@ pub const Screen = struct {
             .bare = true,
             .size = 19,
             .width = .fill,
-            .placeholder = "Search Clipboard History…",
+            .placeholder = "Search " ++ clipboard.title ++ "…",
             .placeholder_color = p.placeholder(),
             .color = p.text,
         });
@@ -296,8 +296,8 @@ pub const Screen = struct {
         else if (hh) |h| {
             var cut = p.caption();
             cut.truncate = .ellipsis;
-            ui.textf(c, cut, "Clipboard History · {d}", .{h.store.len()});
-        } else ui.text(c, "Clipboard History", p.caption());
+            ui.textf(c, cut, clipboard.title ++ " · {d}", .{h.store.len()});
+        } else ui.text(c, clipboard.title, p.caption());
         ui.spacer(c);
         const h = hh orelse return;
         const copy_only = !h.store.cfg.paste_plain_text;
@@ -305,9 +305,9 @@ pub const Screen = struct {
             chrome.footerKey(c, p, "Paste", "↩", true);
             chrome.keySep(c, p);
         }
-        chrome.footerKey(c, p, "Copy", if (copy_only) "↩" else results.mod ++ "↩", copy_only);
+        chrome.footerKey(c, p, "Copy", if (copy_only) "↩" else platform.mod ++ "↩", copy_only);
         chrome.keySep(c, p);
-        chrome.footerKey(c, p, "Delete", results.mod ++ "⌫", false);
+        chrome.footerKey(c, p, "Delete", platform.mod ++ "⌫", false);
         chrome.keySep(c, p);
         chrome.footerKey(c, p, "Close", "esc", false);
     }

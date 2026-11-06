@@ -13,8 +13,7 @@ const clipboard = @import("clipboard.zig");
 const account = @import("account.zig");
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
-
-pub const Quicklink = settings.Quicklink;
+const Quicklink = @import("web.zig").Quicklink;
 
 /// The most a config may hold: `load` reads no more.
 pub const max_bytes = 1 << 20;

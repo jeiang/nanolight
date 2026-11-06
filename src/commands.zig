@@ -140,17 +140,27 @@ pub const all: []const Command = switch (builtin.os.tag) {
 };
 
 const none = 0xff;
-/// Which of each command's `runs` is installed (`none` when no program is).
-var chosen: [all.len]u8 = @splat(none);
 
-/// Looks at the PATH once: a command whose program is missing is not listed.
-pub fn init(io: std.Io, env: *const std.process.Environ.Map) void {
+/// Which of each command's `runs` this machine has (`none` when no program
+/// is): a command whose program is missing is not listed.
+pub const Installed = struct {
+    chosen: [all.len]u8 = @splat(none),
+
+    pub fn listed(in: *const Installed, i: usize) bool {
+        return in.chosen[i] != none;
+    }
+};
+
+/// Looks at the PATH for each command's programs.
+pub fn installed(io: std.Io, env: *const std.process.Environ.Map) Installed {
     const path = env.get("PATH") orelse "";
+    var in: Installed = .{};
     for (all, 0..) |c, i| {
-        chosen[i] = for (c.runs, 0..) |argv, k| {
+        in.chosen[i] = for (c.runs, 0..) |argv, k| {
             if (onPath(io, path, argv[0])) break @intCast(k);
         } else none;
     }
+    return in;
 }
 
 fn onPath(io: std.Io, path: []const u8, program: []const u8) bool {
@@ -176,18 +186,14 @@ fn onPath(io: std.Io, path: []const u8, program: []const u8) bool {
     return false;
 }
 
-fn listed(i: usize) bool {
-    return chosen[i] != none;
-}
-
-/// The commands `query` asks for, best first (table order among equals),
-/// into `out`: how many.
-pub fn rank(query: []const u8, out: []search.Ranked) usize {
+/// The commands `query` asks for among those `in` lists, best first (table
+/// order among equals), into `out`: how many.
+pub fn rank(query: []const u8, in: *const Installed, out: []search.Ranked) usize {
     const q = std.mem.trim(u8, query, " ");
     if (q.len < 2) return 0;
     var top: search.Top = .init(out);
     for (all, 0..) |c, i| {
-        if (!listed(i)) continue;
+        if (!in.listed(i)) continue;
         const m = search.scoreNamed(q, c.name, c.keywords, search.min_loose) orelse continue;
         top.offer(.{ .index = @intCast(i), .match = m });
     }
@@ -207,6 +213,8 @@ pub const Runner = struct {
     /// The app's (processes need a real one).
     io: std.Io,
     hooks: Hooks,
+    /// What it can run.
+    installed: Installed,
     index: usize = 0,
     proc: proc.Runner = .{},
     /// The tail of what it wrote to stderr.
@@ -220,11 +228,11 @@ pub const Runner = struct {
 
     /// Runs command `i` of `all`, if it is listed.
     pub fn start(r: *Runner, i: usize) void {
-        if (i >= all.len or !listed(i)) return;
+        if (i >= all.len or !r.installed.listed(i)) return;
         r.index = i;
         r.err_len = 0;
         const options: std.process.SpawnOptions = .{
-            .argv = all[i].runs[chosen[i]],
+            .argv = all[i].runs[r.installed.chosen[i]],
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .pipe,
@@ -266,11 +274,6 @@ pub const Runner = struct {
         } else "failed");
     }
 };
-
-/// Marks every command of this OS as installed, or none (for tests).
-pub fn listForTests(on: bool) void {
-    @memset(&chosen, if (on) 0 else none);
-}
 
 test "every table has named commands with fixed, non-empty argument lists" {
     const t = std.testing;
@@ -330,47 +333,45 @@ test "tables hold what the spec lists for each OS" {
 
 test "commands are ranked like apps, only when listed, and capped by the room given" {
     const t = std.testing;
-    defer listForTests(false);
     var out: [3]search.Ranked = undefined;
     // Nothing is listed until its program is found.
-    listForTests(false);
-    try t.expectEqual(@as(usize, 0), rank("sleep", &out));
-    listForTests(true);
+    try t.expectEqual(@as(usize, 0), rank("sleep", &.{}, &out));
+    const every: Installed = .{ .chosen = @splat(0) };
     const name = struct {
         fn of(r: search.Ranked) []const u8 {
             return all[r.index].name;
         }
     }.of;
-    try t.expect(rank("sleep", &out) > 0);
+    try t.expect(rank("sleep", &every, &out) > 0);
     try t.expectEqualStrings("Sleep", name(out[0]));
     if (builtin.os.tag == .macos) {
-        try t.expectEqual(@as(usize, 0), rank("lock", &out));
-        try t.expect(rank("sleep display", &out) > 0);
+        try t.expectEqual(@as(usize, 0), rank("lock", &every, &out));
+        try t.expect(rank("sleep display", &every, &out) > 0);
         try t.expectEqualStrings("Sleep Display", name(out[0]));
     } else {
-        try t.expect(rank("lock", &out) > 0);
+        try t.expect(rank("lock", &every, &out) > 0);
         try t.expectEqualStrings("Lock Screen", name(out[0]));
     }
-    try t.expectEqual(@as(usize, 0), rank("volume", out[0..0]));
+    try t.expectEqual(@as(usize, 0), rank("volume", &every, out[0..0]));
     // Windows has no volume.
     if (!windows) {
         // Both are found for "mute", the exact name first.
-        try t.expectEqual(@as(usize, 2), rank("mute", &out));
+        try t.expectEqual(@as(usize, 2), rank("mute", &every, &out));
         try t.expectEqualStrings("Mute", name(out[0]));
         try t.expectEqualStrings("Unmute", name(out[1]));
         // A cap: the first of equals, in table order.
-        try t.expectEqual(@as(usize, 3), rank("volume", &out));
+        try t.expectEqual(@as(usize, 3), rank("volume", &every, &out));
         try t.expectEqual(@as(u32, 0), out[0].index);
         var one: [1]search.Ranked = undefined;
-        try t.expectEqual(@as(usize, 1), rank("volume", &one));
+        try t.expectEqual(@as(usize, 1), rank("volume", &every, &one));
         // A word for it lights nothing in the name.
         try t.expectEqual(@as(u8, 0), out[0].match.n);
     }
     // Not for one letter or loose letters.
-    try t.expectEqual(@as(usize, 0), rank("s", &out));
-    try t.expectEqual(@as(usize, 0), rank("qzx", &out));
+    try t.expectEqual(@as(usize, 0), rank("s", &every, &out));
+    try t.expectEqual(@as(usize, 0), rank("qzx", &every, &out));
     if (builtin.os.tag == .linux) {
-        try t.expect(rank("volume 25", &out) > 0);
+        try t.expect(rank("volume 25", &every, &out) > 0);
         try t.expectEqualStrings("Set Volume to 25%", name(out[0]));
     }
 }
