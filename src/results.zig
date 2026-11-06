@@ -190,11 +190,10 @@ pub const Results = struct {
         return r.rows[0..r.n];
     }
 
-    /// Lists what `query` finds among `names` (with how often each was
-    /// opened, `boost`) and in `found`, the quicklinks `ql`, and Google's
+    /// Lists what `query` finds among the apps of `ix` (lifted by how often
+    /// each was opened) and in `found`, the quicklinks `ql`, and Google's
     /// completions of it (`web`), or `suggestions` when the query is empty.
     pub fn build(r: *Results, query_in: []const u8, ix: *const Index, suggestions: []const u32, web: []const []const u8, ql: []const Quicklink) void {
-        const boost = ix.launches.items;
         r.n = 0;
         r.google = null;
         r.keyed = null;
@@ -231,7 +230,7 @@ pub const Results = struct {
         }
         const local_start = r.n;
         var ranked: [max_apps]search.Ranked = undefined;
-        const n = search.rankApps(query, ix, boost, &ranked);
+        const n = search.rankApps(query, ix, &ranked);
         for (ranked[0..n]) |x| r.push(.{ .kind = .app, .app = x.index, .match = x.match });
         if (isSettings(query)) r.push(.{
             .kind = .settings,
@@ -742,7 +741,7 @@ test "Clipboard History competes with apps by its name's match" {
     try t.expect(r.section(1) == null);
     // Explicit shortcuts win even over a frequently opened app.
     try ix.add("Clip", "/Clip.app");
-    ix.launches.items[2] = 100;
+    ix.apps.items[2].launches = 100;
     r.build("clip", &ix, &.{}, &.{}, defaults);
     try t.expectEqual(Kind.clipboard, r.rows[0].kind);
     r.clip_on = false;

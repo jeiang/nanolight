@@ -5,6 +5,7 @@ const files = @import("files.zig");
 const Nanolight = @import("view.zig").Nanolight;
 const Palette = @import("palette.zig").Palette;
 const Row = @import("results.zig").Row;
+const Anchor = @import("anchor.zig").Anchor;
 
 pub fn takeFile(s: *Nanolight, i: usize) void {
     const e = &s.found.entries[i];
@@ -18,32 +19,10 @@ pub fn takeFile(s: *Nanolight, i: usize) void {
 /// A Spotlight answer lands only for the query still in the field.
 pub fn filesAnswered(s: *Nanolight, typed: []const u8, found: *files.List) void {
     if (!s.files_on or !std.mem.eql(u8, typed, std.mem.trim(u8, s.query.text(), " \t\r\n"))) return;
-    const was: ?Row = if (s.sel < s.res.n) s.res.rows[s.sel] else null;
-    var path: [files.max_path]u8 = undefined;
-    var path_len: usize = 0;
-    if (was) |r| if (r.kind == .file) {
-        const p = s.found.entries[r.file].path();
-        @memcpy(path[0..p.len], p);
-        path_len = p.len;
-    };
+    const was: Anchor = .of(s);
     s.found.replace(found);
     s.fill();
-    s.sel = 0;
-    const r = was orelse return;
-    for (s.res.slice(), 0..) |now, i| {
-        if (now.kind != r.kind) continue;
-        const same = switch (r.kind) {
-            .app, .pane, .command => now.app == r.app,
-            .quicklink => now.ql == r.ql,
-            .file => std.mem.eql(u8, s.found.entries[now.file].path(), path[0..path_len]),
-            .suggest => now.web == r.web,
-            else => true,
-        };
-        if (same) {
-            s.sel = i;
-            return;
-        }
-    }
+    s.sel = was.find(s) orelse 0;
 }
 
 pub fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {

@@ -262,3 +262,62 @@ test "file answers move icons only for the current enabled query" {
     s.rebuild();
     try t.expectEqual(@as(usize, 0), s.found.n);
 }
+
+/// The row of `kind` showing `text` (a file's path or a completion), if listed.
+fn rowOf(s: *const view.Nanolight, kind: results.Kind, text: []const u8) ?usize {
+    for (s.res.slice(), 0..) |r, i| {
+        if (r.kind != kind) continue;
+        const shown = switch (kind) {
+            .file => s.found.entries[r.file].path(),
+            .suggest => s.web.get(r.web),
+            else => unreachable,
+        };
+        if (std.mem.eql(u8, shown, text)) return i;
+    }
+    return null;
+}
+
+test "the selection stays on its row as files and completions land in any order" {
+    const t = std.testing;
+    const files = @import("files.zig");
+    var ix: Index = .init(t.allocator);
+    defer ix.deinit();
+    var s: view.Nanolight = .{ .index = &ix, .files_on = true };
+    defer s.query.deinit();
+    defer s.found.deinit();
+    s.query.set("report");
+    s.rebuild();
+    var found: files.List = .{ .allocator = t.allocator };
+    defer found.deinit();
+    found.add("/tmp/report-a", false, .{ .score = 100 });
+    found.add("/tmp/report-b", false, .{ .score = 50 });
+    s.filesAnswered("report", &found);
+    // A file picked, then completions land above nothing it had.
+    s.sel = rowOf(&s, .file, "/tmp/report-b").?;
+    var web: suggest.List = .{};
+    for ([_][]const u8{ "report card", "report template" }) |q| web.push(q);
+    s.answered("report", &web);
+    try t.expectEqual(rowOf(&s, .file, "/tmp/report-b").?, s.sel);
+    // A completion picked, then files land in another order.
+    s.sel = rowOf(&s, .suggest, "report template").?;
+    found.add("/tmp/report-c", false, .{ .score = 300 });
+    found.add("/tmp/report-b", false, .{ .score = 200 });
+    found.add("/tmp/report-a", false, .{ .score = 10 });
+    s.filesAnswered("report", &found);
+    try t.expectEqual(rowOf(&s, .suggest, "report template").?, s.sel);
+    // The picked file moved up: the selection goes with it.
+    const a_was = rowOf(&s, .file, "/tmp/report-a").?;
+    s.sel = a_was;
+    found.add("/tmp/report-a", false, .{ .score = 900 });
+    found.add("/tmp/report-c", false, .{ .score = 300 });
+    s.filesAnswered("report", &found);
+    const a_now = rowOf(&s, .file, "/tmp/report-a").?;
+    try t.expect(a_now != a_was);
+    try t.expectEqual(a_now, s.sel);
+    // The picked completion is gone from the next answer: back to the top.
+    s.sel = rowOf(&s, .suggest, "report card").?;
+    web = .{};
+    web.push("report template");
+    s.answered("report", &web);
+    try t.expectEqual(@as(usize, 0), s.sel);
+}

@@ -135,10 +135,8 @@ pub const Nanolight = struct {
     quicklinks: []const settings.Quicklink = &settings.default_quicklinks,
     web: suggest.List = .{},
     cache: suggest.Cache = .{},
-    /// Currency rates, once fetched or read from the cache, and whether
-    /// fetching them failed.
-    rates: ?*const convert.Rates = null,
-    rates_failed: bool = false,
+    /// Currency rates and their fetching (the host's).
+    feed: ?*const convert.Feed = null,
     /// A search's page is in the panel, for the query as it was then.
     previewing: bool = false,
     preview_q: u64 = 0,
@@ -417,11 +415,15 @@ pub const Nanolight = struct {
         var sug: [results.max_apps]u32 = undefined;
         const ns = s.index.suggestions(&sug);
         var web: [suggest.max_rows][]const u8 = undefined;
-        s.res.rates = s.rates;
-        s.res.rates_failed = s.rates_failed;
+        s.res.rates = s.ratesTable();
+        s.res.rates_failed = if (s.feed) |f| f.failed() else false;
         s.res.clip_on = if (s.host) |h| h.clipboard != null else false;
         s.res.found = &s.found;
         s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web), s.quicklinks);
+    }
+
+    fn ratesTable(s: *const Nanolight) ?*const convert.Rates {
+        return if (s.feed) |f| f.table() else null;
     }
 
     /// The rates arrived (or could not be had): the conversion listed, if

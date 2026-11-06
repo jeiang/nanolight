@@ -102,14 +102,8 @@ pub const Live = struct {
     ql_arena: ?*std.heap.ArenaAllocator = null,
     /// System commands, run by Nanolight itself (commands.zig).
     cmds: commands.Runner = undefined,
-    /// Currency rates (convert.zig): the table, when the cache or a fetch
-    /// gave one, when it was fetched, and when a fetch last began (Unix
-    /// seconds; 0 never). `rates_busy` while one is out.
-    rates: ?convert.Rates = null,
-    rates_at: i64 = 0,
-    rates_tried: i64 = 0,
-    rates_busy: bool = false,
-    rates_cache_read: bool = false,
+    /// Currency rates (convert.zig) and their fetching.
+    rates: convert.Feed = .{},
     /// Clipboard history (clipboard_live.zig): the store, null in headless runs
     /// and without a data directory, and the OS's watcher.
     clip: ?*clipboard.Store = null,
@@ -169,8 +163,15 @@ pub const Live = struct {
     fn snapshot(ctx: *anyopaque, arena: std.mem.Allocator) Settings {
         const l: *Live = @ptrCast(@alignCast(ctx));
         const ix = l.s.index;
-        var list: std.ArrayList(@import("settings.zig").Launch) = .empty;
-        for (ix.apps.items, ix.launches.items) |a, n| if (n > 0) list.append(arena, .{ .name = a.name, .path = a.path, .count = n }) catch break;
+        var list: std.ArrayList(settings_mod.Launch) = .empty;
+        for (ix.apps.items) |a| if (a.launches > 0) {
+            const one: settings_mod.Launch = .{
+                .name = a.name,
+                .path = a.path,
+                .count = a.launches,
+            };
+            list.append(arena, one) catch break;
+        };
         var at: i64 = 0;
         if (l.kv.get(arena, sync_at_key) catch null) |v| at = std.fmt.parseInt(i64, v, 10) catch 0;
         var out: Settings = .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at };
@@ -233,7 +234,7 @@ pub const Live = struct {
                 ix.findPath(la.path) orelse ix.find(la.name)
             else
                 ix.find(la.name);
-            if (i) |idx| ix.launches.items[idx] = @max(ix.launches.items[idx], la.count);
+            if (i) |idx| ix.apps.items[idx].launches = @max(ix.apps.items[idx].launches, la.count);
         }
         ix.save(l.kv);
         l.s.built = 1;
@@ -301,54 +302,47 @@ pub const Live = struct {
     }
 
     /// A conversion is listed: the cached table on the first call, then a
-    /// fetch when none is in hand or it is a day old (`convert.due`).
+    /// fetch when none is in hand or it is a day old (`convert.Feed.due`).
     fn needRates(ctx: *anyopaque) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
-        const gpa = l.app.gpa;
-        var loaded = false;
-        if (!l.rates_cache_read) {
-            l.rates_cache_read = true;
-            if (l.kv.get(gpa, rates_at_key) catch null) |v| {
-                defer gpa.free(v);
-                l.rates_at = std.fmt.parseInt(i64, v, 10) catch 0;
-            }
-            if (l.ratesPath()) |path| {
-                defer gpa.free(path);
-                if (std.Io.Dir.cwd().readFileAlloc(l.app.io, path, gpa, .limited(convert.max_bytes)) catch null) |body| {
-                    defer gpa.free(body);
-                    if (convert.Rates.parse(gpa, body)) |r| {
-                        l.useRates(r);
-                        loaded = true;
-                    }
-                }
-            }
+        if (!l.rates.cache_read) {
+            l.readCachedRates();
+            if (l.rates.table() != null) l.s.ratesLanded();
         }
-        if (loaded) l.s.ratesLanded();
-        if (l.rates_busy or !convert.due(l.rates != null, l.rates_at, l.rates_tried, account.now())) return;
-        l.rates_busy = true;
-        l.rates_tried = account.now();
+        const now_s = account.now();
+        if (!l.rates.due(now_s)) return;
+        l.rates.begin(now_s);
         l.fetchRates(0);
     }
 
+    /// The table and its day as the last fetch left them, if any.
+    fn readCachedRates(l: *Live) void {
+        const gpa = l.app.gpa;
+        var fetched_s: i64 = 0;
+        if (l.kv.get(gpa, rates_at_key) catch null) |v| {
+            defer gpa.free(v);
+            fetched_s = std.fmt.parseInt(i64, v, 10) catch 0;
+        }
+        var table: ?convert.Rates = null;
+        if (l.ratesPath()) |path| {
+            defer gpa.free(path);
+            const limit: std.Io.Limit = .limited(convert.max_bytes);
+            if (std.Io.Dir.cwd().readFileAlloc(l.app.io, path, gpa, limit) catch null) |body| {
+                defer gpa.free(body);
+                table = convert.Rates.parse(gpa, body);
+            }
+        }
+        l.rates.cached(table, fetched_s);
+    }
+
     fn fetchRates(l: *Live, which: usize) void {
-        const a = l.app.gpa.create(RatesAsk) catch {
-            l.rates_busy = false;
-            return;
-        };
+        const a = l.app.gpa.create(RatesAsk) catch return l.rates.fail();
         a.* = .{ .live = l, .which = which };
         nanoui.http.fetch(l.app.gpa, .{
             .url = convert.urls[which],
             .headers = &.{.{ .name = "Accept", .value = "application/json" }},
             .timeout = 10,
         }, a, RatesAsk.done);
-    }
-
-    /// Makes `r` the table in use and the panel's.
-    fn useRates(l: *Live, r: convert.Rates) void {
-        var old = l.rates;
-        l.rates = r;
-        l.s.rates = &l.rates.?;
-        if (old) |*o| o.deinit();
     }
 
     /// A search's page in the panel, or (null) not.
@@ -655,22 +649,18 @@ const RatesAsk = struct {
         defer gpa.destroy(a);
         const table = if (r.status == 200) convert.Rates.parse(gpa, r.body) else null;
         if (table) |t| {
-            l.rates_busy = false;
-            l.rates_at = account.now();
+            l.rates.landed(t, account.now());
             var at: [24]u8 = undefined;
-            const at_text = std.fmt.bufPrint(&at, "{d}", .{l.rates_at}) catch unreachable;
+            const at_text = std.fmt.bufPrint(&at, "{d}", .{l.rates.fetched_s}) catch unreachable;
             _ = config.kvSet(l.kv, rates_at_key, at_text);
             if (l.ratesPath()) |path| {
                 defer gpa.free(path);
                 std.Io.Dir.cwd().writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch {};
             }
-            l.useRates(t);
-            l.s.rates_failed = false;
         } else if (a.which + 1 < convert.urls.len) {
             return l.fetchRates(a.which + 1);
         } else {
-            l.rates_busy = false;
-            l.s.rates_failed = l.rates == null;
+            l.rates.fail();
         }
         l.s.ratesLanded();
         if (l.window) |w| w.redraw();
@@ -728,7 +718,8 @@ pub fn main(init: std.process.Init) !void {
     defer s.query.deinit();
     defer s.found.deinit();
     var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa), .cfg = cfg };
-    defer if (live.rates) |*r| r.deinit();
+    defer live.rates.deinit();
+    s.feed = &live.rates;
     defer if (live.ql_arena) |a| {
         a.deinit();
         init.gpa.destroy(a);

@@ -10,6 +10,7 @@
 //! Chrome, "calandar" for Calendar).
 const std = @import("std");
 const text = @import("text.zig");
+const assert = std.debug.assert;
 
 /// Up to this many matched bytes are kept for highlighting.
 pub const max_hits = 32;
@@ -323,69 +324,81 @@ fn subsequence(query: []const u8, name: []const u8) ?Match {
 pub const Ranked = struct {
     index: u32,
     match: Match,
+};
 
-    fn before(_: void, a: Ranked, b: Ranked) bool {
-        return a.match.score > b.match.score;
+/// The best candidates offered, best first, at most `out.len` of them. Of
+/// equal scores the one offered first stays first; past the end the worst
+/// falls off.
+pub const Top = struct {
+    out: []Ranked,
+    n: usize = 0,
+
+    pub fn init(out: []Ranked) Top {
+        return .{ .out = out };
+    }
+
+    pub fn offer(t: *Top, r: Ranked) void {
+        assert(t.n <= t.out.len);
+        var at = t.n;
+        while (at > 0 and t.out[at - 1].match.score < r.match.score) : (at -= 1) {}
+        if (at == t.out.len) return;
+        if (t.n < t.out.len) t.n += 1;
+        var j = t.n - 1;
+        while (j > at) : (j -= 1) t.out[j] = t.out[j - 1];
+        t.out[at] = r;
+    }
+
+    pub fn ranked(t: *const Top) []Ranked {
+        return t.out[0..t.n];
     }
 };
 
+/// A word for a thing (a pane's, a command's) matches a little lower than
+/// its name, and lights nothing in the name shown.
+const keyword_cost = 40;
+
+/// The match of `query` in `name` or one of its `keywords`, null below
+/// `min` (letters in order and typos are too loose for these).
+pub fn scoreNamed(
+    query: []const u8,
+    name: []const u8,
+    keywords: []const []const u8,
+    min: i32,
+) ?Match {
+    var best = score(query, name);
+    if (best != null and best.?.score < min) best = null;
+    for (keywords) |k| if (score(query, k)) |m| {
+        var via = m;
+        via.score -= keyword_cost;
+        via.n = 0;
+        if (m.score >= min and (best == null or via.score > best.?.score)) best = via;
+    };
+    return best;
+}
+
 const apps = @import("apps.zig");
-const App = apps.App;
 const Index = apps.Index;
 
-/// The best `out.len` of `names` for `query`, best first, with `boost`
-/// (how often each was opened) added to its score.
-pub fn rank(query: []const u8, names: []const []const u8, boost: []const u16, out: []Ranked) usize {
-    return rankNames(query, names, &.{}, boost, out);
-}
+/// A match through an app's pinyin scores this much under its name's.
+const pinyin_cost = 70;
 
-/// Like `rank`, with optional `pinyin` per name (same length as `names`).
-pub fn rankNames(query: []const u8, names: []const []const u8, pinyin: []const []const u8, boost: []const u16, out: []Ranked) usize {
-    return rankListed(query, names, pinyin, null, boost, out);
-}
-
-/// Ranks apps using each entry's display name and optional pinyin key.
-pub fn rankApps(query: []const u8, ix: *const Index, boost: []const u16, out: []Ranked) usize {
-    return rankListed(query, ix.names.items, &.{}, ix.apps.items, boost, out);
-}
-
-fn rankListed(
-    query: []const u8,
-    names: []const []const u8,
-    pinyin: []const []const u8,
-    apps_list: ?[]const App,
-    boost: []const u16,
-    out: []Ranked,
-) usize {
-    var n: usize = 0;
-    for (names, 0..) |name, i| {
-        var m = score(query, name);
-        const py = if (apps_list) |list| list[i].pinyin else if (i < pinyin.len) pinyin[i] else "";
-        if (py.len > 0) {
-            if (scoreAscii(query, py)) |mp| {
-                var via = mp;
-                via.score -= 70;
-                via.n = 0;
-                if (m == null or via.score > m.?.score) m = via;
-            }
-        }
-        const hit = m orelse continue;
-        var scored = hit;
-        if (i < boost.len) scored.score += @min(@as(i32, boost[i]) * 25, 250);
-        const r: Ranked = .{ .index = @intCast(i), .match = scored };
-        if (n < out.len) {
-            out[n] = r;
-            n += 1;
-            continue;
-        }
-        var worst: usize = 0;
-        for (out[1..n], 1..) |o, j| if (o.match.score < out[worst].match.score) {
-            worst = j;
+/// The best `out.len` apps for `query`, best first: by name or pinyin,
+/// lifted by how often each was opened.
+pub fn rankApps(query: []const u8, ix: *const Index, out: []Ranked) usize {
+    var top: Top = .init(out);
+    for (ix.apps.items, 0..) |app, i| {
+        var m = score(query, app.name);
+        if (app.pinyin.len > 0) if (scoreAscii(query, app.pinyin)) |mp| {
+            var via = mp;
+            via.score -= pinyin_cost;
+            via.n = 0;
+            if (m == null or via.score > m.?.score) m = via;
         };
-        if (scored.score > out[worst].match.score) out[worst] = r;
+        var scored = m orelse continue;
+        scored.score += @min(@as(i32, app.launches) * 25, 250);
+        top.offer(.{ .index = @intCast(i), .match = scored });
     }
-    std.sort.pdq(Ranked, out[0..n], {}, Ranked.before);
-    return n;
+    return top.n;
 }
 
 test "the tiers rank as they should" {
@@ -445,26 +458,57 @@ test "pinyin keys find CJK display names" {
     try ix.add("WeChat", "/Applications/WeChat.app");
     const a = ix.arena.allocator();
     ix.apps.items[0].name = try a.dupe(u8, "微信");
-    ix.names.items[0] = ix.apps.items[0].name;
     ix.apps.items[0].pinyin = try a.dupe(u8, "weixin");
     var out: [1]Ranked = undefined;
-    try t.expectEqual(@as(usize, 1), rankApps("weixin", &ix, &.{}, &out));
+    try t.expectEqual(@as(usize, 1), rankApps("weixin", &ix, &out));
     try t.expectEqual(@as(u32, 0), out[0].index);
 }
 
 test "rank keeps the best, best first, and opening often lifts a name" {
-    const names = [_][]const u8{ "Notes Helper", "Notes", "Numbers", "Keynote" };
+    const t = std.testing;
+    var ix = Index.init(t.allocator);
+    defer ix.deinit();
+    for ([_][]const u8{ "Notes Helper", "Notes", "Numbers", "Keynote" }) |name| {
+        try ix.add(name, name);
+    }
     var out: [3]Ranked = undefined;
-    const n = rank("no", &names, &.{}, &out);
-    try std.testing.expectEqual(@as(usize, 3), n);
-    try std.testing.expectEqual(@as(u32, 1), out[0].index);
-    try std.testing.expectEqual(@as(u32, 3), out[2].index);
+    try t.expectEqual(@as(usize, 3), rankApps("no", &ix, &out));
+    try t.expectEqual(@as(u32, 1), out[0].index);
+    try t.expectEqual(@as(u32, 3), out[2].index);
     // The helper, opened once, climbs past Notes.
-    const n2 = rank("no", &names, &.{ 1, 0, 0, 0 }, &out);
-    try std.testing.expectEqual(@as(usize, 3), n2);
-    try std.testing.expectEqual(@as(u32, 0), out[0].index);
+    ix.apps.items[0].launches = 1;
+    try t.expectEqual(@as(usize, 3), rankApps("no", &ix, &out));
+    try t.expectEqual(@as(u32, 0), out[0].index);
     // Only as many as there's room for: the worst one is the one dropped.
+    ix.apps.items[0].launches = 0;
     var two: [2]Ranked = undefined;
-    try std.testing.expectEqual(@as(usize, 2), rank("no", &names, &.{}, &two));
-    try std.testing.expectEqual(@as(u32, 0), two[1].index);
+    try t.expectEqual(@as(usize, 2), rankApps("no", &ix, &two));
+    try t.expectEqual(@as(u32, 0), two[1].index);
+}
+
+test "top keeps at most its room, best first, the first of equals first" {
+    const t = std.testing;
+    var out: [3]Ranked = undefined;
+    var top: Top = .init(&out);
+    for ([_]i32{ 5, 9, 5, 1, 9, 7, 5 }, 0..) |s, i| {
+        top.offer(.{ .index = @intCast(i), .match = .{ .score = s } });
+        try t.expect(top.n <= out.len);
+    }
+    try t.expectEqual(@as(usize, 3), top.n);
+    var got: [3]u32 = undefined;
+    for (top.ranked(), &got) |r, *g| g.* = r.index;
+    try t.expectEqualSlices(u32, &.{ 1, 4, 5 }, &got);
+    // No room: nothing is kept, and nothing breaks.
+    var none: Top = .init(&.{});
+    none.offer(.{ .index = 0, .match = .{ .score = 1 } });
+    try t.expectEqual(@as(usize, 0), none.n);
+}
+
+test "a keyword matches under the name and lights nothing; loose letters miss" {
+    const t = std.testing;
+    try t.expectEqual(@as(u8, 4), scoreNamed("blue", "Bluetooth", &.{"wireless"}, 500).?.n);
+    const k = scoreNamed("wireless", "Network", &.{"wireless"}, 500).?;
+    try t.expectEqual(@as(i32, 1000 - keyword_cost), k.score);
+    try t.expectEqual(@as(u8, 0), k.n);
+    try t.expect(scoreNamed("sfr", "Safari", &.{}, 500) == null);
 }

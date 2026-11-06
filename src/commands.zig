@@ -122,30 +122,13 @@ const min_score = 500;
 pub fn rank(query: []const u8, out: []search.Ranked) usize {
     const q = std.mem.trim(u8, query, " ");
     if (q.len < 2) return 0;
-    var n: usize = 0;
+    var top: search.Top = .init(out);
     for (all, 0..) |c, i| {
         if (!listed(i)) continue;
-        var best = search.score(q, c.name);
-        if (best != null and best.?.score < min_score) best = null;
-        for (c.keywords) |k| if (search.score(q, k)) |m| {
-            // A word for it lights nothing in the name shown.
-            var via = m;
-            via.score -= 40;
-            via.n = 0;
-            if (m.score >= min_score and (best == null or via.score > best.?.score)) best = via;
-        };
-        const m = best orelse continue;
-        // Insertion keeps the better first and the earlier of equals first;
-        // past `out`, the worst falls off.
-        var at = n;
-        while (at > 0 and out[at - 1].match.score < m.score) : (at -= 1) {}
-        if (at >= out.len) continue;
-        if (n < out.len) n += 1;
-        var j = n - 1;
-        while (j > at) : (j -= 1) out[j] = out[j - 1];
-        out[at] = .{ .index = @intCast(i), .match = m };
+        const m = search.scoreNamed(q, c.name, c.keywords, min_score) orelse continue;
+        top.offer(.{ .index = @intCast(i), .match = m });
     }
-    return n;
+    return top.n;
 }
 
 pub const Hooks = struct {

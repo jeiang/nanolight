@@ -42,6 +42,8 @@ pub fn webUrl(url: []const u8) bool {
 
 const max_quicklinks = 64;
 const max_quicklink_field = 512;
+/// A record keeps at most this many launch counts: the most opened.
+pub const max_launches = 512;
 
 pub const Settings = struct {
     /// 2 added `quicklinks`; a record of 1 still decodes.
@@ -63,10 +65,13 @@ pub fn encode(gpa: std.mem.Allocator, s: Settings) ![]u8 {
 /// The longest key name a record carries (shortcut.zig's `Choice.name`).
 pub const hotkey_max = 32;
 
-/// A record's body, or null when it isn't one of ours.
+/// A record's body, or null when it isn't one of ours. Past `max_launches`,
+/// the least opened apps are left out.
 pub fn decode(arena: std.mem.Allocator, body: []const u8) ?Settings {
-    const s = std.json.parseFromSliceLeaky(Settings, arena, body, .{ .ignore_unknown_fields = true }) catch return null;
+    const options: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
+    var s = std.json.parseFromSliceLeaky(Settings, arena, body, options) catch return null;
     if (s.v < 1 or s.v > 2 or s.hotkey.len == 0 or s.hotkey.len > hotkey_max) return null;
+    s.launches = mostOpened(arena, s.launches) catch return null;
     if (s.quicklinks.len > max_quicklinks) return null;
     for (s.quicklinks) |q| {
         if (q.name.len == 0 or q.url.len == 0) return null;
@@ -96,7 +101,7 @@ pub fn merge(arena: std.mem.Allocator, local: Settings, remote: Settings, prefer
         } else try list.append(arena, l);
     };
     sortByKey(list.items);
-    out.launches = list.items;
+    out.launches = try mostOpened(arena, list.items);
     return out;
 }
 
@@ -109,18 +114,33 @@ fn sortByKey(launches: []Launch) void {
     }.f);
 }
 
+/// Most opened first, the same on every run (of equals, the earlier key).
+fn sortByCount(launches: []Launch) void {
+    std.sort.pdq(Launch, launches, {}, struct {
+        fn f(_: void, a: Launch, b: Launch) bool {
+            if (a.count != b.count) return a.count > b.count;
+            return std.mem.lessThan(u8, launchSortKey(a), launchSortKey(b));
+        }
+    }.f);
+}
+
+/// `launches`, or past `max_launches` the most opened of them, in key order.
+fn mostOpened(arena: std.mem.Allocator, launches: []const Launch) ![]const Launch {
+    if (launches.len <= max_launches) return launches;
+    const ranked = try arena.dupe(Launch, launches);
+    sortByCount(ranked);
+    const kept = ranked[0..max_launches];
+    sortByKey(kept);
+    return kept;
+}
+
 /// `s` encoded in at most `limit` bytes, or null when even without launches
 /// it is not. Too many launches drop the least opened, the same ones on every
 /// run (ties go to the later key).
 pub fn encodeWithin(arena: std.mem.Allocator, s: Settings, limit: usize) !?[]u8 {
     var out = s;
     const ranked = try arena.dupe(Launch, s.launches);
-    std.sort.pdq(Launch, ranked, {}, struct {
-        fn f(_: void, a: Launch, b: Launch) bool {
-            if (a.count != b.count) return a.count > b.count;
-            return std.mem.lessThan(u8, launchSortKey(a), launchSortKey(b));
-        }
-    }.f);
+    sortByCount(ranked);
     var keep = ranked.len;
     while (true) {
         const body = try encode(arena, out);
@@ -234,4 +254,21 @@ test "a record too big for the limit sheds its least opened apps" {
     for (got.launches) |l| try std.testing.expect(l.count >= 100 - got.launches.len);
     try std.testing.expect((try encodeWithin(a, s, 10)) == null);
     try std.testing.expectEqualStrings(whole, (try encodeWithin(a, s, whole.len)).?);
+}
+
+test "a record keeps the most opened apps, at most max_launches" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const launches = try a.alloc(Launch, max_launches + 50);
+    for (launches, 0..) |*l, i| {
+        const path = try std.fmt.allocPrint(a, "/Applications/{d:0>4}", .{i});
+        l.* = .{ .name = "App", .path = path, .count = @intCast(i + 1) };
+    }
+    const s: Settings = .{ .hotkey = "cmd_space", .suggest = true, .at = 1, .launches = launches };
+    const got = decode(a, try encode(a, s)).?;
+    try std.testing.expectEqual(@as(usize, max_launches), got.launches.len);
+    for (got.launches) |l| try std.testing.expect(l.count > 50);
+    // Merged with itself, no more than the cap either.
+    try std.testing.expectEqual(@as(usize, max_launches), (try merge(a, s, s, false)).launches.len);
 }
