@@ -9,7 +9,7 @@
 //! the index). Everything stays on this computer: sync never carries it.
 //! Items from excluded apps, and items the source marked concealed or
 //! transient (password managers), are never stored, and nothing is stored
-//! while `enabled` is false.
+//! while `Store.on` is false.
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
@@ -82,17 +82,18 @@ pub const Item = struct {
 
 pub const Result = enum { added, bumped, disabled, excluded, concealed, empty, too_big, failed };
 
+/// config.toml's `[clipboard]` table.
 pub const Config = struct {
-    /// The user's preference.
-    enabled: bool = true,
-    /// False when the config file failed to load: nothing records, whatever `enabled` says.
-    config_ok: bool = true,
+    /// Seeds the app's own switch (prefs.zig's `.clipboard`); null leaves it be.
+    enabled: ?bool = null,
     /// 0: no age limit.
     retention_days: u32 = 7,
     /// 0: no limit on the count (`max_store_bytes` still applies).
     max_entries: u32 = 1000,
+    /// Return pastes text without its formatting; false copies the entry instead.
+    paste_plain_text: bool = true,
     /// Compared with an item's source, any case. Borrowed.
-    exclude_apps: []const []const u8 = &.{},
+    exclude_apps: []const []const u8 = &.{ "com.bitwarden.desktop", "com.yubico.yubioath" },
 };
 
 pub fn hash(kind: Kind, bytes: []const u8) u64 {
@@ -136,6 +137,10 @@ pub const Store = struct {
     /// Where it keeps its files; null keeps everything in memory (tests).
     dir: ?Io.Dir,
     cfg: Config,
+    /// The app's switch (prefs.zig's `.clipboard`): nothing records while it is off.
+    on: bool = true,
+    /// False when the config file failed to load: nothing records, whatever `on` says.
+    config_ok: bool = true,
     /// Newest first.
     entries: std.ArrayList(Entry) = .empty,
     /// A text longer than this goes to a blob (all of it stays here without a dir).
@@ -148,6 +153,16 @@ pub const Store = struct {
 
     pub fn init(gpa: std.mem.Allocator, io: Io, dir: ?Io.Dir, cfg: Config) Store {
         return .{ .gpa = gpa, .io = io, .dir = dir, .cfg = cfg };
+    }
+
+    /// Settings' switch turned to `on`, `kept` saying whether that was saved. Off holds at
+    /// once even when it was not (logged): recording stops now. On holds only once kept, so
+    /// a failed write never leaves history recording against what the next launch reads.
+    pub fn turn(s: *Store, on: bool, kept: bool) void {
+        if (kept or !on) s.on = on;
+        if (!kept and !on)
+            warn("nanolight: clipboard history is off until Nanolight quits; " ++
+                "that could not be saved", .{});
     }
 
     pub fn deinit(s: *Store) void {
@@ -172,7 +187,7 @@ pub const Store = struct {
     /// Keeps `item` copied at `now`, or says why not. A copy of what is
     /// already kept makes it newest and counts it.
     pub fn add(s: *Store, item: Item, now: i64) Result {
-        if (!s.cfg.enabled or !s.cfg.config_ok) return .disabled;
+        if (!s.on or !s.config_ok) return .disabled;
         if (item.concealed) return .concealed;
         if (s.excluded(item.source)) return .excluded;
         const content = if (item.kind == .image) item.png else item.text;
@@ -754,12 +769,30 @@ test "a copy is kept, newest first, and the same copy again bumps it" {
     try testing.expectEqual(@as(usize, 3), s.entries.items.len);
 }
 
-test "nothing is stored when disabled, excluded, concealed, empty or too big" {
-    var s = memory(.{ .enabled = false });
+test "the switch: on holds only once kept, off holds even when it is not" {
+    var s = memory(.{});
     defer s.deinit();
+    s.on = false;
+    s.turn(true, false);
+    try testing.expect(!s.on);
+    s.turn(true, true);
+    try testing.expect(s.on);
+    s.turn(false, false);
+    try testing.expect(!s.on);
+    s.on = true;
+    s.turn(false, true);
+    try testing.expect(!s.on);
+}
+
+test "nothing is stored when disabled, excluded, concealed, empty or too big" {
+    var s = memory(.{});
+    defer s.deinit();
+    s.on = false;
     try testing.expectEqual(Result.disabled, s.add(textItem("x", ""), 1));
-    s.cfg = .{ .config_ok = false };
+    s.on = true;
+    s.config_ok = false;
     try testing.expectEqual(Result.disabled, s.add(textItem("x", ""), 1));
+    s.config_ok = true;
     s.cfg = .{ .exclude_apps = &.{ "com.bitwarden.desktop", "KeePassXC.exe" } };
     try testing.expectEqual(Result.excluded, s.add(textItem("x", "com.Bitwarden.Desktop"), 1));
     try testing.expectEqual(Result.excluded, s.add(textItem("x", "keepassxc.exe"), 1));

@@ -10,18 +10,39 @@ const nanoui = @import("nanoui");
 const toml = @import("toml.zig");
 const shortcut = @import("shortcut.zig");
 const clipboard = @import("clipboard.zig");
-
+const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
+
 pub const Quicklink = settings.Quicklink;
 
-pub const Clipboard = struct {
-    /// Null when the file leaves it out: the app's own switch stands (on by default).
-    enabled: ?bool = null,
-    retention_days: u32 = 7,
-    max_entries: u32 = 1000,
-    paste_plain_text: bool = true,
-    /// Mac bundle IDs, Windows exe names, Linux app IDs.
-    exclude_apps: []const []const u8 = &.{ "com.bitwarden.desktop", "com.yubico.yubioath" },
+/// The most a config may hold: `load` reads no more.
+pub const max_bytes = 1 << 20;
+
+/// The file's keys: each field is the key of its name, a struct a table of
+/// its own (`parse`). A key left out of the file is null, the app's own
+/// value standing, or else the default.
+pub const Config = struct {
+    hotkey: ?[]const u8 = null,
+    suggestions: ?bool = null,
+    open_searches_in_browser: ?bool = null,
+    show_in_menu_bar: ?bool = null,
+    pop_to_root_seconds: u32 = 90,
+    apps: Apps = .{},
+    script_commands: ScriptCommands = .{},
+    /// Empty: the built-in ones.
+    quicklinks: []const Quicklink = &.{},
+    clipboard: clipboard.Config = .{},
+    sync: Sync = .{},
+};
+
+pub const Apps = struct {
+    /// Scanned like /Applications (depth 1).
+    extra_dirs: []const []const u8 = &.{},
+};
+
+pub const ScriptCommands = struct {
+    /// Besides `<data dir>/script-commands`; absolute once loaded (`absoluteScriptDirs`).
+    dirs: []const []const u8 = &.{},
 };
 
 pub const Sync = struct {
@@ -31,19 +52,18 @@ pub const Sync = struct {
     token_file: []const u8 = "",
 };
 
-/// A key left out of the file is null: the app's own value stands.
-pub const Config = struct {
-    hotkey: ?[]const u8 = null,
-    suggestions: ?bool = null,
-    open_searches_in_browser: ?bool = null,
-    show_in_menu_bar: ?bool = null,
-    pop_to_root_seconds: u32 = 90,
-    extra_app_dirs: []const []const u8 = &.{},
-    script_command_dirs: []const []const u8 = &.{},
-    /// Empty: the built-in ones.
-    quicklinks: []const Quicklink = &.{},
-    clipboard: Clipboard = .{},
-    sync: Sync = .{},
+/// What a file key seeds in the app's own settings (prefs.zig), in this
+/// order, and whether a change to it is a local change that syncs. `key`
+/// is its path in `Config` ("table.key") and names its applied record.
+const Seed = struct { key: []const u8, rule: Rule, syncs: bool = false };
+const Rule = union(enum) { hotkey, quicklinks, flag: prefs.Key };
+const seeds = [_]Seed{
+    .{ .key = "hotkey", .rule = .hotkey, .syncs = true },
+    .{ .key = "quicklinks", .rule = .quicklinks, .syncs = true },
+    .{ .key = "suggestions", .rule = .{ .flag = .suggest }, .syncs = true },
+    .{ .key = "open_searches_in_browser", .rule = .{ .flag = .searches_out } },
+    .{ .key = "show_in_menu_bar", .rule = .{ .flag = .menu_bar } },
+    .{ .key = "clipboard.enabled", .rule = .{ .flag = .clipboard } },
 };
 
 /// What `load` found.
@@ -64,12 +84,26 @@ pub const Loaded = union(enum) {
             .defaults, .unusable => .{},
         };
     }
+
+    /// The clipboard's values in use. An unusable load knows no retention or
+    /// count limit: only the store's fixed size budget prunes.
+    pub fn clipboardConfig(l: Loaded) clipboard.Config {
+        var c = l.config().clipboard;
+        if (l == .unusable) {
+            c.retention_days = 0;
+            c.max_entries = 0;
+        }
+        return c;
+    }
 };
 
 /// Where and why a config failed to load; `line` is 0 for a wrong value.
+/// `ignored` lists what a file that loads has that the app leaves out
+/// (an unknown key, a dropped quicklink, a hotkey this system can't use).
 pub const Problem = struct {
     line: usize = 0,
     msg: []const u8 = "",
+    ignored: std.ArrayList([]const u8) = .empty,
 };
 
 pub const Error = error{ Invalid, OutOfMemory };
@@ -79,26 +113,6 @@ fn warn(comptime fmt: []const u8, args: anytype) void {
     if (!@import("builtin").is_test) std.log.warn(fmt, args);
 }
 
-/// The kv keys the settings live under (main.zig reads and writes them too).
-pub const suggest_key = "nanolight.suggest";
-/// "1": Return opens searches in the browser (issue #10).
-pub const searches_out_key = "nanolight.searches_out";
-/// "0": no menu bar icon (issue #8).
-pub const menu_bar_key = "nanolight.menu_bar";
-/// The quicklinks in use, as JSON: the config's, or what sync last brought.
-pub const quicklinks_key = "nanolight.quicklinks";
-/// "0": clipboard history is off (the app's own switch; the config's
-/// `[clipboard] enabled` seeds it).
-pub const clipboard_key = "nanolight.clipboard.enabled";
-/// When this machine last changed its key or suggestions (settings.zig's `at`).
-pub const sync_at_key = "nanolight.sync.at";
-
-const applied_prefix = "nanolight.config.";
-
-/// Set once a config file has been applied; a later launch that finds none
-/// must not fall back to defaults.
-const seen_key = "nanolight.config.seen";
-
 /// Reads the first config file `candidates` finds. Strings live as long as `arena`.
 pub fn load(
     arena: std.mem.Allocator,
@@ -106,7 +120,7 @@ pub fn load(
     env: *const std.process.Environ.Map,
     kv: nanoui.kv.Store,
 ) Loaded {
-    const data = nanoui.path(arena, .data, "Nanolight") catch null;
+    const data = prefs.dataDir(arena) catch null;
     return loadFrom(arena, io, candidates(arena, env, data) catch return .unusable, kv);
 }
 
@@ -143,10 +157,10 @@ fn absoluteScriptDirs(
 ) !Config {
     const base = try std.Io.Dir.cwd()
         .realPathFileAlloc(io, std.fs.path.dirname(config_path) orelse ".", arena);
-    const dirs = try arena.alloc([]const u8, c.script_command_dirs.len);
-    for (c.script_command_dirs, dirs) |d, *out|
+    const dirs = try arena.alloc([]const u8, c.script_commands.dirs.len);
+    for (c.script_commands.dirs, dirs) |d, *out|
         out.* = if (std.fs.path.isAbsolute(d)) d else try std.fs.path.join(arena, &.{ base, d });
-    c.script_command_dirs = dirs;
+    c.script_commands.dirs = dirs;
     return c.*;
 }
 
@@ -157,7 +171,8 @@ fn loadFrom(
     kv: nanoui.kv.Store,
 ) Loaded {
     for (paths) |path| {
-        const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch |e| {
+        const cwd = std.Io.Dir.cwd();
+        const text = cwd.readFileAlloc(io, path, arena, .limited(max_bytes)) catch |e| {
             if (e == error.FileNotFound) continue;
             std.log.warn("nanolight: {s}: {t}; using the defaults", .{ path, e });
             return .unusable;
@@ -174,11 +189,15 @@ fn loadFrom(
                 std.log.warn("nanolight: {s}: {s}; using the defaults", .{ path, problem.msg });
             return .unusable;
         };
+        for (problem.ignored.items) |what| warn("nanolight: {s}: {s}; ignored", .{ path, what });
         return .{ .file = absoluteScriptDirs(arena, io, &c, path) catch return .unusable };
     }
     // Unreadable counts as applied before: the defaults must not stand in for a lost file.
-    const seen = kv.get(arena, seen_key) catch |e| {
-        warn("nanolight: could not read {s}: {t}; clipboard history is paused", .{ seen_key, e });
+    const seen = kv.get(arena, prefs.Key.config_seen.name()) catch |e| {
+        warn(
+            "nanolight: could not read {s}: {t}; clipboard history is paused",
+            .{ prefs.Key.config_seen.name(), e },
+        );
         return .unusable;
     };
     if (seen != null) {
@@ -199,61 +218,11 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8, problem: *Problem) Erro
         error.OutOfMemory => return error.OutOfMemory,
     };
     var r: Reader = .{ .a = arena, .problem = problem };
-    var c: Config = .{};
-    c.hotkey = try r.get([]const u8, root, "", "hotkey");
-    c.suggestions = try r.get(bool, root, "", "suggestions");
-    c.open_searches_in_browser = try r.get(bool, root, "", "open_searches_in_browser");
-    c.show_in_menu_bar = try r.get(bool, root, "", "show_in_menu_bar");
-    if (try r.get(u32, root, "", "pop_to_root_seconds")) |v| c.pop_to_root_seconds = v;
-    r.unknown(
-        root,
-        "",
-        &.{
-            "hotkey",
-            "suggestions",
-            "open_searches_in_browser",
-            "show_in_menu_bar",
-            "pop_to_root_seconds",
-            "apps",
-            "script_commands",
-            "quicklinks",
-            "clipboard",
-            "sync",
-        },
-    );
-
-    if (try r.table(root, "apps")) |t| {
-        if (try r.get([]const []const u8, t, "apps.", "extra_dirs")) |v| c.extra_app_dirs = v;
-        r.unknown(t, "apps.", &.{"extra_dirs"});
-    }
-    if (try r.table(root, "script_commands")) |t| {
-        if (try r.get(
-            []const []const u8,
-            t,
-            "script_commands.",
-            "dirs",
-        )) |v| c.script_command_dirs = v;
-        r.unknown(t, "script_commands.", &.{"dirs"});
-    }
-    if (root.get("quicklinks")) |v| c.quicklinks = try r.quicklinks(v);
-    if (try r.table(root, "clipboard")) |t| {
-        const s = "clipboard.";
-        c.clipboard.enabled = try r.get(bool, t, s, "enabled");
-        if (try r.get(u32, t, s, "retention_days")) |x| c.clipboard.retention_days = x;
-        if (try r.get(u32, t, s, "max_entries")) |x| c.clipboard.max_entries = x;
-        if (try r.get(bool, t, s, "paste_plain_text")) |x| c.clipboard.paste_plain_text = x;
-        if (try r.get([]const []const u8, t, s, "exclude_apps")) |x| c.clipboard.exclude_apps = x;
-        r.unknown(
-            t,
-            s,
-            &.{ "enabled", "retention_days", "max_entries", "paste_plain_text", "exclude_apps" },
-        );
-    }
-    if (try r.table(root, "sync")) |t| {
-        if (try r.get([]const u8, t, "sync.", "url")) |x| c.sync.url = x;
-        if (try r.get([]const u8, t, "sync.", "token_file")) |x| c.sync.token_file = x;
-        r.unknown(t, "sync.", &.{ "url", "token_file" });
-    }
+    var c = try r.table(Config, root, "");
+    if (c.hotkey) |h| if (shortcut.Choice.parse(h) == null) {
+        try r.ignore("hotkey \"{s}\" is not a shortcut this system can use", .{h});
+        c.hotkey = null;
+    };
     return c;
 }
 
@@ -262,14 +231,44 @@ const Reader = struct {
     problem: *Problem,
 
     fn bad(r: *Reader, scope: []const u8, key: []const u8, what: []const u8) Error {
-        r.problem.* = .{
-            .msg = std.fmt.allocPrint(
-                r.a,
-                "{s}{s} must be {s}",
-                .{ scope, key, what },
-            ) catch "a value has the wrong type",
-        };
+        r.problem.line = 0;
+        r.problem.msg = std.fmt.allocPrint(
+            r.a,
+            "{s}{s} must be {s}",
+            .{ scope, key, what },
+        ) catch "a value has the wrong type";
         return error.Invalid;
+    }
+
+    fn ignore(r: *Reader, comptime fmt: []const u8, args: anytype) Error!void {
+        try r.problem.ignored.append(r.a, try std.fmt.allocPrint(r.a, fmt, args));
+    }
+
+    /// `T` read from `t`, the table at `scope` ("" or "name."): each field
+    /// its key, a struct field a table, and any other key ignored.
+    fn table(
+        r: *Reader,
+        comptime T: type,
+        t: *const toml.Table,
+        comptime scope: []const u8,
+    ) Error!T {
+        var out: T = .{};
+        const info = @typeInfo(T).@"struct";
+        inline for (info.field_names, info.field_types) |name, F| {
+            const dest = &@field(out, name);
+            if (F == []const Quicklink) {
+                if (t.get(name)) |v| dest.* = try r.quicklinks(v);
+            } else if (@typeInfo(F) == .@"struct") {
+                if (t.get(name)) |v| {
+                    if (v != .table) return r.bad(scope, name, "a table");
+                    dest.* = try r.table(F, v.table, scope ++ name ++ ".");
+                }
+            } else if (@typeInfo(F) == .optional) {
+                dest.* = try r.get(@typeInfo(F).optional.child, t, scope, name);
+            } else if (try r.get(F, t, scope, name)) |v| dest.* = v;
+        }
+        try r.unknown(t, scope, comptime std.meta.fieldNames(T));
+        return out;
     }
 
     fn get(
@@ -300,15 +299,10 @@ const Reader = struct {
         }
     }
 
-    fn table(r: *Reader, t: *const toml.Table, key: []const u8) Error!?*const toml.Table {
-        const v = t.get(key) orelse return null;
-        return if (v == .table) v.table else r.bad("", key, "a table");
-    }
-
     fn quicklinks(r: *Reader, v: toml.Value) Error![]const Quicklink {
         if (v != .array) return r.bad("", "quicklinks", "a list of tables ([[quicklinks]])");
         var out: std.ArrayList(Quicklink) = .empty;
-        for (v.items()) |item| {
+        for (v.items(), 0..) |item, i| {
             if (item != .table) return r.bad("", "quicklinks", "a list of tables ([[quicklinks]])");
             const t = item.table;
             const name = try r.get([]const u8, t, "quicklinks.", "name") orelse
@@ -317,23 +311,17 @@ const Reader = struct {
                 return r.bad("quicklinks.", "url", "set, as a string");
             if (name.len == 0 or
                 url.len == 0) return r.bad("quicklinks.", "name and url", "not empty");
-            r.unknown(t, "quicklinks.", &.{ "name", "url", "keyword" });
-            if (!settings.webUrl(url)) {
-                warn(
-                    "nanolight: config: quicklink \"{s}\": only http and https addresses work; " ++
-                        "ignored",
-                    .{name},
-                );
+            try r.unknown(t, "quicklinks.", comptime std.meta.fieldNames(Quicklink));
+            const q: Quicklink = .{
+                .name = name,
+                .url = url,
+                .keyword = try r.get([]const u8, t, "quicklinks.", "keyword") orelse "",
+            };
+            if (settings.quicklinkProblem(i, q)) |why| {
+                try r.ignore("quicklink \"{s}\": {s}", .{ name, why });
                 continue;
             }
-            try out.append(
-                r.a,
-                .{
-                    .name = name,
-                    .url = url,
-                    .keyword = try r.get([]const u8, t, "quicklinks.", "keyword") orelse "",
-                },
-            );
+            try out.append(r.a, q);
         }
         return out.items;
     }
@@ -343,40 +331,22 @@ const Reader = struct {
         r: *Reader,
         t: *const toml.Table,
         scope: []const u8,
-        known: []const []const u8,
-    ) void {
-        _ = r;
+        known: []const [:0]const u8,
+    ) Error!void {
         outer: for (t.map.keys()) |k| {
             for (known) |name| if (std.mem.eql(u8, k, name)) continue :outer;
-            warn("nanolight: config: unknown key {s}{s} is ignored", .{ scope, k });
+            try r.ignore("unknown key {s}{s}", .{ scope, k });
         }
     }
 };
 
 // ----- the file seeds, the app's own changes win -----
 
-/// Writes `value` at `key`; false, and logged, when it could not be kept.
-pub fn kvSet(store: nanoui.kv.Store, key: []const u8, value: []const u8) bool {
-    store.set(key, value) catch |e| {
-        warn("nanolight: could not save {s}: {t}", .{ key, e });
-        return false;
-    };
-    return true;
-}
-
-const applied_key_max = 96;
-
-/// Where the file's last-applied value for `key` is kept. Keys are this file's constants.
-fn appliedKey(buf: *[applied_key_max]u8, key: []const u8) []const u8 {
-    std.debug.assert(applied_prefix.len + key.len <= applied_key_max);
-    return std.fmt.bufPrint(buf, "{s}{s}", .{ applied_prefix, key }) catch unreachable;
-}
-
 /// Whether the file's `value` for `key` is new since it was last applied. A record that
 /// cannot be read counts as applied: the app's own value stands.
 fn fresh(store: nanoui.kv.Store, gpa: std.mem.Allocator, key: []const u8, value: []const u8) bool {
-    var buf: [applied_key_max]u8 = undefined;
-    const k = appliedKey(&buf, key);
+    var buf: [prefs.applied_key_max]u8 = undefined;
+    const k = prefs.appliedKey(&buf, key);
     const old = store.get(gpa, k) catch |e| {
         warn("nanolight: could not read {s}: {t}; the config's value is not applied", .{ k, e });
         return false;
@@ -388,111 +358,16 @@ fn fresh(store: nanoui.kv.Store, gpa: std.mem.Allocator, key: []const u8, value:
 /// Records `value` as applied for `key`; only after the value itself was kept, so a
 /// failed write is tried again at the next start rather than lost.
 fn record(store: nanoui.kv.Store, key: []const u8, value: []const u8) void {
-    var buf: [applied_key_max]u8 = undefined;
+    var buf: [prefs.applied_key_max]u8 = undefined;
     // A failure is logged; the next start applies the same value again.
-    _ = kvSet(store, appliedKey(&buf, key), value);
+    _ = prefs.put(store, prefs.appliedKey(&buf, key), value);
 }
 
 /// A key left out of the file is forgotten, so putting its old value back
 /// applies it again.
 fn forget(store: nanoui.kv.Store, key: []const u8) void {
-    var buf: [applied_key_max]u8 = undefined;
-    store.remove(appliedKey(&buf, key));
-}
-
-/// One on/off key: its name in the file, where the app keeps it, and the file's value.
-const SeedBool = struct { key: []const u8, kv_key: []const u8, value: ?bool, syncs: bool = false };
-
-fn seedBool(store: nanoui.kv.Store, gpa: std.mem.Allocator, b: SeedBool) bool {
-    const v = b.value orelse {
-        forget(store, b.key);
-        return false;
-    };
-    const text = if (v) "1" else "0";
-    if (!fresh(store, gpa, b.key, text)) return false;
-    if (!kvSet(store, b.kv_key, text)) return false;
-    record(store, b.key, text);
-    return true;
-}
-
-fn seedQuicklinks(
-    store: nanoui.kv.Store,
-    gpa: std.mem.Allocator,
-    list: []const Quicklink,
-    synced: *bool,
-) void {
-    if (list.len == 0) return forget(store, "quicklinks");
-    const json = std.json.Stringify.valueAlloc(gpa, list, .{}) catch return;
-    defer gpa.free(json);
-    if (!fresh(store, gpa, "quicklinks", json)) return;
-    if (!kvSet(store, quicklinks_key, json)) return;
-    record(store, "quicklinks", json);
-    synced.* = true;
-}
-
-/// Whether clipboard history records: the app's own switch, else `default` (the file's
-/// value, on when it has none). A switch that cannot be read is off.
-pub fn clipboardEnabled(store: nanoui.kv.Store, gpa: std.mem.Allocator, default: bool) bool {
-    const v = store.get(gpa, clipboard_key) catch |e| {
-        warn("nanolight: could not read {s}: {t}; clipboard history is off", .{ clipboard_key, e });
-        return false;
-    } orelse return default;
-    defer gpa.free(v);
-    return !std.mem.eql(u8, v, "0");
-}
-
-/// Settings' clipboard switch turned to `on` (from `was`): kept, then what history is
-/// now. Off holds at once even when it could not be kept (logged): recording stops now.
-/// On holds only once kept, so a failed write never leaves history recording against
-/// what the next launch reads.
-pub fn switchClipboard(store: nanoui.kv.Store, on: bool, was: bool) bool {
-    if (kvSet(store, clipboard_key, if (on) "1" else "0")) return on;
-    if (on) return was;
-    warn("nanolight: clipboard history is off until Nanolight quits; that could not be saved", .{});
-    return false;
-}
-
-/// The clipboard store's settings for what `load` found. An unusable load gives no
-/// retention or exclude list: nothing records (`config_ok`) and only the store's fixed
-/// size budget prunes.
-pub fn clipboardConfig(
-    store: nanoui.kv.Store,
-    gpa: std.mem.Allocator,
-    loaded: Loaded,
-) clipboard.Config {
-    const c = loaded.config().clipboard;
-    const known = loaded != .unusable;
-    return .{
-        .enabled = clipboardEnabled(store, gpa, c.enabled orelse true),
-        .config_ok = known,
-        .retention_days = if (known) c.retention_days else 0,
-        .max_entries = if (known) c.max_entries else 0,
-        .exclude_apps = c.exclude_apps,
-    };
-}
-
-/// The quicklinks kept by the file or by sync; empty means the built-in ones.
-pub fn loadQuicklinks(arena: std.mem.Allocator, store: nanoui.kv.Store) []const Quicklink {
-    const text = (store.get(arena, quicklinks_key) catch return &.{}) orelse return &.{};
-    return std.json.parseFromSliceLeaky(
-        []const Quicklink,
-        arena,
-        text,
-        .{ .ignore_unknown_fields = true },
-    ) catch &.{};
-}
-
-/// Keeps `list` as the quicklinks in use; empty goes back to the built-in ones.
-pub fn saveQuicklinks(
-    store: nanoui.kv.Store,
-    gpa: std.mem.Allocator,
-    list: []const Quicklink,
-) void {
-    if (list.len == 0) return store.remove(quicklinks_key);
-    const json = std.json.Stringify.valueAlloc(gpa, list, .{}) catch return;
-    defer gpa.free(json);
-    // A failure is logged; the list in memory stands for this run.
-    _ = kvSet(store, quicklinks_key, json);
+    var buf: [prefs.applied_key_max]u8 = undefined;
+    store.remove(prefs.appliedKey(&buf, key));
 }
 
 /// Seeds from what `load` found. Only a file does: a missing one would forget what the
@@ -504,43 +379,71 @@ pub fn apply(store: nanoui.kv.Store, gpa: std.mem.Allocator, loaded: Loaded, now
     }
 }
 
+/// The type of `Config`'s field at `path`: "key", or "table.key".
+fn Field(comptime path: []const u8) type {
+    const dot = std.mem.indexOfScalar(u8, path, '.') orelse return @FieldType(Config, path);
+    std.debug.assert(std.mem.indexOfScalarPos(u8, path, dot + 1, '.') == null);
+    return @FieldType(@FieldType(Config, path[0..dot]), path[dot + 1 ..]);
+}
+
+fn field(c: Config, comptime path: []const u8) Field(path) {
+    const dot = comptime std.mem.indexOfScalar(u8, path, '.');
+    if (dot) |d| return @field(@field(c, path[0..d]), path[d + 1 ..]);
+    return @field(c, path);
+}
+
 /// Applies the file's values that changed since they were last applied, each value
-/// before its applied record. A changed hotkey, suggestions or quicklinks list counts as
-/// a local change at `now`, so it syncs.
+/// before its applied record. A changed key that syncs counts as a local change at
+/// `now`, so it syncs.
 fn seed(store: nanoui.kv.Store, gpa: std.mem.Allocator, c: Config, now: i64) void {
-    var synced = false;
     // A failure is logged; the next start with no file then uses the defaults.
-    _ = kvSet(store, seen_key, "1");
-    if (c.hotkey) |h| {
-        if (shortcut.Choice.parse(h)) |choice| {
-            if (fresh(store, gpa, "hotkey", h) and shortcut.save(store, choice)) {
-                record(store, "hotkey", h);
-                synced = true;
-            }
-        } else warn(
-            "nanolight: config: hotkey \"{s}\" is not a shortcut this system can use; ignored",
-            .{h},
-        );
-    } else forget(store, "hotkey");
-    seedQuicklinks(store, gpa, c.quicklinks, &synced);
-    const bools = [_]SeedBool{
-        .{ .key = "suggestions", .kv_key = suggest_key, .value = c.suggestions, .syncs = true },
-        .{
-            .key = "open_searches_in_browser",
-            .kv_key = searches_out_key,
-            .value = c.open_searches_in_browser,
+    _ = prefs.setText(store, .config_seen, "1");
+    var synced = false;
+    inline for (seeds) |s| {
+        if (seedOne(store, gpa, s, field(c, s.key)) and s.syncs) synced = true;
+    }
+    // A failure is logged; the change still syncs at the next one.
+    if (synced) _ = prefs.setInt(store, .sync_at, now);
+}
+
+/// Applies the file's `value` for `s` if it is new: whether it was. Left out
+/// of the file, its record is forgotten.
+fn seedOne(store: nanoui.kv.Store, gpa: std.mem.Allocator, comptime s: Seed, value: anytype) bool {
+    switch (s.rule) {
+        .flag => |k| {
+            const on = value orelse {
+                forget(store, s.key);
+                return false;
+            };
+            const text = if (on) "1" else "0";
+            if (!fresh(store, gpa, s.key, text)) return false;
+            if (!prefs.setFlag(store, k, on)) return false;
+            record(store, s.key, text);
         },
-        .{ .key = "show_in_menu_bar", .kv_key = menu_bar_key, .value = c.show_in_menu_bar },
-        .{ .key = "clipboard.enabled", .kv_key = clipboard_key, .value = c.clipboard.enabled },
-    };
-    for (bools) |b| {
-        if (seedBool(store, gpa, b) and b.syncs) synced = true;
+        .hotkey => {
+            const name = value orelse {
+                forget(store, s.key);
+                return false;
+            };
+            // `parse` lets through only a hotkey this system can use.
+            const choice = shortcut.Choice.parse(name) orelse unreachable;
+            if (!fresh(store, gpa, s.key, name)) return false;
+            if (!shortcut.save(store, choice)) return false;
+            record(store, s.key, name);
+        },
+        .quicklinks => {
+            if (value.len == 0) {
+                forget(store, s.key);
+                return false;
+            }
+            const json = prefs.quicklinksJson(gpa, value) orelse return false;
+            defer gpa.free(json);
+            if (!fresh(store, gpa, s.key, json)) return false;
+            if (!prefs.setText(store, .quicklinks, json)) return false;
+            record(store, s.key, json);
+        },
     }
-    if (synced) {
-        var buf: [24]u8 = undefined;
-        // A failure is logged; the change still syncs at the next one.
-        _ = kvSet(store, sync_at_key, std.fmt.bufPrint(&buf, "{d}", .{now}) catch unreachable);
-    }
+    return true;
 }
 
 // ----- tests -----
@@ -571,7 +474,8 @@ test "an empty file is the defaults" {
 test "the whole example" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const c = try parseOk(arena.allocator(),
+    var p: Problem = .{};
+    const c = try parse(arena.allocator(),
         \\hotkey = "ctrl_space"
         \\suggestions = false
         \\open_searches_in_browser = true
@@ -603,14 +507,15 @@ test "the whole example" {
         \\[sync]
         \\url = "http://100.64.0.1:8890"
         \\token_file = "/run/secrets/token"
-    );
+    , &p);
+    try testing.expectEqual(@as(usize, 0), p.ignored.items.len);
     try testing.expectEqualStrings("ctrl_space", c.hotkey.?);
     try testing.expectEqual(false, c.suggestions.?);
     try testing.expectEqual(true, c.open_searches_in_browser.?);
     try testing.expectEqual(false, c.show_in_menu_bar.?);
     try testing.expectEqual(@as(u32, 0), c.pop_to_root_seconds);
-    try testing.expectEqualStrings("/Applications/Nix Apps", c.extra_app_dirs[0]);
-    try testing.expectEqual(@as(usize, 2), c.script_command_dirs.len);
+    try testing.expectEqualStrings("/Applications/Nix Apps", c.apps.extra_dirs[0]);
+    try testing.expectEqual(@as(usize, 2), c.script_commands.dirs.len);
     try testing.expectEqual(@as(usize, 2), c.quicklinks.len);
     try testing.expectEqualStrings("ddg", c.quicklinks[0].keyword);
     try testing.expectEqualStrings("", c.quicklinks[1].keyword);
@@ -649,8 +554,34 @@ test "bad files say what and where" {
         try testing.expect(p.msg.len > 0);
     }
     // An unknown key is ignored, the rest read.
-    const c = try parseOk(arena.allocator(), "colour = 1\nsuggestions = false\n");
+    p = .{};
+    const c = try parse(arena.allocator(), "colour = 1\nsuggestions = false\n", &p);
     try testing.expectEqual(false, c.suggestions.?);
+    try testing.expectEqual(@as(usize, 1), p.ignored.items.len);
+    try testing.expectEqualStrings("unknown key colour", p.ignored.items[0]);
+}
+
+test "an unknown key in a table is named with its table" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var p: Problem = .{};
+    _ = try parse(arena.allocator(), "[clipboard]\nretention = 3\n[[quicklinks]]\n" ++
+        "name = \"a\"\nurl = \"https://a/{argument}\"\nicon = \"x\"\n", &p);
+    try testing.expectEqual(@as(usize, 2), p.ignored.items.len);
+    // In the order of `Config`'s fields.
+    try testing.expectEqualStrings("unknown key quicklinks.icon", p.ignored.items[0]);
+    try testing.expectEqualStrings("unknown key clipboard.retention", p.ignored.items[1]);
+}
+
+test "a hotkey this system cannot use is ignored, the rest read" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var p: Problem = .{};
+    const c = try parse(arena.allocator(), "hotkey = \"hyper_banana\"\nsuggestions = false\n", &p);
+    try testing.expect(c.hotkey == null);
+    try testing.expectEqual(false, c.suggestions.?);
+    try testing.expectEqual(@as(usize, 1), p.ignored.items.len);
+    try testing.expect(std.mem.indexOf(u8, p.ignored.items[0], "hyper_banana") != null);
 }
 
 test "quicklinks as an inline array read the same" {
@@ -676,6 +607,14 @@ fn expectKv(store: nanoui.kv.Store, key: []const u8, want: ?[]const u8) !void {
         v orelse return error.TestExpectedEqual,
     ) else try testing.expect(v == null);
 }
+
+const suggest_key = prefs.Key.suggest.name();
+const searches_out_key = prefs.Key.searches_out.name();
+const menu_bar_key = prefs.Key.menu_bar.name();
+const clipboard_key = prefs.Key.clipboard.name();
+const sync_at_key = prefs.Key.sync_at.name();
+const seen_key = prefs.Key.config_seen.name();
+const applied_prefix = prefs.applied_prefix;
 
 test "the file seeds once, then the app's own change wins" {
     var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
@@ -749,20 +688,21 @@ test "clipboard history's switch: the file seeds it, the app's choice wins, and 
     var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
     defer m.deinit();
     const store = m.store();
-    try testing.expect(clipboardEnabled(store, testing.allocator, true));
-    try testing.expect(!clipboardEnabled(store, testing.allocator, false));
-    seed(store, testing.allocator, .{ .clipboard = .{ .enabled = false } }, 7);
+    const a = testing.allocator;
+    try testing.expect(prefs.flagOr(store, a, .clipboard, true));
+    try testing.expect(!prefs.flagOr(store, a, .clipboard, false));
+    seed(store, a, .{ .clipboard = .{ .enabled = false } }, 7);
     try expectKv(store, clipboard_key, "0");
-    try testing.expect(!clipboardEnabled(store, testing.allocator, true));
+    try testing.expect(!prefs.flagOr(store, a, .clipboard, true));
     try expectKv(store, sync_at_key, null);
     // Turned on in the app; the same file leaves it on.
     try store.set(clipboard_key, "1");
-    seed(store, testing.allocator, .{ .clipboard = .{ .enabled = false } }, 8);
-    try testing.expect(clipboardEnabled(store, testing.allocator, false));
+    seed(store, a, .{ .clipboard = .{ .enabled = false } }, 8);
+    try testing.expect(prefs.flagOr(store, a, .clipboard, false));
     // The file changes its mind: that applies.
-    seed(store, testing.allocator, .{ .clipboard = .{ .enabled = true } }, 9);
+    seed(store, a, .{ .clipboard = .{ .enabled = true } }, 9);
     try expectKv(store, clipboard_key, "1");
-    seed(store, testing.allocator, .{ .clipboard = .{ .enabled = false } }, 10);
+    seed(store, a, .{ .clipboard = .{ .enabled = false } }, 10);
     try expectKv(store, clipboard_key, "0");
 }
 
@@ -788,11 +728,6 @@ test "a file that leaves clipboard history out never turns it back on" {
     seed(store, testing.allocator, .{}, 4);
     try expectKv(store, clipboard_key, "0");
     try expectKv(store, applied_prefix ++ "clipboard.enabled", null);
-    // With no switch kept, a file without the key leaves it on.
-    var fresh_m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
-    defer fresh_m.deinit();
-    const kept = clipboardConfig(fresh_m.store(), testing.allocator, .{ .file = .{} });
-    try testing.expect(kept.enabled);
 }
 
 test "a value that cannot be written is not recorded as applied, and applies next start" {
@@ -812,26 +747,6 @@ test "a value that cannot be written is not recorded as applied, and applies nex
     try testing.expect(shortcut.load(store, testing.allocator).eql(.ctrl_space));
 }
 
-test "the clipboard switch fails closed" {
-    var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
-    defer m.deinit();
-    const store = m.store();
-    var failing: std.testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
-    // A switch that cannot be read is off, whatever it holds.
-    try store.set(clipboard_key, "1");
-    try testing.expect(!clipboardEnabled(store, failing.allocator(), true));
-    // Settings' switch: on holds only once kept; off holds even when it is not.
-    m.gpa = failing.allocator();
-    try testing.expect(!switchClipboard(store, true, false));
-    try testing.expect(!switchClipboard(store, false, true));
-    m.gpa = testing.allocator;
-    try expectKv(store, clipboard_key, "1");
-    try testing.expect(!switchClipboard(store, false, true));
-    try expectKv(store, clipboard_key, "0");
-    try testing.expect(switchClipboard(store, true, false));
-    try expectKv(store, clipboard_key, "1");
-}
-
 test "a headless or unusable load seeds nothing and records nothing" {
     var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
     defer m.deinit();
@@ -840,22 +755,26 @@ test "a headless or unusable load seeds nothing and records nothing" {
     apply(store, testing.allocator, .defaults, 1);
     try testing.expect(!store.has(seen_key) and !store.has(suggest_key));
     try testing.expect(!store.has(clipboard_key));
-    const c = clipboardConfig(store, testing.allocator, .unusable);
-    try testing.expect(c.enabled and !c.config_ok);
-    try testing.expectEqual(@as(u32, 0), c.retention_days);
-    try testing.expectEqual(@as(u32, 0), c.max_entries);
-    try testing.expect(clipboardConfig(store, testing.allocator, .defaults).config_ok);
+    const unusable = (Loaded{ .unusable = {} }).clipboardConfig();
+    try testing.expectEqual(@as(u32, 0), unusable.retention_days);
+    try testing.expectEqual(@as(u32, 0), unusable.max_entries);
+    const defaults = (Loaded{ .defaults = {} }).clipboardConfig();
+    try testing.expectEqual(@as(u32, 7), defaults.retention_days);
     apply(store, testing.allocator, .{ .file = .{ .suggestions = false } }, 1);
     try testing.expect(store.has(seen_key));
     try expectKv(store, suggest_key, "0");
 }
 
-test "a hotkey this system cannot use is ignored, and not recorded" {
+test "a hotkey this system cannot use is not recorded" {
     var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
     defer m.deinit();
     const store = m.store();
-    seed(store, testing.allocator, .{ .hotkey = "hyper_banana" }, 5);
-    try testing.expect(!store.has("nanolight.hotkey"));
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var p: Problem = .{};
+    const c = try parse(arena.allocator(), "hotkey = \"hyper_banana\"\n", &p);
+    seed(store, testing.allocator, c, 5);
+    try testing.expect(!prefs.has(store, .hotkey));
     try expectKv(store, sync_at_key, null);
     try expectKv(store, applied_prefix ++ "hotkey", null);
 }
@@ -871,17 +790,17 @@ test "quicklinks: a changed list is a local change now, an unchanged one leaves 
         .{ .name = "DDG", .url = "https://duckduckgo.com/?q={argument}", .keyword = "ddg" },
     };
     seed(store, testing.allocator, .{ .quicklinks = ddg }, 100);
-    try testing.expectEqualStrings("ddg", loadQuicklinks(a, store)[0].keyword);
+    try testing.expectEqualStrings("ddg", prefs.quicklinks(a, store)[0].keyword);
     try expectKv(store, sync_at_key, "100");
 
     // Sync brought another list; the same file leaves it, and the time, alone.
     const synced: []const Quicklink = &.{
         .{ .name = "Kagi", .url = "https://kagi.com/search?q={argument}" },
     };
-    saveQuicklinks(store, testing.allocator, synced);
+    prefs.setQuicklinks(store, testing.allocator, synced);
     try store.set(sync_at_key, "150");
     seed(store, testing.allocator, .{ .quicklinks = ddg }, 200);
-    try testing.expectEqualStrings("Kagi", loadQuicklinks(a, store)[0].name);
+    try testing.expectEqualStrings("Kagi", prefs.quicklinks(a, store)[0].name);
     try expectKv(store, sync_at_key, "150");
 
     // An edited file wins again, as a change now.
@@ -889,20 +808,21 @@ test "quicklinks: a changed list is a local change now, an unchanged one leaves 
         .{ .name = "Bing", .url = "https://bing.com/search?q={argument}" },
     };
     seed(store, testing.allocator, .{ .quicklinks = edited }, 300);
-    try testing.expectEqualStrings("Bing", loadQuicklinks(a, store)[0].name);
+    try testing.expectEqualStrings("Bing", prefs.quicklinks(a, store)[0].name);
     try expectKv(store, sync_at_key, "300");
 
     // No list in the file touches nothing; an empty saved list is the defaults.
     seed(store, testing.allocator, .{}, 400);
-    try testing.expectEqual(@as(usize, 1), loadQuicklinks(a, store).len);
-    saveQuicklinks(store, testing.allocator, &.{});
-    try testing.expectEqual(@as(usize, 0), loadQuicklinks(a, store).len);
+    try testing.expectEqual(@as(usize, 1), prefs.quicklinks(a, store).len);
+    prefs.setQuicklinks(store, testing.allocator, &.{});
+    try testing.expectEqual(@as(usize, 0), prefs.quicklinks(a, store).len);
 }
 
 test "a quicklink that is not http or https is dropped, the rest stay" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const c = try parseOk(arena.allocator(),
+    var p: Problem = .{};
+    const c = try parse(arena.allocator(),
         \\[[quicklinks]]
         \\name = "Local"
         \\url = "file:///etc/passwd?{argument}"
@@ -910,9 +830,10 @@ test "a quicklink that is not http or https is dropped, the rest stay" {
         \\name = "Ok"
         \\url = "https://a.example/?q={argument}"
         \\
-    );
+    , &p);
     try testing.expectEqual(@as(usize, 1), c.quicklinks.len);
     try testing.expectEqualStrings("Ok", c.quicklinks[0].name);
+    try testing.expectEqual(@as(usize, 1), p.ignored.items.len);
 }
 
 test "a missing file is the defaults" {
@@ -983,9 +904,9 @@ test "a relative script command dir is relative to the config file" {
     const c = loadFrom(a, testing.io, &paths, m.store()).file;
     try testing.expectEqualStrings(
         try std.fs.path.join(a, &.{ dir, "scripts" }),
-        c.script_command_dirs[0],
+        c.script_commands.dirs[0],
     );
-    try testing.expectEqualStrings("/abs", c.script_command_dirs[1]);
+    try testing.expectEqualStrings("/abs", c.script_commands.dirs[1]);
 }
 
 test "a relative config path still gives absolute script command dirs" {
@@ -1007,7 +928,7 @@ test "a relative config path still gives absolute script command dirs" {
     const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
     try testing.expectEqualStrings(
         try std.fs.path.join(a, &.{ dir, "scripts" }),
-        c.script_command_dirs[0],
+        c.script_commands.dirs[0],
     );
 }
 

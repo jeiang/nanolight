@@ -2,6 +2,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const files = @import("files.zig");
+const prefs = @import("prefs.zig");
 const suggest = @import("suggest.zig");
 const Live = @import("main.zig").Live;
 const mac = @import("builtin").os.tag == .macos;
@@ -40,8 +41,8 @@ fn sendFiles(l: *Live) void {
         .found = .{ .allocator = l.app.gpa },
     };
     @memcpy(a.text[0..q.len], q);
-    a.locations = l.kv.get(l.app.gpa, files.locations_key) catch null;
-    a.exclusions = l.kv.get(l.app.gpa, files.exclusions_key) catch null;
+    a.locations = prefs.text(l.kv, l.app.gpa, .files_locations);
+    a.exclusions = prefs.text(l.kv, l.app.gpa, .files_exclusions);
     l.files.busy = true;
     l.files.sent = l.files.epoch;
     const thread = std.Thread.spawn(.{}, FileAsk.run, .{a}) catch {
@@ -111,8 +112,5 @@ pub const State = struct {
 
 pub fn load(l: *Live) void {
     // File search is local to this Mac and off unless explicitly enabled.
-    if (mac) if (l.kv.get(l.app.gpa, files.enabled_key) catch null) |v| {
-        defer l.app.gpa.free(v);
-        l.s.files_on = std.mem.eql(u8, v, "1");
-    };
+    if (mac) l.s.files_on = prefs.flag(l.kv, l.app.gpa, .files);
 }

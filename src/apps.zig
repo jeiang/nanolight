@@ -8,6 +8,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
+const prefs = @import("prefs.zig");
 const mac = builtin.os.tag == .macos;
 const objc = nanoui.objc;
 const assert = std.debug.assert;
@@ -19,7 +20,7 @@ pub const App = struct {
     folder: []const u8,
     /// Mandarin reading as ASCII (scan time), for Latin queries.
     pinyin: []const u8 = "",
-    /// Times it was opened (kept in `store_key`).
+    /// Times it was opened (kept in prefs' `.launches`).
     launches: u16 = 0,
     /// Its icon, asked of the system the first time a row shows it.
     icon: Icon = .unloaded,
@@ -335,9 +336,8 @@ pub const Index = struct {
         defer aw.deinit();
         // best effort: out of memory leaves the stored counts as they were.
         for (kept) |l| aw.writer.print("{s}\t{d}\n", .{ l.key, l.count }) catch return;
-        kv.set(store_key, aw.written()) catch |err| {
-            std.log.warn("nanolight: launch counts not saved: {t}", .{err});
-        };
+        // A failure is logged; the counts in memory stand for this run.
+        _ = prefs.setText(kv, .launches, aw.written());
     }
 
     /// The counts `opened` kept. Keys are app paths; older rows used
@@ -345,7 +345,7 @@ pub const Index = struct {
     /// are kept in `missed`, at most `max_launches` of them.
     pub fn load(ix: *Index, store: nanoui.kv.Store) void {
         ix.missed.clearRetainingCapacity();
-        const v = (store.get(ix.gpa, store_key) catch null) orelse return;
+        const v = prefs.text(store, ix.gpa, .launches) orelse return;
         defer ix.gpa.free(v);
         var lines = std.mem.splitScalar(u8, v, '\n');
         while (lines.next()) |line| {
@@ -423,8 +423,6 @@ fn mostOpened(list: []Launch) []const Launch {
     }.f);
     return list[0..@min(list.len, max_launches)];
 }
-
-const store_key = "nanolight.launches";
 
 fn resolveLaunchKey(ix: *const Index, key: []const u8) ?u32 {
     if (ix.findPath(key)) |i| return i;
@@ -644,7 +642,7 @@ test "past the cap, the least opened counts are dropped" {
     var aw: std.Io.Writer.Allocating = .init(t.allocator);
     defer aw.deinit();
     for (0..max_launches + 10) |i| try aw.writer.print("/gone/{d}.app\t{d}\n", .{ i, i + 1 });
-    try mem.store().set(store_key, aw.written());
+    try mem.store().set(prefs.Key.launches.name(), aw.written());
     var ix: Index = .init(t.allocator);
     defer ix.deinit();
     try ix.add("Safari", "/Applications/Safari.app");
@@ -653,7 +651,7 @@ test "past the cap, the least opened counts are dropped" {
     for (ix.missed.items) |l| try t.expect(l.count > 10);
     // Safari, opened once, is the least opened of all: it is the one left out.
     ix.opened(0, mem.store());
-    const v = (try mem.store().get(t.allocator, store_key)).?;
+    const v = (try mem.store().get(t.allocator, prefs.Key.launches.name())).?;
     defer t.allocator.free(v);
     try t.expectEqual(@as(usize, max_launches), std.mem.count(u8, v, "\n"));
     try t.expect(std.mem.indexOf(u8, v, "Safari") == null);

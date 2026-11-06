@@ -256,7 +256,7 @@ test "a paste that could only copy says why in the footer, and the panel stays" 
     }
     try testing.expect(t.hasText(clipboard.pasteNote(.failed).?));
     // With paste_plain_text off, Return is a copy.
-    f.ch.copy_only = true;
+    f.store.cfg.paste_plain_text = false;
     f.copied = null;
     f.pasted = null;
     support.press(t, &.{.{ .command = .insert_newline }});

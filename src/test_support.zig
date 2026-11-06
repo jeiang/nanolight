@@ -183,6 +183,7 @@ pub const Prefs = struct {
     login_on: bool = false,
     suggest_sets: u8 = 0,
     searches_out: ?bool = null,
+    files: ?bool = null,
     theme: ?@import("palette.zig").Theme = null,
     menu_bar_on: bool = true,
     clip_on: ?bool = null,
@@ -201,6 +202,7 @@ pub const Prefs = struct {
             .record = record,
             .login = login,
             .suggest = suggestSet,
+            .files = filesSet,
             .searches_out = searchesOut,
             .theme = themeSet,
             .menu_bar = menuBar,
@@ -247,6 +249,11 @@ pub const Prefs = struct {
         p.suggest_sets += 1;
         if (p.nl) |s| s.suggest_on = on;
     }
+    fn filesSet(ctx: *anyopaque, on: bool) void {
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.files = on;
+        if (p.nl) |s| s.files_on = on;
+    }
     fn searchesOut(ctx: *anyopaque, on: bool) void {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
         p.searches_out = on;
@@ -274,7 +281,7 @@ pub const Prefs = struct {
         return @import("account.zig").off_text;
     }
     fn ver(_: *anyopaque) []const u8 {
-        return "0.1.0";
+        return @import("build_options").version;
     }
     fn ready(_: *anyopaque) ?[]const u8 {
         return null;

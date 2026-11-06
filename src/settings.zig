@@ -43,6 +43,29 @@ pub fn webUrl(url: []const u8) bool {
 
 const max_quicklinks = 64;
 const max_quicklink_field = 512;
+
+/// A quicklink with its name, its address and its keyword in bounds.
+fn fits(q: Quicklink) bool {
+    if (q.name.len == 0 or q.url.len == 0) return false;
+    return q.name.len <= max_quicklink_field and q.url.len <= max_quicklink_field and
+        q.keyword.len <= max_quicklink_field;
+}
+
+/// Why the `i`th quicklink of a list cannot be listed, or null: the one rule
+/// for those from config.toml, the store and sync alike.
+pub fn quicklinkProblem(i: usize, q: Quicklink) ?[]const u8 {
+    if (i >= max_quicklinks) return std.fmt.comptimePrint(
+        "only {d} quicklinks are kept",
+        .{max_quicklinks},
+    );
+    if (!fits(q)) return std.fmt.comptimePrint(
+        "a name and an address are needed, each at most {d} bytes",
+        .{max_quicklink_field},
+    );
+    if (!webUrl(q.url)) return "only http and https addresses work";
+    return null;
+}
+
 /// A record keeps at most this many launch counts: the most opened.
 pub const max_launches = 512;
 
@@ -74,11 +97,7 @@ pub fn decode(arena: std.mem.Allocator, body: []const u8) ?Settings {
     if (s.v < 1 or s.v > 2 or s.hotkey.len == 0 or s.hotkey.len > hotkey_max) return null;
     s.launches = mostOpened(arena, s.launches) catch return null;
     if (s.quicklinks.len > max_quicklinks) return null;
-    for (s.quicklinks) |q| {
-        if (q.name.len == 0 or q.url.len == 0) return null;
-        if (q.name.len > max_quicklink_field or q.url.len > max_quicklink_field or
-            q.keyword.len > max_quicklink_field) return null;
-    }
+    for (s.quicklinks) |q| if (!fits(q)) return null;
     return s;
 }
 

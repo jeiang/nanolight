@@ -17,6 +17,8 @@ pub const SettingsHost = struct {
     login: *const fn (ctx: *anyopaque, set: ?bool) bool,
     /// Google's suggestions turned on or off in Settings.
     suggest: *const fn (ctx: *anyopaque, on: bool) void,
+    /// File search turned on or off in Settings (this Mac only).
+    files: *const fn (ctx: *anyopaque, on: bool) void,
     /// Return sends Google searches to the browser (on) or the panel.
     searches_out: *const fn (ctx: *anyopaque, on: bool) void,
     /// The panel's tint, chosen in Settings: kept for the next launch.

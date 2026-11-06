@@ -161,7 +161,7 @@ pub const Nanolight = struct {
     /// When the panel last went away (seconds), and how long it may be away
     /// before it reopens at the root; 0 is never.
     away_at: ?i64 = null,
-    pop_after: u32 = 90,
+    pop_after: u32 = (@import("config.zig").Config{}).pop_to_root_seconds,
 
     /// The panel went away at `now`.
     pub fn hid(s: *Nanolight, now: i64) void {

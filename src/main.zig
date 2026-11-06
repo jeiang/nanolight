@@ -40,12 +40,9 @@ const commands = @import("commands.zig");
 const clipboard = @import("clipboard.zig");
 const clipboard_view = @import("clipboard_view.zig");
 const clipboard_live = @import("clipboard_live.zig");
+const prefs = @import("prefs.zig");
 /// A Nix build: no updater and no login-item UI; the modules own both.
 const nix_managed = @import("build_options").nix_managed;
-
-const suggest_key = config.suggest_key;
-const searches_out_key = config.searches_out_key;
-const menu_bar_key = config.menu_bar_key;
 
 pub fn applyChoice(ctx: *anyopaque, choice: shortcut.Choice) void {
     Live.apply(ctx, choice);
@@ -58,11 +55,6 @@ pub fn recordKey(ctx: *anyopaque, on: bool) bool {
 pub fn loginItem(ctx: *anyopaque, set: ?bool) bool {
     return Live.login(ctx, set);
 }
-/// Left by a restart into an update off the Mac (`restartForUpdate`), and by
-/// 0.1.6 and before on the Mac (nanoui's updater says so itself now).
-pub const updated_key = "nanolight.updated";
-const sync_at_key = config.sync_at_key;
-const rates_at_key = "nanolight.rates.at";
 
 /// The app around the panel: its window, shown and hidden (panel_mac.zig,
 /// panel_pc.zig), its key, its menu, its updates and its account.
@@ -186,8 +178,7 @@ pub const Live = struct {
             };
             list.append(arena, one) catch break;
         };
-        var at: i64 = 0;
-        if (l.kv.get(arena, sync_at_key) catch null) |v| at = std.fmt.parseInt(i64, v, 10) catch 0;
+        const at = prefs.int(l.kv, arena, .sync_at);
         var out: Settings = .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at };
         out.launches = list.items;
         out.quicklinks = l.ql_custom;
@@ -196,28 +187,19 @@ pub const Live = struct {
         return out;
     }
 
-    /// Lists `list` (those with an http or https address) in the panel, or
-    /// the built-in quicklinks when none. False when nothing changed.
+    /// Lists `list` (those `settings_mod.quicklinkProblem` lets through) in the panel,
+    /// or the built-in quicklinks when none. False when nothing changed, or the list
+    /// could not be copied (logged; the old one stays).
     fn setQuicklinks(l: *Live, list: []const settings_mod.Quicklink) bool {
         const arena = l.app.gpa.create(std.heap.ArenaAllocator) catch return false;
         arena.* = .init(l.app.gpa);
-        var keep: std.ArrayList(settings_mod.Quicklink) = .empty;
-        for (list) |q| {
-            if (!settings_mod.webUrl(q.url)) {
-                std.log.warn(
-                    "nanolight: quicklink \"{s}\": only http and https addresses work; ignored",
-                    .{q.name},
-                );
-                continue;
-            }
-            const copy: settings_mod.Quicklink = .{
-                .name = arena.allocator().dupe(u8, q.name) catch break,
-                .url = arena.allocator().dupe(u8, q.url) catch break,
-                .keyword = arena.allocator().dupe(u8, q.keyword) catch break,
-            };
-            keep.append(arena.allocator(), copy) catch break;
-        }
-        if (settings_mod.sameQuicklinks(keep.items, l.ql_custom)) {
+        const keep = copyQuicklinks(arena.allocator(), list) catch |e| {
+            std.log.warn("nanolight: the quicklinks could not be listed: {t}", .{e});
+            arena.deinit();
+            l.app.gpa.destroy(arena);
+            return false;
+        };
+        if (settings_mod.sameQuicklinks(keep, l.ql_custom)) {
             arena.deinit();
             l.app.gpa.destroy(arena);
             return false;
@@ -227,24 +209,43 @@ pub const Live = struct {
             l.app.gpa.destroy(old);
         }
         l.ql_arena = arena;
-        l.ql_custom = keep.items;
-        l.s.quicklinks = if (keep.items.len > 0) keep.items else &settings_mod.default_quicklinks;
+        l.ql_custom = keep;
+        l.s.quicklinks = if (keep.len > 0) keep else &settings_mod.default_quicklinks;
         l.s.built = 1;
         return true;
+    }
+
+    /// The quicklinks of `list` that can be listed, copied into `arena`.
+    fn copyQuicklinks(
+        arena: std.mem.Allocator,
+        list: []const settings_mod.Quicklink,
+    ) ![]const settings_mod.Quicklink {
+        var keep: std.ArrayList(settings_mod.Quicklink) = .empty;
+        for (list, 0..) |q, i| {
+            if (settings_mod.quicklinkProblem(i, q)) |why| {
+                std.log.warn("nanolight: quicklink \"{s}\": {s}; ignored", .{ q.name, why });
+                continue;
+            }
+            try keep.append(arena, .{
+                .name = try arena.dupe(u8, q.name),
+                .url = try arena.dupe(u8, q.url),
+                .keyword = try arena.dupe(u8, q.keyword),
+            });
+        }
+        return keep.items;
     }
 
     /// The account's settings, merged: the key, the suggestions, the quicklinks, the counts.
     fn applySynced(ctx: *anyopaque, st: Settings) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
-        var at: [24]u8 = undefined;
-        const at_text = std.fmt.bufPrint(&at, "{d}", .{st.at}) catch unreachable;
-        _ = config.kvSet(l.kv, sync_at_key, at_text);
+        // A failure is logged; the next sync sends this machine's older time.
+        _ = prefs.setInt(l.kv, .sync_at, st.at);
         if (shortcut.Choice.parse(st.hotkey)) |c| if (!c.eql(l.choice)) {
             _ = shortcut.save(l.kv, c);
             l.useKey(c);
         };
         l.setSuggest(st.suggest, .synced);
-        if (l.setQuicklinks(st.quicklinks)) config.saveQuicklinks(l.kv, l.app.gpa, l.ql_custom);
+        if (l.setQuicklinks(st.quicklinks)) prefs.setQuicklinks(l.kv, l.app.gpa, l.ql_custom);
         const ix = l.s.index;
         for (st.launches) |la| {
             const i = if (la.path.len > 0)
@@ -265,9 +266,8 @@ pub const Live = struct {
 
     /// This Mac chose its key or turned suggestions on or off, just now.
     fn touched(l: *Live) void {
-        var at: [24]u8 = undefined;
-        const now = std.fmt.bufPrint(&at, "{d}", .{account.now()}) catch unreachable;
-        _ = config.kvSet(l.kv, sync_at_key, now);
+        // A failure is logged; this change then syncs as an older one.
+        _ = prefs.setInt(l.kv, .sync_at, account.now());
         if (l.acct) |*a| a.changed();
     }
 
@@ -312,7 +312,7 @@ pub const Live = struct {
     }
 
     fn ratesPath(l: *Live) ?[]u8 {
-        const data = nanoui.path(l.app.gpa, .data, "Nanolight") catch return null;
+        const data = prefs.dataDir(l.app.gpa) catch return null;
         defer l.app.gpa.free(data);
         // best effort: without the folder no rates are read, and the write says why.
         std.Io.Dir.cwd().createDirPath(l.app.io, data) catch {};
@@ -336,11 +336,7 @@ pub const Live = struct {
     /// The table and its day as the last fetch left them, if any.
     fn readCachedRates(l: *Live) void {
         const gpa = l.app.gpa;
-        var fetched_s: i64 = 0;
-        if (l.kv.get(gpa, rates_at_key) catch null) |v| {
-            defer gpa.free(v);
-            fetched_s = std.fmt.parseInt(i64, v, 10) catch 0;
-        }
+        const fetched_s = prefs.int(l.kv, gpa, .rates_at);
         var table: ?convert.Rates = null;
         if (l.ratesPath()) |path| {
             defer gpa.free(path);
@@ -399,7 +395,7 @@ pub const Live = struct {
         if (on == l.s.suggest_on) return;
         l.s.suggest_on = on;
         // A failure is logged; the choice holds for this run, the next launch falls back to on.
-        _ = config.kvSet(l.kv, suggest_key, if (on) "1" else "0");
+        _ = prefs.setFlag(l.kv, .suggest, on);
         if (origin == .here) l.touched();
         // The rows again, with or without them.
         l.s.built = 1;
@@ -414,7 +410,7 @@ pub const Live = struct {
 
     pub fn setSearchesOut(l: *Live, on: bool) void {
         l.s.searches_out = on;
-        _ = config.kvSet(l.kv, searches_out_key, if (on) "1" else "0");
+        _ = prefs.setFlag(l.kv, .searches_out, on);
     }
 
     /// Whether the menu bar icon shows; `set` shows or hides it. Hidden,
@@ -426,7 +422,7 @@ pub const Live = struct {
         const objc = nanoui.objc;
         const t = l.tray orelse return false;
         if (set) |on| {
-            _ = config.kvSet(l.kv, menu_bar_key, if (on) "1" else "0");
+            _ = prefs.setFlag(l.kv, .menu_bar, on);
             objc.msg(void, t.item, "setVisible:", .{if (on) objc.YES else objc.NO});
         }
         return objc.msg(objc.BOOL, t.item, "isVisible", .{});
@@ -477,14 +473,14 @@ pub const Live = struct {
     }
 
     /// Restarts into the update that is ready, if one is. Off the Mac the
-    /// new copy learns it was updated from `updated_key` (the Mac's
+    /// new copy learns it was updated from prefs' `.updated` (the Mac's
     /// updater says so itself, `updatedFrom`).
     pub fn restartForUpdate(l: *Live) void {
         const u = l.updater orelse return;
         const v = u.ready() orelse return;
-        // best effort: without the note the new copy only skips "Updated to".
-        if (!mac) l.kv.set(updated_key, v) catch {};
-        if (u.restart()) l.app.quit() else if (!mac) l.kv.remove(updated_key);
+        // A failure is logged; without the note the new copy only skips "Updated to".
+        if (!mac) _ = prefs.setText(l.kv, .updated, v);
+        if (u.restart()) l.app.quit() else if (!mac) prefs.remove(l.kv, .updated);
     }
 
     fn updated(ctx: *anyopaque) void {
@@ -633,7 +629,8 @@ pub const Live = struct {
 
     fn done(ctx: *anyopaque) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
-        shortcut.setOnboarded(l.kv);
+        // A failure is logged; the welcome then shows again at the next start.
+        _ = prefs.setFlag(l.kv, .onboarded, true);
     }
 
     fn welcome(l: *Live, item: *nanoui.menu.Item) void {
@@ -703,9 +700,8 @@ const RatesAsk = struct {
         const table = if (r.status == 200) convert.Rates.parse(gpa, r.body) else null;
         if (table) |t| {
             l.rates.landed(t, account.now());
-            var at: [24]u8 = undefined;
-            const at_text = std.fmt.bufPrint(&at, "{d}", .{l.rates.fetched_s}) catch unreachable;
-            _ = config.kvSet(l.kv, rates_at_key, at_text);
+            // A failure is logged; the next launch then fetches again.
+            _ = prefs.setInt(l.kv, .rates_at, l.rates.fetched_s);
             if (l.ratesPath()) |path| {
                 defer gpa.free(path);
                 std.Io.Dir.cwd()
@@ -759,10 +755,8 @@ pub fn main(init: std.process.Init) !void {
     const cfg = loaded.config();
     config.apply(kv, init.gpa, loaded, account.now());
     // The key is the config's or the Nix module's: the welcome does not ask.
-    var o: Onboard = .{
-        .skip_key = nix_managed or
-            (if (cfg.hotkey) |h| shortcut.Choice.parse(h) != null else false),
-    };
+    // `config.parse` lets through only a hotkey this system can use.
+    var o: Onboard = .{ .skip_key = nix_managed or cfg.hotkey != null };
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
     defer s.query.deinit();
     defer s.found.deinit();
@@ -782,7 +776,7 @@ pub fn main(init: std.process.Init) !void {
     };
     s.host = live.host();
     s.pop_after = cfg.pop_to_root_seconds;
-    if (!app.flags.hidden) _ = live.setQuicklinks(config.loadQuicklinks(cfg_arena.allocator(), kv));
+    if (!app.flags.hidden) _ = live.setQuicklinks(prefs.quicklinks(cfg_arena.allocator(), kv));
     @import("files_live.zig").load(&live);
     loadPreferences(&s, kv, init.gpa);
     s.reveal();
@@ -821,15 +815,9 @@ fn answeredArgs(init: std.process.Init, args: []const [:0]const u8) !bool {
 /// The settings kept outside the config: Google's completions (on unless
 /// turned off in Settings), searches sent out, and the theme.
 fn loadPreferences(s: *Nanolight, kv: nanoui.kv.Store, gpa: std.mem.Allocator) void {
-    if (kv.get(gpa, suggest_key) catch null) |v| {
-        defer gpa.free(v);
-        s.suggest_on = !std.mem.eql(u8, v, "0");
-    }
-    if (kv.get(gpa, searches_out_key) catch null) |v| {
-        defer gpa.free(v);
-        s.searches_out = std.mem.eql(u8, v, "1");
-    }
-    s.theme = @import("settings_bind.zig").loadTheme(kv, gpa);
+    s.suggest_on = prefs.flag(kv, gpa, .suggest);
+    s.searches_out = prefs.flag(kv, gpa, .searches_out);
+    s.theme = prefs.theme(kv, gpa);
 }
 
 /// A run with a person at it: script commands, the clipboard history, the
@@ -852,9 +840,10 @@ fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
     rc.rescan(live);
     var clip_dir = clipboard_live.openDir(init.gpa, init.io);
     defer if (clip_dir) |*d| d.close(init.io);
-    const clip_cfg = config.clipboardConfig(kv, init.gpa, loaded);
-    var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, clip_cfg);
+    var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, loaded.clipboardConfig());
     defer clip_store.deinit();
+    clip_store.on = prefs.flagOr(kv, init.gpa, .clipboard, clip_store.cfg.enabled orelse true);
+    clip_store.config_ok = loaded != .unusable;
     // No data directory, no history: nothing could be kept.
     if (clip_dir != null) clipboard_live.init(live, &clip_store);
     defer clipboard_live.deinit(live);
@@ -869,13 +858,10 @@ fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
     live.preview.watch(.{ .ctx = live, .func = Live.pageKey });
     o.hooks = live.hooks();
     // The first run: the welcome, in the panel.
-    if (!shortcut.onboarded(kv)) o.start(live.choice);
+    if (!prefs.has(kv, .onboarded)) o.start(live.choice);
     if (mac) live.tray = try app.newTray(.{ .symbol = "magnifyingglass", .tooltip = "Nanolight" });
     // The menu bar icon, unless Settings took it away.
-    if (kv.get(init.gpa, menu_bar_key) catch null) |v| {
-        defer init.gpa.free(v);
-        if (std.mem.eql(u8, v, "0")) _ = live.menuBar(false);
-    }
+    if (!prefs.flag(kv, init.gpa, .menu_bar)) _ = live.menuBar(false);
     const updater = startUpdater(init, live);
     defer if (updater) |u| u.deinit();
     // `[sync]` names a server: synced now.
@@ -920,9 +906,9 @@ fn startUpdater(init: std.process.Init, live: *Live) ?*nanoui.Updater {
 /// welcome is due.
 fn greet(gpa: std.mem.Allocator, live: *Live, note_buf: *[64]u8) void {
     const kv = live.kv;
-    const old = kv.get(gpa, updated_key) catch null;
+    const old = prefs.text(kv, gpa, .updated);
     defer if (old) |v| gpa.free(v);
-    if (old != null) kv.remove(updated_key);
+    if (old != null) prefs.remove(kv, .updated);
     const restarted = if (live.updater) |u| u.updatedFrom() != null else false;
     if (restarted or old != null) {
         const now = if (live.updater) |u| u.current else old.?;

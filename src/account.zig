@@ -14,8 +14,7 @@ const Settings = settings.Settings;
 
 /// Marks this machine's first sync with a server: the stored record wins.
 const first_header = "X-Nanolight-First";
-/// Holds the server this machine last synced with: a different one is a first sync again.
-const synced_key = "nanolight.account.synced";
+const synced_key = @import("prefs.zig").Key.account_synced.name();
 const pull_every_s = 5 * 60;
 const push_after_ms = 2000;
 pub const off_text = "Sync: off (set [sync] in config.toml)";

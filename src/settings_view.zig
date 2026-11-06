@@ -73,12 +73,9 @@ const Toggle = enum {
                 n.suggest_on = on;
                 n.built = 1;
             },
-            .files => {
+            .files => if (h) |host| host.files(host.ctx, on) else {
                 n.files_on = on;
                 n.built = 1;
-                const key = @import("files.zig").enabled_key;
-                // A failure is logged; file search follows the switch this run either way.
-                if (n.kv) |kv| _ = @import("config.zig").kvSet(kv, key, if (on) "1" else "0");
             },
             .browser => if (h) |host| host.searches_out(host.ctx, on) else {
                 n.searches_out = on;
@@ -136,7 +133,7 @@ pub const Settings = struct {
     clip_here: bool = false,
     cleared: enum { idle, done, failed } = .idle,
     sync: []const u8 = @import("account.zig").off_text,
-    version: []const u8 = "0.1.0",
+    version: []const u8 = @import("build_options").version,
     ready: ?[]const u8 = null,
 
     pub fn show(s: *Settings) void {

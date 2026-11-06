@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const hotkey = @import("hotkey_mac.zig");
+const prefs = @import("prefs.zig");
 const mac = builtin.os.tag == .macos;
 const objc = nanoui.objc;
 
@@ -251,11 +252,9 @@ const ns_ctrl: u64 = 1 << 18;
 const ns_opt: u64 = 1 << 19;
 const ns_cmd: u64 = 1 << 20;
 const ns_mods: u64 = ns_shift | ns_ctrl | ns_opt | ns_cmd;
-const store_key = "nanolight.hotkey";
-const onboarded_key = "nanolight.onboarded";
 
 pub fn load(store: nanoui.kv.Store, gpa: std.mem.Allocator) Choice {
-    const v = (store.get(gpa, store_key) catch null) orelse return .cmd_space;
+    const v = prefs.text(store, gpa, .hotkey) orelse return .cmd_space;
     defer gpa.free(v);
     return Choice.parse(v) orelse .cmd_space;
 }
@@ -263,16 +262,7 @@ pub fn load(store: nanoui.kv.Store, gpa: std.mem.Allocator) Choice {
 /// False, and logged, when it could not be kept.
 pub fn save(store: nanoui.kv.Store, c: Choice) bool {
     var buf: [name_max]u8 = undefined;
-    return @import("config.zig").kvSet(store, store_key, c.name(&buf));
-}
-
-pub fn onboarded(store: nanoui.kv.Store) bool {
-    return store.has(onboarded_key);
-}
-
-pub fn setOnboarded(store: nanoui.kv.Store) void {
-    // A failure is logged; the welcome then shows again at the next start.
-    _ = @import("config.zig").kvSet(store, onboarded_key, "1");
+    return prefs.setText(store, .hotkey, c.name(&buf));
 }
 
 /// One of the system's shortcuts, as `com.apple.symbolichotkeys` keeps it.
@@ -530,9 +520,6 @@ test "the choice is kept" {
     try std.testing.expectEqual(Choice.cmd_space, load(mem.store(), std.testing.allocator));
     try std.testing.expect(save(mem.store(), .ctrl_space));
     try std.testing.expectEqual(Choice.ctrl_space, load(mem.store(), std.testing.allocator));
-    try std.testing.expect(!onboarded(mem.store()));
-    setOnboarded(mem.store());
-    try std.testing.expect(onboarded(mem.store()));
 }
 
 test "any key with ⌘, ⌥ or ⌃ can be recorded, kept and named" {

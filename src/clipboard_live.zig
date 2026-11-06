@@ -5,7 +5,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const main = @import("main.zig");
 const clipboard = @import("clipboard.zig");
-const config = @import("config.zig");
+const prefs = @import("prefs.zig");
 const account = @import("account.zig");
 const Live = main.Live;
 
@@ -22,10 +22,9 @@ pub fn init(l: *Live, store: *clipboard.Store) void {
         .status = status,
         .paste = paste,
         .copy = copy,
-        .copy_only = !l.cfg.clipboard.paste_plain_text,
     };
     l.s.host.?.clipboard = &l.clip_host;
-    if (store.cfg.enabled) startWatching(l);
+    if (store.on) startWatching(l);
     nanoui.App.after(prune_every_ms, l, pruneTick);
 }
 
@@ -35,7 +34,7 @@ pub fn deinit(l: *Live) void {
 
 /// The store's directory, made if missing; null when there is none.
 pub fn openDir(gpa: std.mem.Allocator, io: std.Io) ?std.Io.Dir {
-    const data = nanoui.path(gpa, .data, "Nanolight") catch return null;
+    const data = prefs.dataDir(gpa) catch return null;
     defer gpa.free(data);
     const path = std.fs.path.join(gpa, &.{ data, "clipboard" }) catch return null;
     defer gpa.free(path);
@@ -51,7 +50,7 @@ fn live(ctx: *anyopaque) *Live {
 
 fn startWatching(l: *Live) void {
     if (!clipboard.Watcher.available) return;
-    if (!(l.clip orelse return).cfg.config_ok) return;
+    if (!(l.clip orelse return).config_ok) return;
     l.clip_watcher.start(.{ .ctx = l, .observe = observe, .excluded = excluded }) catch |e|
         std.log.warn("nanolight: clipboard history could not start: {t}", .{e});
 }
@@ -82,18 +81,18 @@ fn pruneTick(ctx: ?*anyopaque) callconv(.c) void {
 
 /// Settings' switch: whether history records; `set` changes it first (kept
 /// in kv, so the app's change outlasts the config file's value; see
-/// `config.switchClipboard`). Null on a system with no history.
+/// `clipboard.Store.turn`). Null on a system with no history.
 pub fn enabled(ctx: *anyopaque, set: ?bool) ?bool {
     const l = live(ctx);
     const store = l.clip orelse return null;
     if (!clipboard.Watcher.available) return null;
     if (set) |on| {
-        const next = config.switchClipboard(l.kv, on, store.cfg.enabled);
-        if (next == store.cfg.enabled) return next;
-        store.cfg.enabled = next;
-        if (next) startWatching(l) else l.clip_watcher.stop();
+        const was = store.on;
+        store.turn(on, prefs.setFlag(l.kv, .clipboard, on));
+        if (store.on == was) return was;
+        if (store.on) startWatching(l) else l.clip_watcher.stop();
     }
-    return store.cfg.enabled;
+    return store.on;
 }
 
 /// Settings' Clear History: false when something may be left on disk (logged).
@@ -109,8 +108,8 @@ fn status(ctx: *anyopaque) ?[]const u8 {
     const l = live(ctx);
     if (@hasField(clipboard.Watcher, "why")) if (l.clip_watcher.why) |why| return why;
     const store = l.clip orelse return null;
-    if (!store.cfg.config_ok) return "Clipboard history is paused until the config file loads.";
-    return if (store.cfg.enabled) null else "Clipboard history is off. Turn it on in Settings.";
+    if (!store.config_ok) return "Clipboard history is paused until the config file loads.";
+    return if (store.on) null else "Clipboard history is off. Turn it on in Settings.";
 }
 
 /// An entry's content as the OS writes it; `owned` is freed by `release`.

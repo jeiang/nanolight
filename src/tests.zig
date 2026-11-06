@@ -25,6 +25,7 @@ test {
     _ = @import("account.zig");
     _ = @import("toml.zig");
     _ = @import("config.zig");
+    _ = @import("prefs.zig");
     _ = @import("palette.zig");
     _ = @import("apps.zig");
     _ = @import("shortcut.zig");

@@ -23,10 +23,8 @@ pub const Host = struct {
     status: *const fn (ctx: *anyopaque) ?[]const u8,
     /// Return: writes the entry and pastes it where it can.
     paste: *const fn (ctx: *anyopaque, hash: u64) clipboard.PasteResult,
-    /// ⌘↩: writes the entry only.
+    /// ⌘↩: writes the entry only (Return too, with `paste_plain_text` off).
     copy: *const fn (ctx: *anyopaque, hash: u64) bool,
-    /// `paste_plain_text` is off: Return only copies, as ⌘↩ does.
-    copy_only: bool = false,
 };
 
 const row_h: f32 = 40;
@@ -157,7 +155,7 @@ pub const Screen = struct {
 
     fn paste(s: *Screen, h: *const Host) void {
         const e = s.selected(h) orelse return;
-        if (h.copy_only) return s.copy(h);
+        if (!h.store.cfg.paste_plain_text) return s.copy(h);
         const r = h.paste(h.ctx, e.hash);
         s.note = clipboard.pasteNote(r) orelse "";
     }
@@ -320,8 +318,9 @@ pub const Screen = struct {
                 .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8) },
             );
         ui.spacer(c);
-        if (hh == null) return;
-        if (!hh.?.copy_only) {
+        const h = hh orelse return;
+        const copy_only = !h.store.cfg.paste_plain_text;
+        if (!copy_only) {
             ui.text(c, "Paste", .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
             ui.kbd(c, "↩");
             ui.div(c).w(1).h(14).bg(p.hair).end();
@@ -331,11 +330,11 @@ pub const Screen = struct {
             "Copy",
             .{
                 .size = 12,
-                .weight = if (hh.?.copy_only) .medium else .regular,
-                .color = if (hh.?.copy_only) p.text.alpha(0.85) else p.sub.alpha(0.8),
+                .weight = if (copy_only) .medium else .regular,
+                .color = if (copy_only) p.text.alpha(0.85) else p.sub.alpha(0.8),
             },
         );
-        ui.kbd(c, if (hh.?.copy_only) "↩" else results.mod ++ "↩");
+        ui.kbd(c, if (copy_only) "↩" else results.mod ++ "↩");
         ui.div(c).w(1).h(14).bg(p.hair).end();
         ui.text(c, "Delete", .{ .size = 12, .color = p.sub.alpha(0.8) });
         ui.kbd(c, results.mod ++ "⌫");

@@ -1,7 +1,7 @@
 //! Live's answers to Settings. The box is one, its context set to the
 //! Live that is showing the panel (one Nanolight runs).
-const nanoui = @import("nanoui");
 const shortcut = @import("shortcut.zig");
+const prefs = @import("prefs.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Theme = @import("palette.zig").Theme;
 pub var box: SettingsHost = .{
@@ -11,6 +11,7 @@ pub var box: SettingsHost = .{
     .record = @import("main.zig").recordKey,
     .login = @import("main.zig").loginItem,
     .suggest = suggest,
+    .files = files,
     .searches_out = searchesOut,
     .theme = theme,
     .menu_bar = menuBar,
@@ -39,25 +40,24 @@ fn suggest(ctx: *anyopaque, on: bool) void {
     l(ctx).setSuggest(on, .here);
 }
 
+fn files(ctx: *anyopaque, on: bool) void {
+    const live = l(ctx);
+    live.s.files_on = on;
+    live.s.built = 1;
+    // A failure is logged; file search follows the switch this run either way.
+    _ = prefs.setFlag(live.kv, .files, on);
+}
+
 fn searchesOut(ctx: *anyopaque, on: bool) void {
     l(ctx).setSearchesOut(on);
 }
 
-/// The panel's tint: a `Theme`'s name ("system" when unset).
-const theme_key = "nanolight.theme";
-
 fn theme(ctx: *anyopaque, t: Theme) void {
     const live = l(ctx);
     live.s.theme = t;
-    _ = @import("config.zig").kvSet(live.kv, theme_key, @tagName(t));
+    // A failure is logged; the next launch then has the old tint.
+    _ = prefs.setTheme(live.kv, t);
     if (live.window) |w| w.redraw();
-}
-
-/// The theme kept on this Mac, at launch.
-pub fn loadTheme(kv: nanoui.kv.Store, gpa: @import("std").mem.Allocator) Theme {
-    const v = kv.get(gpa, theme_key) catch null orelse return .system;
-    defer gpa.free(v);
-    return @import("std").meta.stringToEnum(Theme, v) orelse .system;
 }
 
 fn menuBar(ctx: *anyopaque, set: ?bool) bool {
@@ -68,9 +68,11 @@ fn syncStatus(ctx: *anyopaque) []const u8 {
     return l(ctx).syncStatus();
 }
 
+/// The updater's version, else the build's.
 fn version(ctx: *anyopaque) []const u8 {
-    const u = l(ctx).updater orelse return "0.1.0";
-    return if (u.current.len > 0) u.current else "0.1.0";
+    const built = @import("build_options").version;
+    const u = l(ctx).updater orelse return built;
+    return if (u.current.len > 0) u.current else built;
 }
 
 fn ready(ctx: *anyopaque) ?[]const u8 {

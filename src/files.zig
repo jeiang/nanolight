@@ -4,9 +4,6 @@ const std = @import("std");
 const search = @import("search.zig");
 const mac = @import("builtin").os.tag == .macos;
 
-pub const enabled_key = "nanolight.files";
-pub const locations_key = "nanolight.files.locations";
-pub const exclusions_key = "nanolight.files.exclusions";
 pub const max_rows = 5;
 pub const max_path = 4096;
 
