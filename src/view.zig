@@ -50,6 +50,13 @@ pub const Host = struct {
 
 pub const width: f32 = 680;
 
+/// The longest query kept: a longer paste is cut here, as math, ranking and
+/// hashing read the whole query each frame. Room for any query Google is asked.
+pub const max_query_bytes = 512;
+comptime {
+    std.debug.assert(max_query_bytes >= suggest.max_len);
+}
+
 /// The app's icon (icon.png, made smaller), for the panel.
 pub const icon_png = @embedFile("icon-256.png");
 
@@ -330,7 +337,15 @@ pub const Nanolight = struct {
             .placeholder_color = p.sub.alpha(0.75),
             .color = p.text,
         });
+        s.capQuery();
         return r.submitted;
+    }
+
+    fn capQuery(s: *Nanolight) void {
+        const q = s.query.text();
+        if (q.len <= max_query_bytes) return;
+        s.query.set(@import("clipboard.zig").clip(q, max_query_bytes));
+        std.debug.assert(s.query.text().len <= max_query_bytes);
     }
 
     /// What the query is the start of, drawn faintly after the caret; →

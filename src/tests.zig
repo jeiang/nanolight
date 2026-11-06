@@ -273,6 +273,30 @@ fn retype(t: *ui.Tester, q: []const u8) void {
     press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = q } });
 }
 
+test "a long paste is cut to the longest query, on a character boundary" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.reveal();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = 480,
+        .dark = true,
+    });
+    defer t.deinit();
+    t.settle(1);
+    var paste: [view.max_query_bytes + 1]u8 = undefined;
+    @memset(paste[0 .. view.max_query_bytes - 1], '(');
+    @memcpy(paste[view.max_query_bytes - 1 ..], "é");
+    press(&t, &.{.{ .insert = &paste }});
+    try std.testing.expectEqual(view.max_query_bytes - 1, s.query.text().len);
+    t.settle(1);
+    try std.testing.expect(s.res.n > 0);
+}
+
 test "Google's completions land below, and a search shows in the panel" {
     const gpa = std.testing.allocator;
     var ix: Index = .init(gpa);
