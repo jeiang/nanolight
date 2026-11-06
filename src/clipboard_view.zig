@@ -9,6 +9,7 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const panel = @import("view.zig");
 const clipboard = @import("clipboard.zig");
+const search = @import("search.zig");
 const results = @import("results.zig");
 const account = @import("account.zig");
 const Palette = panel.Palette;
@@ -41,7 +42,7 @@ pub const Screen = struct {
     open: bool = false,
     sel: usize = 0,
     /// The entries found: places in the store's list.
-    found: [max_found]u32 = undefined,
+    found: [max_found]search.Ranked = undefined,
     n: usize = 0,
     /// What `found` was made for: the query, and the store's change count.
     built: u64 = 0,
@@ -89,8 +90,8 @@ pub const Screen = struct {
         s.built = q;
         s.gen = h.store.gen;
         s.n = h.store.find(n.query.text(), &s.found);
-        if (same_query) for (s.found[0..s.n], 0..) |at, i|
-            if (h.store.entries.items[at].hash == s.sel_hash) {
+        if (same_query) for (s.found[0..s.n], 0..) |f, i|
+            if (h.store.entries.items[f.index].hash == s.sel_hash) {
                 s.sel = i;
                 break;
             };
@@ -99,7 +100,7 @@ pub const Screen = struct {
 
     fn selected(s: *const Screen, h: *const Host) ?clipboard.Entry {
         if (s.sel >= s.n) return null;
-        return h.store.entries.items[s.found[s.sel]];
+        return h.store.entries.items[s.found[s.sel].index];
     }
 
     /// The screen in place of the rows, the panel's height following it.
@@ -197,7 +198,7 @@ pub const Screen = struct {
         const first = if (s.sel >= visible_rows) s.sel + 1 - visible_rows else 0;
         const now = account.now();
         for (first..@min(s.n, first + visible_rows)) |i| {
-            const e = h.store.entries.items[s.found[i]];
+            const e = h.store.entries.items[s.found[i].index];
             ui.key(c, c.print("clip-row-{d}", .{i}));
             const r = ui.div(c).row().wFull().h(row_h).px(10).gap(12).itemsCenter().rounded(10)
                 .control();
@@ -262,7 +263,7 @@ pub const Screen = struct {
                     }
                     ui.text(
                         c,
-                        if (line.len == 0) " " else clipboard.clip(line, 240),
+                        if (line.len == 0) " " else search.clip(line, 240),
                         .{
                             .size = 12.5,
                             .mono = e.kind == .text,

@@ -6,6 +6,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
+const search = @import("search.zig");
 const x11 = @import("clipboard_x11.zig");
 const wl = @import("clipboard_wl.zig");
 
@@ -304,12 +305,11 @@ fn urisFromPaths(gpa: std.mem.Allocator, paths: []const u8, sep: []const u8, end
         if (!first) try out.appendSlice(gpa, sep);
         first = false;
         try out.appendSlice(gpa, "file://");
-        for (p) |c| {
-            if (std.ascii.isAlphanumeric(c) or std.mem.indexOfScalar(u8, "/-_.~", c) != null)
-                try out.append(gpa, c)
-            else
-                try out.print(gpa, "%{X:0>2}", .{c});
-        }
+        // Room for every byte escaped, so the encoder cannot run out.
+        try out.ensureUnusedCapacity(gpa, p.len * 3);
+        var w: std.Io.Writer = .fromArrayList(&out);
+        search.percentEncode(&w, p, .{ .keep = "/" }) catch unreachable;
+        out = w.toArrayList();
     }
     if (end and !first) try out.appendSlice(gpa, sep);
     return out.toOwnedSlice(gpa);

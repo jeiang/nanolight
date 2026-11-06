@@ -13,7 +13,7 @@ const files_view = @import("files_view.zig");
 const answers = @import("answers.zig");
 const suggest = @import("suggest.zig");
 const convert = @import("convert.zig");
-const text = @import("text.zig");
+const search = @import("search.zig");
 const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Row = results.Row;
@@ -368,7 +368,7 @@ pub const Nanolight = struct {
     fn capQuery(s: *Nanolight) void {
         const q = s.query.text();
         if (q.len <= max_query_bytes) return;
-        s.query.set(@import("clipboard.zig").clip(q, max_query_bytes));
+        s.query.set(search.clip(q, max_query_bytes));
         std.debug.assert(s.query.text().len <= max_query_bytes);
     }
 
@@ -383,13 +383,13 @@ pub const Nanolight = struct {
         const r = s.res.rows[0];
         if (r.kind == .app) {
             const name = s.index.apps.items[r.app].name;
-            if (name.len <= q.len or !text.utf8StartsWithFold(name, q)) return "";
+            if (name.len <= q.len or !search.startsWithFold(name, q)) return "";
             return name[q.len..];
         }
         if (r.kind != .quicklink or s.res.keyed != null or s.res.google != r.ql) return "";
         for (0..s.web.n) |i| {
             const w = s.web.get(i);
-            if (w.len > q.len and text.utf8StartsWithFold(w, q)) return w[q.len..];
+            if (w.len > q.len and search.startsWithFold(w, q)) return w[q.len..];
         }
         return "";
     }
@@ -675,7 +675,7 @@ pub const Nanolight = struct {
     /// it adds stronger.
     fn added(s: *Nanolight, i: usize, w: []const u8, p: Palette) []const ui.Span {
         const q = std.mem.trim(u8, s.query.text(), " ");
-        if (q.len == 0 or w.len <= q.len or !text.utf8StartsWithFold(w, q)) return &.{};
+        if (q.len == 0 or w.len <= q.len or !search.startsWithFold(w, q)) return &.{};
         s.spans[i][0] = .{
             .start = @intCast(q.len),
             .end = @intCast(w.len),

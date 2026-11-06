@@ -9,6 +9,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const prefs = @import("prefs.zig");
+const search = @import("search.zig");
 const mac = builtin.os.tag == .macos;
 const objc = nanoui.objc;
 const assert = std.debug.assert;
@@ -228,7 +229,6 @@ pub const Index = struct {
     /// Localized display names and pinyin keys for search (macOS only).
     pub fn localize(ix: *Index) void {
         if (!mac) return;
-        const text = @import("text.zig");
         const a = ix.arena.allocator();
         for (ix.apps.items) |*app| {
             if (!wantsLocalizedDisplayName(app.path)) continue;
@@ -236,7 +236,7 @@ pub const Index = struct {
                 const loc = withoutAppSuffix(display_name);
                 if (loc.len > 0 and !std.ascii.eqlIgnoreCase(loc, app.name)) app.name = loc;
             }
-            if (text.hasCjk(app.name)) app.pinyin = pinyinKey(a, app.name) orelse "";
+            if (search.hasCjk(app.name)) app.pinyin = pinyinKey(a, app.name) orelse "";
         }
         ix.sort();
     }
@@ -404,6 +404,31 @@ pub const Index = struct {
         return png;
     }
 };
+
+/// A match through an app's pinyin scores this much under its name's.
+const pinyin_cost = 70;
+/// Each time an app was opened lifts it this much, up to `max_launch_boost`.
+const launch_boost = 25;
+const max_launch_boost = 250;
+
+/// The best `out.len` apps for `query`, best first: by name or pinyin,
+/// lifted by how often each was opened.
+pub fn rankApps(query: []const u8, ix: *const Index, out: []search.Ranked) usize {
+    var top: search.Top = .init(out);
+    for (ix.apps.items, 0..) |app, i| {
+        var m = search.score(query, app.name);
+        if (app.pinyin.len > 0) if (search.scoreAscii(query, app.pinyin)) |mp| {
+            var via = mp;
+            via.score -= pinyin_cost;
+            via.n = 0;
+            if (m == null or via.score > m.?.score) m = via;
+        };
+        var scored = m orelse continue;
+        scored.score += @min(@as(i32, app.launches) * launch_boost, max_launch_boost);
+        top.offer(.{ .index = @intCast(i), .match = scored });
+    }
+    return top.n;
+}
 
 /// At most this many launch counts are stored: the most opened (the same
 /// cap as a synced record's).
@@ -735,4 +760,39 @@ test "launch counts follow the app path when the display name changes" {
     ix.apps.items[i].launches = 0;
     ix.load(mem.store());
     try t.expectEqual(@as(u16, 2), ix.apps.items[i].launches);
+}
+
+test "pinyin keys find CJK display names" {
+    const t = std.testing;
+    var ix = Index.init(t.allocator);
+    defer ix.deinit();
+    try ix.add("WeChat", "/Applications/WeChat.app");
+    const a = ix.arena.allocator();
+    ix.apps.items[0].name = try a.dupe(u8, "微信");
+    ix.apps.items[0].pinyin = try a.dupe(u8, "weixin");
+    var out: [1]search.Ranked = undefined;
+    try t.expectEqual(@as(usize, 1), rankApps("weixin", &ix, &out));
+    try t.expectEqual(@as(u32, 0), out[0].index);
+}
+
+test "rank keeps the best, best first, and opening often lifts a name" {
+    const t = std.testing;
+    var ix = Index.init(t.allocator);
+    defer ix.deinit();
+    for ([_][]const u8{ "Notes Helper", "Notes", "Numbers", "Keynote" }) |name| {
+        try ix.add(name, name);
+    }
+    var out: [3]search.Ranked = undefined;
+    try t.expectEqual(@as(usize, 3), rankApps("no", &ix, &out));
+    try t.expectEqual(@as(u32, 1), out[0].index);
+    try t.expectEqual(@as(u32, 3), out[2].index);
+    // The helper, opened once, climbs past Notes.
+    ix.apps.items[0].launches = 1;
+    try t.expectEqual(@as(usize, 3), rankApps("no", &ix, &out));
+    try t.expectEqual(@as(u32, 0), out[0].index);
+    // Only as many as there's room for: the worst one is the one dropped.
+    ix.apps.items[0].launches = 0;
+    var two: [2]search.Ranked = undefined;
+    try t.expectEqual(@as(usize, 2), rankApps("no", &ix, &two));
+    try t.expectEqual(@as(u32, 0), two[1].index);
 }

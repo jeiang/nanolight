@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const assert = std.debug.assert;
 const sc = @import("script_commands.zig");
+const search = @import("search.zig");
 const model = @import("raycast_model.zig");
 const Ext = @import("raycast_view.zig").Ext;
 const windows = builtin.os.tag == .windows;
@@ -170,9 +171,12 @@ pub const Runner = struct {
             if (v.len == 0 and
                 !arg.optional) return r.fail("Fill in every argument that isn't optional.");
             var enc: [2048]u8 = undefined;
+            var w: std.Io.Writer = .fixed(&enc);
+            // best effort: a value past `enc` is cut.
+            if (arg.percentEncoded) search.percentEncode(&w, v, .{}) catch {};
             argv.append(
                 a,
-                a.dupe(u8, if (arg.percentEncoded) sc.encode(&enc, v) else v) catch return,
+                a.dupe(u8, if (arg.percentEncoded) w.buffered() else v) catch return,
             ) catch return;
         }
         const dir = r.workDir(a);

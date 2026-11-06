@@ -240,7 +240,7 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/main.zig` | The app: the window, the hot key, the menu bar icon, updates |
 | `src/view.zig` | The panel: query, rows, footer, keys |
 | `src/results.zig` | What a query lists, in order |
-| `src/search.zig` | Fuzzy matching and ranking, allocation-free |
+| `src/search.zig` | Text: fuzzy matching and ranking (allocation-free), UTF-8 cutting, URL escaping |
 | `src/calc.zig` | The calculator |
 | `src/convert.zig` | Unit and currency conversion: the parser, unit table, rates table and when to refetch it |
 | `src/suggest.zig` | Google's completions: the privacy guard, decoding, the cache (after [browse](https://github.com/justrach/browse)) |

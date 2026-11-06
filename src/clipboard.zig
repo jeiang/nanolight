@@ -42,9 +42,8 @@ comptime {
 pub const preview_max = 512;
 /// How much of a text is matched against a search.
 const match_max = 160;
-/// A match below this is letters scattered in order: too loose for a text
-/// that may be long (the scores are search.zig's).
-const min_score = 450;
+/// The app a thing was copied from matches this much under the thing.
+const source_cost = 100;
 
 /// One thing that was copied.
 pub const Entry = struct {
@@ -121,14 +120,6 @@ fn deleteIfThere(io: Io, dir: Io.Dir, name: []const u8) bool {
         return false;
     };
     return true;
-}
-
-/// `s` cut to at most `max` bytes, on a character boundary.
-pub fn clip(s: []const u8, max: usize) []const u8 {
-    if (s.len <= max) return s;
-    var n = max;
-    while (n > 0 and s[n] & 0xC0 == 0x80) n -= 1;
-    return s[0..n];
 }
 
 pub const Store = struct {
@@ -233,7 +224,7 @@ pub const Store = struct {
         const spill = item.kind == .text and s.dir != null and content.len > s.inline_max;
         const body = s.gpa.dupe(
             u8,
-            if (item.kind == .image) "" else if (spill) clip(
+            if (item.kind == .image) "" else if (spill) search.clip(
                 content,
                 @min(preview_max, s.inline_max),
             ) else content,
@@ -390,54 +381,46 @@ pub const Store = struct {
 
     // ----- search -----
 
-    /// The entries `query` finds, best first (newest first among equals),
-    /// as places in `entries`: how many went into `out`. No query lists the
-    /// newest. It matches the text's start, a file's name and the source app.
-    pub fn find(s: *const Store, query: []const u8, out: []u32) usize {
+    /// The entries that match `query`, best first (newest first among equals),
+    /// into `out`: how many. No query lists the newest. It matches the text's
+    /// start, a file's name and the source app.
+    pub fn find(s: *const Store, query: []const u8, out: []search.Ranked) usize {
         const q = std.mem.trim(u8, query, " ");
         if (q.len == 0) {
             const n = @min(s.entries.items.len, out.len);
-            for (out[0..n], 0..) |*o, i| o.* = @intCast(i);
+            for (out[0..n], 0..) |*o, i| o.* = .{ .index = @intCast(i), .match = .{ .score = 0 } };
             return n;
         }
-        var scores: [64]i32 = undefined;
-        const room = @min(out.len, scores.len);
-        var n: usize = 0;
+        var top: search.Top = .init(out);
         for (s.entries.items, 0..) |e, i| {
-            const sc = s.score(q, e) orelse continue;
-            var at = n;
-            while (at > 0 and scores[at - 1] < sc) at -= 1;
-            if (at >= room) continue;
-            if (n < room) n += 1;
-            var j = n - 1;
-            while (j > at) : (j -= 1) {
-                out[j] = out[j - 1];
-                scores[j] = scores[j - 1];
-            }
-            out[at] = @intCast(i);
-            scores[at] = sc;
+            const m = match(q, e) orelse continue;
+            top.offer(.{ .index = @intCast(i), .match = m });
         }
-        return n;
+        return top.n;
     }
 
-    fn score(_: *const Store, q: []const u8, e: Entry) ?i32 {
-        var best: ?i32 = null;
+    fn match(q: []const u8, e: Entry) ?search.Match {
+        const min = search.min_loose_long;
+        var best: ?search.Match = null;
         switch (e.kind) {
-            .text => best = better(best, q, clip(e.text, match_max), 0),
+            .text => best = search.scoreNamed(q, search.clip(e.text, match_max), &.{}, min),
             .file => {
                 var lines = std.mem.splitScalar(u8, e.text, '\n');
-                while (lines.next()) |path| best = better(best, q, std.fs.path.basename(path), 0);
+                while (lines.next()) |path| {
+                    keepBetter(&best, search.scoreNamed(q, std.fs.path.basename(path), &.{}, min));
+                }
             },
             .image => {},
         }
-        return better(best, q, e.source, 100);
+        var via = search.scoreNamed(q, e.source, &.{}, min) orelse return best;
+        via.score -= source_cost;
+        keepBetter(&best, via);
+        return best;
     }
 
-    fn better(best: ?i32, q: []const u8, name: []const u8, penalty: i32) ?i32 {
-        const m = search.score(q, name) orelse return best;
-        const sc = m.score - penalty;
-        if (m.score < min_score) return best;
-        return if (best == null or sc > best.?) sc else best;
+    fn keepBetter(best: *?search.Match, m: ?search.Match) void {
+        const new = m orelse return;
+        if (best.* == null or new.score > best.*.?.score) best.* = new;
     }
 
     // ----- the files -----
@@ -652,7 +635,7 @@ pub fn title(buf: []u8, e: Entry) []const u8 {
             var lines = std.mem.splitScalar(u8, e.text, '\n');
             while (lines.next()) |l| {
                 const t = std.mem.trim(u8, l, " \t\r");
-                if (t.len > 0) return clip(t, 200);
+                if (t.len > 0) return search.clip(t, 200);
             }
             return "";
         },
@@ -903,23 +886,23 @@ test "search matches text, file names and the source app, best first" {
         .{ .kind = .image, .png = "x", .width = 4, .height = 4, .source = "com.apple.Preview" },
         4,
     );
-    var out: [8]u32 = undefined;
+    var out: [8]search.Ranked = undefined;
     // No query: all, newest first.
     try testing.expectEqual(@as(usize, 4), s.find("", &out));
-    try testing.expectEqual(@as(u32, 0), out[0]);
+    try testing.expectEqual(@as(u32, 0), out[0].index);
     // A prefix beats a match inside.
     try testing.expectEqual(@as(usize, 2), s.find("milk", &out));
-    try testing.expectEqualStrings("milkshake recipe", s.entries.items[out[0]].text);
-    try testing.expectEqualStrings("remember the milk", s.entries.items[out[1]].text);
+    try testing.expectEqualStrings("milkshake recipe", s.entries.items[out[0].index].text);
+    try testing.expectEqualStrings("remember the milk", s.entries.items[out[1].index].text);
     // A file's name, not its directory prefix path alone.
     try testing.expectEqual(@as(usize, 1), s.find("budget", &out));
-    try testing.expectEqual(Kind.file, s.entries.items[out[0]].kind);
+    try testing.expectEqual(Kind.file, s.entries.items[out[0].index].kind);
     // The source app, for every kind.
     try testing.expectEqual(@as(usize, 1), s.find("preview", &out));
-    try testing.expectEqual(Kind.image, s.entries.items[out[0]].kind);
+    try testing.expectEqual(Kind.image, s.entries.items[out[0].index].kind);
     try testing.expectEqual(@as(usize, 0), s.find("zzzzqq", &out));
     // Room for only some.
-    var one: [1]u32 = undefined;
+    var one: [1]search.Ranked = undefined;
     try testing.expectEqual(@as(usize, 1), s.find("", &one));
 }
 
@@ -1130,7 +1113,6 @@ test "how entries read" {
         .at = 0,
     };
     try testing.expectEqualStrings("c.txt and 1 more", title(&buf, f));
-    try testing.expectEqualStrings("é", clip("éé", 3));
     try testing.expectEqualStrings("12 bytes", sizeText(&buf, 12));
     try testing.expectEqualStrings("34 KB", sizeText(&buf, 34 * 1024 + 5));
     try testing.expectEqualStrings("1.5 MB", sizeText(&buf, 3 << 19));

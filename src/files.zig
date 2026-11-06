@@ -74,7 +74,7 @@ pub const List = struct {
             const m = if (path) |p| blk: {
                 if (std.mem.eql(u8, e.path(), clean)) {
                     l.exact = true;
-                    break :blk search.Match{ .score = 2000 };
+                    break :blk search.Match{ .score = search.exact_path };
                 }
                 const slash = std.mem.lastIndexOfScalar(u8, p, '/') orelse continue;
                 const dir = if (slash == 0) "/" else p[0..slash];
@@ -145,7 +145,7 @@ pub fn complete(io: std.Io, query: []const u8, out: *List) void {
     const path = expand(&expanded, query) orelse return;
     const clean = if (path.len > 1) std.mem.trimEnd(u8, path, "/") else path;
     if (std.Io.Dir.cwd().statFile(io, clean, .{})) |st| {
-        out.add(clean, st.kind == .directory, .{ .score = 2000 });
+        out.add(clean, st.kind == .directory, .{ .score = search.exact_path });
         out.exact = true;
         if (!std.mem.endsWith(u8, path, "/")) return;
     } else |_| {}
