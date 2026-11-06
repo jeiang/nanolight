@@ -45,11 +45,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-15, macos-26]
+        # GitHub no longer runs macos-14 ("configuration not supported").
+        os: [macos-15, macos-26]
     runs-on: ${{ matrix.os }}
-    # GitHub has deprecated macos-14 and will take it away: its failure shows,
-    # but holds up no release. Read it before you ship; 15 and 26 must pass.
-    continue-on-error: ${{ matrix.os == 'macos-14' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -61,16 +59,23 @@ jobs:
       # "from" is the published release just before "to" in the release list
       # (newest first), so that an older tag is never updated to from a newer
       # one; "to" may be a prerelease, as release.yml's is until it passes.
+      # A pull request has nothing to verify until a release exists: it skips
+      # what it can't check. A release's run fails instead.
       - name: Which releases
         id: which
         env:
           GH_TOKEN: ${{ github.token }}
           TO: ${{ inputs.tag }}
           FROM: ${{ inputs.from }}
+          PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
         run: |
           releases=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
             -q '.[] | select(.draft == false) | "\(.tag_name) \(.prerelease)"')
           to="${TO:-$(echo "$releases" | awk '$2 == "false" { print $1; exit }')}"
+          if [ -z "$to" ] && [ "$PULL_REQUEST" = true ]; then
+            echo "::notice::no published release yet: nothing to verify"
+            exit 0
+          fi
           if [ -z "$to" ]; then
             echo "::error::no published release to check"
             exit 1
@@ -79,19 +84,25 @@ jobs:
             echo "::error::$to is not a release of $GITHUB_REPOSITORY"
             exit 1
           fi
+          echo "to=$to" >> "$GITHUB_OUTPUT"
           from="${FROM:-$(echo "$releases" | awk -v to="$to" 'after && $2 == "false" { print $1; exit } $1 == to { after = 1 }')}"
+          if [ -z "$from" ] && [ "$PULL_REQUEST" = true ]; then
+            echo "::notice::no published release before $to: the update isn't checked"
+            exit 0
+          fi
           if [ -z "$from" ]; then
             echo "::error::no published release before $to to update from"
             exit 1
           fi
           echo "$from -> $to"
-          echo "to=$to" >> "$GITHUB_OUTPUT"
           echo "from=$from" >> "$GITHUB_OUTPUT"
 
       - name: The published files
+        if: steps.which.outputs.to != ''
         run: zig build verify-release -- "${{ steps.which.outputs.to }}"
 
       - name: First launch, update, refusals
+        if: steps.which.outputs.from != ''
         env:
           SHOTS: ${{ runner.temp }}/shots
           # A pull request changes the checks, not the published build they
