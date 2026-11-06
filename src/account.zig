@@ -30,7 +30,35 @@ pub const Hooks = struct {
     changed: *const fn (ctx: *anyopaque) void,
 };
 
-pub const State = enum { off, pending, ok, failed };
+/// Why the last sync failed, for the status line.
+pub const Reason = struct {
+    buf: [96]u8 = undefined,
+    len: usize = 0,
+
+    pub fn text(r: *const Reason) []const u8 {
+        return r.buf[0..r.len];
+    }
+};
+
+pub const Status = union(enum) {
+    /// No `[sync]` in config.toml.
+    off,
+    /// The token is read; no answer yet.
+    pending,
+    /// Last synced (unix seconds).
+    synced: i64,
+    failed: Reason,
+};
+
+/// The request out: whether it is this machine's first sync, and the `at` it sent.
+const Inflight = struct { first: bool, sent_at: i64 };
+
+/// Sends a request; its answer goes to `answered`. Tests answer themselves.
+pub const Send = *const fn (a: *Account, req: nanoui.http.Request) void;
+
+fn fetch(a: *Account, req: nanoui.http.Request) void {
+    nanoui.http.fetch(a.gpa, req, a, Account.answered);
+}
 
 pub const Account = struct {
     gpa: std.mem.Allocator,
@@ -38,17 +66,15 @@ pub const Account = struct {
     kv: nanoui.kv.Store,
     hooks: Hooks,
     cfg: config.Sync,
-    state: State = .off,
+    state: Status = .off,
     token: ?[]u8 = null,
-    last_ok: i64 = 0,
     last_pull: i64 = 0,
-    reason_buf: [96]u8 = undefined,
-    reason_len: usize = 0,
-    busy: bool = false,
-    /// Whether the request in flight is this machine's first sync, and the `at` it sent.
-    first_sent: bool = false,
-    sent_at: i64 = 0,
+    inflight: ?Inflight = null,
+    /// Asked to sync while a request was out: synced once more when it
+    /// succeeds. A failure drops it (no retry; the next change or pull asks).
+    dirty: bool = false,
     pushes_waiting: u32 = 0,
+    send: Send = fetch,
 
     /// At launch: reads the token and syncs, if `[sync]` is set.
     pub fn load(a: *Account) void {
@@ -70,9 +96,11 @@ pub const Account = struct {
     }
 
     fn failf(a: *Account, comptime fmt: []const u8, args: anytype) void {
-        const s = std.fmt.bufPrint(&a.reason_buf, fmt, args) catch a.reason_buf[0..0];
-        a.reason_len = s.len;
-        a.state = .failed;
+        var r: Reason = .{};
+        // Too long to say: no reason given.
+        r.len = if (std.fmt.bufPrint(&r.buf, fmt, args)) |s| s.len else |_| 0;
+        a.state = .{ .failed = r };
+        a.dirty = false;
         a.hooks.changed(a.hooks.ctx);
     }
 
@@ -82,11 +110,13 @@ pub const Account = struct {
         return switch (a.state) {
             .off => off_text,
             .pending => std.fmt.bufPrint(buf, "Sync: {s}, syncing…", .{host}) catch off_text,
-            .ok => blk: {
+            .synced => |at| blk: {
                 var ago_buf: [32]u8 = undefined;
-                break :blk std.fmt.bufPrint(buf, "Sync: {s}, last synced {s}", .{ host, ago(&ago_buf, now() - a.last_ok) }) catch off_text;
+                const when = ago(&ago_buf, now() - at);
+                const line = std.fmt.bufPrint(buf, "Sync: {s}, last synced {s}", .{ host, when });
+                break :blk line catch off_text;
             },
-            .failed => std.fmt.bufPrint(buf, "Sync: error {s}", .{a.reason_buf[0..a.reason_len]}) catch "Sync: error",
+            .failed => |*r| std.fmt.bufPrint(buf, "Sync: error {s}", .{r.text()}) catch "Sync: error",
         };
     }
 
@@ -114,9 +144,14 @@ pub const Account = struct {
         return !sameServer(have orelse return true, a.cfg.url);
     }
 
+    /// Sends this machine's record; with one out already, sent again once
+    /// that one succeeds.
     fn sync(a: *Account) void {
         const token = a.token orelse return;
-        if (a.busy) return;
+        if (a.inflight != null) {
+            a.dirty = true;
+            return;
+        }
         a.last_pull = now();
         var arena: std.heap.ArenaAllocator = .init(a.gpa);
         defer arena.deinit();
@@ -131,20 +166,20 @@ pub const Account = struct {
             .{ .name = "Content-Type", .value = "application/json" },
             .{ .name = first_header, .value = "1" },
         };
-        a.busy = true;
-        a.first_sent = a.firstHere();
-        a.sent_at = sent.at;
-        nanoui.http.fetch(a.gpa, .{
+        const first = a.firstHere();
+        a.inflight = .{ .first = first, .sent_at = sent.at };
+        a.send(a, .{
             .url = url,
             .method = "PUT",
-            .headers = headers[0..if (a.first_sent) 3 else 2],
+            .headers = headers[0..if (first) 3 else 2],
             .body = body,
             .timeout = 15,
-        }, a, answered);
+        });
     }
 
     fn answered(a: *Account, r: nanoui.http.Response) void {
-        a.busy = false;
+        const out = a.inflight.?;
+        a.inflight = null;
         if (r.status == 0) return a.failf("{s}", .{if (r.err.len > 0) r.err else "unreachable"});
         if (r.status == 401) return a.fail("the server rejected the token");
         if (r.status != 200) return a.failf("the server answered {d}", .{r.status});
@@ -155,14 +190,18 @@ pub const Account = struct {
         // Changed again while this was out: those choices are newer, and stay,
         // even on a first sync.
         const now_here = a.hooks.snapshot(a.hooks.ctx, al);
-        const first = a.first_sent and now_here.at == a.sent_at;
+        const first = out.first and now_here.at == out.sent_at;
         const merged = settings.merge(al, now_here, theirs, first) catch return a.fail("out of memory");
         a.hooks.apply(a.hooks.ctx, merged);
+        // best effort: unkept, the next sync is sent as a first one again.
         a.kv.set(synced_key, a.cfg.url) catch {};
-        a.last_ok = now();
-        a.state = .ok;
+        a.state = .{ .synced = now() };
         a.hooks.changed(a.hooks.ctx);
         if (!settings.same(merged, theirs)) a.changed();
+        if (a.dirty) {
+            a.dirty = false;
+            a.sync();
+        }
     }
 };
 
@@ -232,13 +271,93 @@ test "the status line says when it last synced" {
     try std.testing.expectEqualStrings(off_text, off.status(&line));
     var bad = off;
     bad.cfg = .{ .url = "http://h:1" };
-    bad.state = .failed;
-    bad.reason_len = (std.fmt.bufPrint(&bad.reason_buf, "the server rejected the token", .{}) catch unreachable).len;
-    try std.testing.expectEqualStrings("Sync: error the server rejected the token", bad.status(&line));
+    var reason: Reason = .{};
+    const why = "the server rejected the token";
+    reason.len = (std.fmt.bufPrint(&reason.buf, why, .{}) catch unreachable).len;
+    bad.state = .{ .failed = reason };
+    const said = "Sync: error the server rejected the token";
+    try std.testing.expectEqualStrings(said, bad.status(&line));
     var good = bad;
-    good.state = .ok;
-    good.last_ok = now() - 400;
+    good.state = .{ .synced = now() - 400 };
     try std.testing.expectEqualStrings("Sync: h:1, last synced 6 min ago", good.status(&line));
+}
+
+/// An account whose requests are only counted: tests answer them.
+const TestSync = struct {
+    mem: nanoui.kv.Memory = .{ .gpa = std.testing.allocator },
+    acc: Account = undefined,
+    sends: u32 = 0,
+    statuses: u32 = 0,
+    here: Settings = .{ .hotkey = "cmd_space", .suggest = true, .at = 100 },
+
+    fn init(t: *TestSync) void {
+        t.acc = .{
+            .gpa = std.testing.allocator,
+            .io = std.testing.io,
+            .kv = t.mem.store(),
+            .hooks = .{ .ctx = t, .snapshot = snapshot, .apply = apply, .changed = changed },
+            .cfg = .{ .url = "http://h:1" },
+            .token = @constCast("t"),
+            .state = .pending,
+            .send = send,
+        };
+    }
+    fn of(ctx: *anyopaque) *TestSync {
+        return @ptrCast(@alignCast(ctx));
+    }
+    fn snapshot(ctx: *anyopaque, _: std.mem.Allocator) Settings {
+        return of(ctx).here;
+    }
+    fn apply(_: *anyopaque, _: Settings) void {}
+    fn changed(ctx: *anyopaque) void {
+        of(ctx).statuses += 1;
+    }
+    fn send(a: *Account, _: nanoui.http.Request) void {
+        const t: *TestSync = @fieldParentPtr("acc", a);
+        t.sends += 1;
+    }
+    /// The server agreeing with this machine.
+    fn agree(t: *TestSync) !void {
+        const body = try settings.encode(std.testing.allocator, t.here);
+        defer std.testing.allocator.free(body);
+        t.acc.answered(.{ .status = 200, .body = body });
+    }
+};
+
+test "a failed sync says why and is not retried, even if asked again meanwhile" {
+    var t: TestSync = .{};
+    defer t.mem.deinit();
+    t.init();
+    t.acc.sync();
+    try std.testing.expectEqual(@as(u32, 1), t.sends);
+    // Asked again while it is out: not sent now.
+    t.acc.sync();
+    try std.testing.expectEqual(@as(u32, 1), t.sends);
+    try std.testing.expect(t.acc.dirty);
+    t.acc.answered(.{ .status = 500, .body = "" });
+    try std.testing.expectEqual(@as(u32, 1), t.sends);
+    try std.testing.expect(t.acc.inflight == null and !t.acc.dirty);
+    var line: [160]u8 = undefined;
+    try std.testing.expectEqualStrings("Sync: error the server answered 500", t.acc.status(&line));
+}
+
+test "a change made while a sync is out is sent once that one succeeds" {
+    var t: TestSync = .{};
+    defer t.mem.deinit();
+    t.init();
+    t.acc.sync();
+    t.here.suggest = false;
+    t.here.at = 200;
+    t.acc.sync();
+    try std.testing.expectEqual(@as(u32, 1), t.sends);
+    try t.agree();
+    try std.testing.expect(t.acc.state == .synced);
+    // Sent again, once.
+    try std.testing.expectEqual(@as(u32, 2), t.sends);
+    try std.testing.expect(t.acc.inflight != null and !t.acc.dirty);
+    try t.agree();
+    try std.testing.expectEqual(@as(u32, 2), t.sends);
+    try std.testing.expect(t.acc.inflight == null);
 }
 
 test "a trailing slash does not make a server a new one" {
