@@ -237,9 +237,7 @@ pub const Onboard = struct {
             defer caps.end();
             const ch = o.choice;
             const hotkey = @import("hotkey.zig");
-            const pc = ch.pc();
-            const held_mod = if (!mac) (!pc.ctrl or c.input.ctrl) and (!pc.alt or c.input.alt) and (!pc.shift or c.input.shift) else (ch.mods & hotkey.cmd == 0 or c.input.cmd) and (ch.mods & hotkey.option == 0 or c.input.alt) and
-                (ch.mods & hotkey.control == 0 or c.input.ctrl) and (ch.mods & hotkey.shift == 0 or c.input.shift);
+            const held_mod = modsHeld(ch, c);
             const mods = c.print("{f}", .{ch.held()});
             if (mods.len > 0) {
                 // A PC's "Ctrl Alt" is words, not glyphs: wider per key.
@@ -260,6 +258,24 @@ pub const Onboard = struct {
         defer ticks.end();
         tick(c, p, "Closed", o.closed);
         tick(c, p, "Back again", o.reopened);
+    }
+
+    /// Every modifier of `ch` is held now: on a PC by its preset's keys.
+    fn modsHeld(ch: Choice, c: *const ui.Context) bool {
+        const in = c.input;
+        if (!mac) {
+            const pc = ch.pc();
+            if (pc.ctrl and !in.ctrl) return false;
+            if (pc.alt and !in.alt) return false;
+            if (pc.shift and !in.shift) return false;
+            return true;
+        }
+        const hotkey = @import("hotkey.zig");
+        if (ch.mods & hotkey.cmd != 0 and !in.cmd) return false;
+        if (ch.mods & hotkey.option != 0 and !in.alt) return false;
+        if (ch.mods & hotkey.control != 0 and !in.ctrl) return false;
+        if (ch.mods & hotkey.shift != 0 and !in.shift) return false;
+        return true;
     }
 
     fn cap(c: *ui.Context, p: Palette, str: []const u8, w: f32, lit: bool) void {

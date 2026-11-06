@@ -24,7 +24,12 @@ pub fn askFiles(ctx: *anyopaque, q: []const u8) void {
 }
 
 fn sendFiles(l: *Live) void {
-    if (!mac or l.files.busy or l.files.waiting > 0 or l.files.sent == l.files.epoch or !l.s.files_on) return;
+    if (!mac) return;
+    if (!l.s.files_on) return;
+    // One search at a time, sent once the typing pauses, and once per query.
+    if (l.files.busy) return;
+    if (l.files.waiting > 0) return;
+    if (l.files.sent == l.files.epoch) return;
     const q = l.files.query[0..l.files.len];
     if (!std.mem.eql(u8, q, std.mem.trim(u8, l.s.query.text(), " \t\r\n"))) return;
     const a = l.app.gpa.create(FileAsk) catch return;
