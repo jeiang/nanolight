@@ -5,7 +5,6 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const account = @import("account.zig");
-const config = @import("config.zig");
 const settings = @import("settings.zig");
 const Settings = settings.Settings;
 const keys = @import("keys.zig");
@@ -31,7 +30,7 @@ pub const Sync = struct {
     }
 
     /// `[sync]` names a server: synced now.
-    pub fn start(sy: *Sync, cfg: config.Sync) void {
+    pub fn start(sy: *Sync, cfg: account.Config) void {
         sy.acct = .{
             .gpa = sy.core.app.gpa,
             .io = sy.core.app.io,

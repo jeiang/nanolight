@@ -214,7 +214,7 @@ fn runShown(
     menu: *menu_live.Menu,
     update: *update_live.Update,
     sync: *account_live.Sync,
-    sync_cfg: config.Sync,
+    sync_cfg: account.Config,
 ) !void {
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
     if (platform.Single.claim(.{ .ctx = core, .func = App.command }) > 0) std.log.info(

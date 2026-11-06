@@ -367,7 +367,7 @@ const FileAsks = struct {
     count: usize = 0,
 
     fn host(a: *FileAsks) view.Host {
-        return .{ .ctx = a, .open = open, .hide = hide, .files = ask };
+        return .{ .ctx = a, .open = open, .hide = hide, .files = .{ .ctx = a, .func = ask } };
     }
     fn open(_: *anyopaque, _: []const u8) void {}
     fn hide(_: *anyopaque) void {}
