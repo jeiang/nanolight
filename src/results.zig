@@ -106,6 +106,11 @@ pub const max_rows = max_apps + max_quicklink_rows + 3;
 /// Every local candidate, and a card, fit before ranking keeps the best of
 /// them and trims the list to `max_rows`.
 const max_candidates = 1 + max_apps + files.max_rows + max_panes + max_commands;
+comptime {
+    // The Settings and Clipboard History rows, two at most, are listed only
+    // in place of the panes and commands.
+    std.debug.assert(max_panes + max_commands >= 2);
+}
 
 /// The quicklink a query addresses by keyword, and where its words start.
 pub const Keyed = struct { ql: u16, arg: usize };
@@ -336,9 +341,10 @@ pub const Results = struct {
         std.sort.insertion(Row, r.rows[start..r.n], preferred, Order.before);
     }
 
-    /// Local candidates may pass `max_rows` until `build` trims them.
+    /// Local candidates may pass `max_rows` until `build` trims them, but
+    /// never `max_candidates`.
     fn push(r: *Results, row: Row) void {
-        if (r.n == r.rows.len) return;
+        std.debug.assert(r.n < r.rows.len);
         r.rows[r.n] = row;
         r.n += 1;
     }
