@@ -172,7 +172,10 @@ pub const Live = struct {
         const l: *Live = @ptrCast(@alignCast(ctx));
         const ix = l.s.index;
         var list: std.ArrayList(@import("settings.zig").Launch) = .empty;
-        for (ix.apps.items, ix.launches.items) |a, n| if (n > 0) list.append(arena, .{ .name = a.name, .path = a.path, .count = n }) catch break;
+        for (ix.apps.items) |a| if (a.launches > 0) {
+            const one: settings_mod.Launch = .{ .name = a.name, .path = a.path, .count = a.launches };
+            list.append(arena, one) catch break;
+        };
         var at: i64 = 0;
         if (l.kv.get(arena, sync_at_key) catch null) |v| at = std.fmt.parseInt(i64, v, 10) catch 0;
         const name = arena.create([32]u8) catch return .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.ql_custom };
@@ -233,7 +236,7 @@ pub const Live = struct {
                 ix.findPath(la.path) orelse ix.find(la.name)
             else
                 ix.find(la.name);
-            if (i) |idx| ix.launches.items[idx] = @max(ix.launches.items[idx], la.count);
+            if (i) |idx| ix.apps.items[idx].launches = @max(ix.apps.items[idx].launches, la.count);
         }
         ix.save(l.kv);
         l.s.built = 1;

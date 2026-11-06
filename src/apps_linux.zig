@@ -5,7 +5,8 @@
 //! by its Exec line run here. Its icon is found in the icon themes and
 //! drawn by gdk-pixbuf (SVG too) at 64 pixels.
 const std = @import("std");
-const Index = @import("apps.zig").Index;
+const apps = @import("apps.zig");
+const Index = apps.Index;
 
 fn env(name: [*:0]const u8) ?[]const u8 {
     const v = std.c.getenv(name) orelse return null;
@@ -37,31 +38,28 @@ pub fn scan(ix: *Index, io: std.Io) void {
     var home: [512]u8 = undefined;
     for (dataDirs(&dirs, &home)) |d| {
         var p: [1024]u8 = undefined;
-        const apps = std.fmt.bufPrint(&p, "{s}/applications", .{d}) catch continue;
-        scanDir(ix, io, apps, 1);
+        const folder = std.fmt.bufPrint(&p, "{s}/applications", .{d}) catch continue;
+        scanDir(ix, io, folder, 1);
     }
     scanDir(ix, io, "/var/lib/snapd/desktop/applications", 0);
 }
 
 pub fn scanDir(ix: *Index, io: std.Io, path: []const u8, depth: u8) void {
-    var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return;
-    defer dir.close(io);
-    var it = dir.iterate();
-    var buf: [1024]u8 = undefined;
-    while (it.next(io) catch null) |e| {
-        const full = std.fmt.bufPrint(&buf, "{s}/{s}", .{ path, e.name }) catch continue;
-        if (std.mem.endsWith(u8, e.name, ".desktop")) {
+    const Scan = struct {
+        ix: *Index,
+        io: std.Io,
+
+        fn visit(s: @This(), f: apps.Found) apps.Step {
+            if (!std.mem.endsWith(u8, f.entry.name, ".desktop")) return .descend;
             var text: [16 * 1024]u8 = undefined;
-            const bytes = dir.readFile(io, e.name, &text) catch continue;
+            const bytes = f.dir.readFile(s.io, f.entry.name, &text) catch return .next;
             const entry = parse(bytes);
-            if (!entry.shown()) continue;
-            ix.addIn(entry.name, full, "Application") catch return;
-        } else if (depth > 0 and e.kind == .directory) {
-            var sub: [1024]u8 = undefined;
-            @memcpy(sub[0..full.len], full);
-            scanDir(ix, io, sub[0..full.len], depth - 1);
+            if (!entry.shown()) return .next;
+            s.ix.addIn(entry.name, f.full, "Application") catch return .stop;
+            return .next;
         }
-    }
+    };
+    apps.walk(io, path, depth, Scan{ .ix = ix, .io = io }, Scan.visit);
 }
 
 pub const Entry = struct {

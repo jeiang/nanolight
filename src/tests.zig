@@ -129,7 +129,7 @@ test "the panel finds, moves, answers and hands off" {
     press(&t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("/Applications/System Settings.app", probe.opened[0..probe.opened_len]);
     try std.testing.expect(probe.hidden);
-    try std.testing.expectEqual(@as(u16, 1), ix.launches.items[ix.find("System Settings").?]);
+    try std.testing.expectEqual(@as(u16, 1), ix.apps.items[ix.find("System Settings").?].launches);
 
     // ⌘2 opens the second row at once: Safari, under System Settings,
     // which was just opened.

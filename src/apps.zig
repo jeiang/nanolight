@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const mac = builtin.os.tag == .macos;
 const objc = nanoui.objc;
+const assert = std.debug.assert;
 
 pub const App = struct {
     name: []const u8,
@@ -17,7 +18,15 @@ pub const App = struct {
     folder: []const u8,
     /// Mandarin reading as ASCII (scan time), for Latin queries.
     pinyin: []const u8 = "",
+    /// Times it was opened (kept in `store_key`).
+    launches: u16 = 0,
+    /// Its icon, asked of the system the first time a row shows it.
+    icon: Icon = .unloaded,
 };
+
+/// An app's icon: not asked for yet, asked for with no answer, or a PNG
+/// (the index's gpa owns it).
+pub const Icon = union(enum) { unloaded, none, png: []u8 };
 
 /// Where apps are, in the order a name is first taken from.
 pub const roots = [_][]const u8{
@@ -69,17 +78,82 @@ pub fn launch(io: std.Io, path: []const u8) bool {
     return nanoui.shell.openPath(path);
 }
 
-pub const Icon = struct { png: []u8 };
+/// A scan looks at most this many folders below the one it is given.
+pub const max_scan_depth = 2;
+/// Longer paths are passed over.
+const max_scan_path = 1024;
+
+/// What a scan does after an entry `walk` found: on to the next, into it
+/// (a folder, if the depth allows), or no further at all.
+pub const Step = enum { next, descend, stop };
+
+/// An entry `walk` found: `entry` in the open folder `dir`, whose path is
+/// `folder`; `full` is the entry's own path.
+pub const Found = struct {
+    dir: std.Io.Dir,
+    folder: []const u8,
+    full: []const u8,
+    entry: std.Io.Dir.Entry,
+};
+
+/// Hands `visit` everything in `root`, and in each folder it descends into
+/// up to `depth` below, depth first in the order they are listed. Each open
+/// folder is a frame on a fixed stack, not a call; one that cannot be
+/// opened is passed over.
+pub fn walk(
+    io: std.Io,
+    root: []const u8,
+    depth: u8,
+    ctx: anytype,
+    comptime visit: fn (@TypeOf(ctx), Found) Step,
+) void {
+    assert(depth <= max_scan_depth);
+    const Frame = struct {
+        dir: std.Io.Dir,
+        it: std.Io.Dir.Iterator,
+        path: [max_scan_path]u8,
+        len: usize,
+        depth: u8,
+    };
+    var stack: [max_scan_depth + 1]Frame = undefined;
+    if (root.len > max_scan_path) return;
+    const first = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch return;
+    stack[0] = .{ .dir = first, .it = first.iterate(), .path = undefined, .len = root.len, .depth = depth };
+    @memcpy(stack[0].path[0..root.len], root);
+    var n: usize = 1;
+    defer for (stack[0..n]) |*f| f.dir.close(io);
+    while (n > 0) {
+        const top = &stack[n - 1];
+        const e = (top.it.next(io) catch null) orelse {
+            top.dir.close(io);
+            n -= 1;
+            continue;
+        };
+        const folder = top.path[0..top.len];
+        var buf: [max_scan_path]u8 = undefined;
+        const full = std.fmt.bufPrint(&buf, "{s}{c}{s}", .{ folder, std.fs.path.sep, e.name }) catch continue;
+        switch (visit(ctx, .{ .dir = top.dir, .folder = folder, .full = full, .entry = e })) {
+            .next => {},
+            .stop => return,
+            .descend => {
+                if (top.depth == 0 or e.kind != .directory) continue;
+                const sub = top.dir.openDir(io, e.name, .{ .iterate = true }) catch continue;
+                assert(n < stack.len);
+                stack[n] = .{ .dir = sub, .it = sub.iterate(), .path = undefined, .len = full.len, .depth = top.depth - 1 };
+                @memcpy(stack[n].path[0..full.len], full);
+                n += 1;
+            },
+        }
+    }
+}
 
 pub const Index = struct {
     gpa: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     apps: std.ArrayList(App) = .empty,
-    /// The names alone, for `search.rank`.
-    names: std.ArrayList([]const u8) = .empty,
-    /// Times each was opened.
-    launches: std.ArrayList(u16) = .empty,
-    icons: std.AutoHashMapUnmanaged(u32, ?Icon) = .empty,
+    /// Counts in the store for apps this scan did not find (a volume not
+    /// mounted, say): written back with the rest, so they are not lost.
+    missed: std.ArrayList(Launch) = .empty,
     /// Listed with an empty query before anything was opened.
     starters: []const []const u8 = default_starters,
 
@@ -88,12 +162,12 @@ pub const Index = struct {
     }
 
     pub fn deinit(ix: *Index) void {
-        var it = ix.icons.valueIterator();
-        while (it.next()) |v| if (v.*) |i| ix.gpa.free(i.png);
-        ix.icons.deinit(ix.gpa);
+        for (ix.apps.items) |a| switch (a.icon) {
+            .png => |png| ix.gpa.free(png),
+            .unloaded, .none => {},
+        };
         ix.apps.deinit(ix.gpa);
-        ix.names.deinit(ix.gpa);
-        ix.launches.deinit(ix.gpa);
+        ix.missed.deinit(ix.gpa);
         ix.arena.deinit();
     }
 
@@ -105,12 +179,13 @@ pub const Index = struct {
 
     /// Adds an app, its row saying `folder` ("Applications", "Start").
     pub fn addIn(ix: *Index, name: []const u8, path: []const u8, folder: []const u8) !void {
-        for (ix.names.items) |n| if (std.ascii.eqlIgnoreCase(n, name)) return;
+        if (ix.find(name) != null) return;
         const a = ix.arena.allocator();
-        const p = try a.dupe(u8, path);
-        try ix.apps.append(ix.gpa, .{ .name = try a.dupe(u8, name), .path = p, .folder = try a.dupe(u8, folder) });
-        try ix.names.append(ix.gpa, ix.apps.items[ix.apps.items.len - 1].name);
-        try ix.launches.append(ix.gpa, 0);
+        try ix.apps.append(ix.gpa, .{
+            .name = try a.dupe(u8, name),
+            .path = try a.dupe(u8, path),
+            .folder = try a.dupe(u8, folder),
+        });
     }
 
     /// Finds the apps on this machine; `home` adds ~/Applications.
@@ -142,25 +217,18 @@ pub const Index = struct {
     }
 
     fn scanDir(ix: *Index, io: std.Io, dir_path: []const u8, depth: u8) void {
-        var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return;
-        defer dir.close(io);
-        var it = dir.iterate();
-        var buf: [1024]u8 = undefined;
-        while (it.next(io) catch null) |e| {
-            if (e.name.len == 0 or e.name[0] == '.') continue;
-            const full = std.fmt.bufPrint(&buf, "{s}/{s}", .{ dir_path, e.name }) catch continue;
-            if (std.mem.endsWith(u8, e.name, ".app")) {
-                ix.add(e.name[0 .. e.name.len - 4], full) catch return;
-            } else if (depth > 0 and e.kind == .directory) {
-                // The callee formats into its own buffer: copy the path first.
-                var sub: [1024]u8 = undefined;
-                @memcpy(sub[0..full.len], full);
-                ix.scanDir(io, sub[0..full.len], depth - 1);
-            }
-        }
+        walk(io, dir_path, depth, ix, visitBundle);
     }
 
-    /// Alphabetical, case-insensitive; names and counts kept in step.
+    fn visitBundle(ix: *Index, f: Found) Step {
+        const name = f.entry.name;
+        if (name.len == 0 or name[0] == '.') return .next;
+        if (!std.mem.endsWith(u8, name, ".app")) return .descend;
+        ix.add(name[0 .. name.len - 4], f.full) catch return .stop;
+        return .next;
+    }
+
+    /// Alphabetical, case-insensitive; each app's count and icon go with it.
     pub fn sort(ix: *Index) void {
         const Ctx = struct {
             pub fn lessThan(_: @This(), a: App, b: App) bool {
@@ -168,7 +236,6 @@ pub const Index = struct {
             }
         };
         std.sort.pdq(App, ix.apps.items, Ctx{}, Ctx.lessThan);
-        for (ix.apps.items, 0..) |a, i| ix.names.items[i] = a.name;
     }
 
     /// Whether `other` lists the same apps and commands, at the same
@@ -182,7 +249,7 @@ pub const Index = struct {
     }
 
     pub fn find(ix: *const Index, name: []const u8) ?u32 {
-        for (ix.names.items, 0..) |n, i| if (std.ascii.eqlIgnoreCase(n, name)) return @intCast(i);
+        for (ix.apps.items, 0..) |a, i| if (std.ascii.eqlIgnoreCase(a.name, name)) return @intCast(i);
         return null;
     }
 
@@ -199,11 +266,11 @@ pub const Index = struct {
         var best: u16 = std.math.maxInt(u16);
         while (n < out.len) {
             var next: u16 = 0;
-            for (ix.launches.items) |l| if (l < best and l > next) {
-                next = l;
+            for (ix.apps.items) |a| if (a.launches < best and a.launches > next) {
+                next = a.launches;
             };
             if (next == 0) break;
-            for (ix.launches.items, 0..) |l, i| if (l == next and n < out.len) {
+            for (ix.apps.items, 0..) |a, i| if (a.launches == next and n < out.len) {
                 out[n] = @intCast(i);
                 n += 1;
             };
@@ -222,21 +289,32 @@ pub const Index = struct {
 
     /// Counts an opening, and keeps the counts in `store`.
     pub fn opened(ix: *Index, i: u32, store: ?nanoui.kv.Store) void {
-        ix.launches.items[i] +|= 1;
+        ix.apps.items[i].launches +|= 1;
         if (store) |kv| ix.save(kv);
     }
 
-    /// Keeps every count in `kv` (as `opened` does, and a sync after it).
+    /// Keeps every count in `kv` (as `opened` does, and a sync after it):
+    /// the apps' and those `missed`, the `max_launches` most opened.
     pub fn save(ix: *Index, kv: nanoui.kv.Store) void {
+        var list: std.ArrayList(Launch) = .empty;
+        defer list.deinit(ix.gpa);
+        // best effort: out of memory leaves the stored counts as they were.
+        list.ensureTotalCapacity(ix.gpa, ix.apps.items.len + ix.missed.items.len) catch return;
+        for (ix.apps.items) |a| if (a.launches > 0) list.appendAssumeCapacity(.{ .key = a.path, .count = a.launches });
+        list.appendSliceAssumeCapacity(ix.missed.items);
+        const kept = mostOpened(list.items);
         var aw: std.Io.Writer.Allocating = .init(ix.gpa);
         defer aw.deinit();
-        for (ix.apps.items, ix.launches.items) |a, l| if (l > 0) aw.writer.print("{s}\t{d}\n", .{ a.path, l }) catch return;
-        kv.set(store_key, aw.written()) catch {};
+        // best effort: out of memory leaves the stored counts as they were.
+        for (kept) |l| aw.writer.print("{s}\t{d}\n", .{ l.key, l.count }) catch return;
+        kv.set(store_key, aw.written()) catch |err| std.log.warn("nanolight: launch counts not saved: {t}", .{err});
     }
 
     /// The counts `opened` kept. Keys are app paths; older rows used
-    /// display names and are still read once.
+    /// display names and are still read once. Rows for apps not found
+    /// are kept in `missed`, at most `max_launches` of them.
     pub fn load(ix: *Index, store: nanoui.kv.Store) void {
+        ix.missed.clearRetainingCapacity();
         const v = (store.get(ix.gpa, store_key) catch null) orelse return;
         defer ix.gpa.free(v);
         var lines = std.mem.splitScalar(u8, v, '\n');
@@ -245,24 +323,72 @@ pub const Index = struct {
             const tab = std.mem.indexOfScalar(u8, line, '\t') orelse continue;
             const key = line[0..tab];
             const count = std.fmt.parseInt(u16, line[tab + 1 ..], 10) catch 0;
-            const i = resolveLaunchKey(ix, key) orelse continue;
-            ix.launches.items[i] = count;
+            if (resolveLaunchKey(ix, key)) |i| {
+                ix.apps.items[i].launches = count;
+                continue;
+            }
+            if (count > 0) ix.keepMissed(key, count);
+        }
+        assert(ix.missed.items.len <= max_launches);
+    }
+
+    /// Keeps a stored count no app here has; once `max_launches` are kept,
+    /// only in place of the least opened, if it beats it.
+    fn keepMissed(ix: *Index, key: []const u8, count: u16) void {
+        var slot: ?usize = null;
+        if (ix.missed.items.len == max_launches) {
+            var least: usize = 0;
+            for (ix.missed.items, 0..) |l, i| if (l.count < ix.missed.items[least].count) {
+                least = i;
+            };
+            if (ix.missed.items[least].count >= count) return;
+            slot = least;
+        }
+        // best effort: a count not kept now is one fewer remembered.
+        const owned = ix.arena.allocator().dupe(u8, key) catch return;
+        if (slot) |i| {
+            ix.missed.items[i] = .{ .key = owned, .count = count };
+        } else {
+            // best effort: as above.
+            ix.missed.append(ix.gpa, .{ .key = owned, .count = count }) catch return;
         }
     }
 
     /// The app's icon as PNG, made the first time it is asked for.
     pub fn icon(ix: *Index, i: u32) ?[]const u8 {
-        if (ix.icons.get(i)) |cached| return if (cached) |c| c.png else null;
-        const path = ix.apps.items[i].path;
+        const app = &ix.apps.items[i];
+        switch (app.icon) {
+            .png => |png| return png,
+            .none => return null,
+            .unloaded => {},
+        }
         const png = switch (builtin.os.tag) {
-            .macos => iconPng(ix.gpa, path),
-            .windows => @import("apps_win.zig").icon(ix.gpa, path),
-            else => @import("apps_linux.zig").icon(ix.gpa, std.Io.Threaded.global_single_threaded.io(), path),
+            .macos => iconPng(ix.gpa, app.path),
+            .windows => @import("apps_win.zig").icon(ix.gpa, app.path),
+            else => @import("apps_linux.zig").icon(ix.gpa, std.Io.Threaded.global_single_threaded.io(), app.path),
         };
-        ix.icons.put(ix.gpa, i, if (png) |p| .{ .png = p } else null) catch {};
+        app.icon = if (png) |p| .{ .png = p } else .none;
         return png;
     }
 };
+
+/// At most this many launch counts are stored: the most opened.
+pub const max_launches = 512;
+
+/// A stored launch count: an app's path (or, in older rows, its name).
+pub const Launch = struct { key: []const u8, count: u16 };
+
+/// `list` sorted most opened first (ties by key, the same every run), cut
+/// to `max_launches`.
+fn mostOpened(list: []Launch) []const Launch {
+    std.sort.pdq(Launch, list, {}, struct {
+        fn f(_: void, a: Launch, b: Launch) bool {
+            if (a.count != b.count) return a.count > b.count;
+            return std.mem.lessThan(u8, a.key, b.key);
+        }
+    }.f);
+    return list[0..@min(list.len, max_launches)];
+}
 
 const store_key = "nanolight.launches";
 
@@ -365,22 +491,122 @@ test "names are kept once, sorted, and opening one suggests it" {
     try ix.add("Calculator", "/System/Applications/Calculator.app");
     ix.sort();
     try t.expectEqual(@as(usize, 3), ix.apps.items.len);
-    try t.expectEqualStrings("Calculator", ix.names.items[0]);
+    try t.expectEqualStrings("Calculator", ix.apps.items[0].name);
     try t.expectEqualStrings("Applications", ix.apps.items[0].folder);
     var out: [3]u32 = undefined;
     // Nothing opened yet: the starters there are.
     try t.expectEqual(@as(usize, 2), ix.suggestions(&out));
-    try t.expectEqualStrings("Safari", ix.names.items[out[0]]);
+    try t.expectEqualStrings("Safari", ix.apps.items[out[0]].name);
     var mem: nanoui.kv.Memory = .{ .gpa = t.allocator };
     defer mem.deinit();
     ix.opened(0, mem.store());
     ix.opened(0, mem.store());
     try t.expectEqual(@as(usize, 3), ix.suggestions(&out));
-    try t.expectEqualStrings("Calculator", ix.names.items[out[0]]);
+    try t.expectEqualStrings("Calculator", ix.apps.items[out[0]].name);
     // Kept, and read back.
-    ix.launches.items[0] = 0;
+    ix.apps.items[0].launches = 0;
     ix.load(mem.store());
-    try t.expectEqual(@as(u16, 2), ix.launches.items[0]);
+    try t.expectEqual(@as(u16, 2), ix.apps.items[0].launches);
+}
+
+test "a count and an icon stay with their app through a sort" {
+    const t = std.testing;
+    var ix: Index = .init(t.allocator);
+    defer ix.deinit();
+    try ix.add("Mail", "/Applications/Mail.app");
+    try ix.add("Zed", "/Applications/Zed.app");
+    const zed_was = ix.find("Zed").?;
+    ix.opened(zed_was, null);
+    ix.apps.items[zed_was].icon = .{ .png = try t.allocator.dupe(u8, "zed") };
+    // A name read later (localize) sorts again, after the count: Mail moves.
+    ix.apps.items[ix.find("Mail").?].name = "Ångström";
+    ix.sort();
+    const zed = ix.findPath("/Applications/Zed.app").?;
+    try t.expect(zed != zed_was);
+    try t.expectEqual(@as(u16, 1), ix.apps.items[zed].launches);
+    try t.expectEqualStrings("zed", ix.icon(zed).?);
+    const mail = ix.findPath("/Applications/Mail.app").?;
+    try t.expectEqual(@as(u16, 0), ix.apps.items[mail].launches);
+    try t.expect(ix.apps.items[mail].icon == .unloaded);
+}
+
+test "counts outlive a scan that missed their app" {
+    const t = std.testing;
+    var mem: nanoui.kv.Memory = .{ .gpa = t.allocator };
+    defer mem.deinit();
+    {
+        var ix: Index = .init(t.allocator);
+        defer ix.deinit();
+        try ix.add("Safari", "/Applications/Safari.app");
+        try ix.add("Logic", "/Volumes/Studio/Logic.app");
+        ix.opened(ix.find("Logic").?, null);
+        ix.opened(ix.find("Logic").?, null);
+        ix.opened(ix.find("Safari").?, mem.store());
+    }
+    {
+        // The volume is not mounted: Safari opened again keeps Logic's count.
+        var ix: Index = .init(t.allocator);
+        defer ix.deinit();
+        try ix.add("Safari", "/Applications/Safari.app");
+        ix.load(mem.store());
+        ix.opened(ix.find("Safari").?, mem.store());
+    }
+    var ix: Index = .init(t.allocator);
+    defer ix.deinit();
+    try ix.add("Safari", "/Applications/Safari.app");
+    try ix.add("Logic", "/Volumes/Studio/Logic.app");
+    ix.load(mem.store());
+    try t.expectEqual(@as(u16, 2), ix.apps.items[ix.find("Logic").?].launches);
+    try t.expectEqual(@as(u16, 2), ix.apps.items[ix.find("Safari").?].launches);
+    try t.expectEqual(@as(usize, 0), ix.missed.items.len);
+}
+
+test "past the cap, the least opened counts are dropped" {
+    const t = std.testing;
+    var mem: nanoui.kv.Memory = .{ .gpa = t.allocator };
+    defer mem.deinit();
+    // More stored than kept, least opened first (an order `save` never writes).
+    var aw: std.Io.Writer.Allocating = .init(t.allocator);
+    defer aw.deinit();
+    for (0..max_launches + 10) |i| try aw.writer.print("/gone/{d}.app\t{d}\n", .{ i, i + 1 });
+    try mem.store().set(store_key, aw.written());
+    var ix: Index = .init(t.allocator);
+    defer ix.deinit();
+    try ix.add("Safari", "/Applications/Safari.app");
+    ix.load(mem.store());
+    try t.expectEqual(@as(usize, max_launches), ix.missed.items.len);
+    for (ix.missed.items) |l| try t.expect(l.count > 10);
+    // Safari, opened once, is the least opened of all: it is the one left out.
+    ix.opened(0, mem.store());
+    const v = (try mem.store().get(t.allocator, store_key)).?;
+    defer t.allocator.free(v);
+    try t.expectEqual(@as(usize, max_launches), std.mem.count(u8, v, "\n"));
+    try t.expect(std.mem.indexOf(u8, v, "Safari") == null);
+    try t.expect(std.mem.startsWith(u8, v, "/gone/521.app\t522\n"));
+}
+
+test "a scan looks in folders down to its depth, without recursion" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(t.io, "Top.app");
+    try tmp.dir.createDirPath(t.io, "Suite/Inner.app");
+    try tmp.dir.createDirPath(t.io, "Suite/Deeper/Deep.app");
+    try tmp.dir.createDirPath(t.io, ".hidden/Hidden.app");
+    var buf: [128]u8 = undefined;
+    const root = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var ix: Index = .init(t.allocator);
+    defer ix.deinit();
+    ix.scanDir(t.io, root, 1);
+    try t.expect(ix.find("Top") != null);
+    try t.expect(ix.find("Inner") != null);
+    try t.expectEqualStrings("Suite", ix.apps.items[ix.find("Inner").?].folder);
+    try t.expect(ix.find("Deep") == null);
+    try t.expect(ix.find("Hidden") == null);
+    var deeper: Index = .init(t.allocator);
+    defer deeper.deinit();
+    deeper.scanDir(t.io, root, max_scan_depth);
+    try t.expect(deeper.find("Deep") != null);
 }
 
 test "a second look tells an app installed since from no change (#15)" {
@@ -416,9 +642,9 @@ test "launch counts resolve stored paths on Windows-style keys" {
     var mem: nanoui.kv.Memory = .{ .gpa = t.allocator };
     defer mem.deinit();
     ix.save(mem.store());
-    ix.launches.items[i] = 0;
+    ix.apps.items[i].launches = 0;
     ix.load(mem.store());
-    try t.expectEqual(@as(u16, 1), ix.launches.items[i]);
+    try t.expectEqual(@as(u16, 1), ix.apps.items[i].launches);
 }
 
 test "launch counts follow the app path when the display name changes" {
@@ -433,8 +659,7 @@ test "launch counts follow the app path when the display name changes" {
     defer mem.deinit();
     ix.save(mem.store());
     ix.apps.items[i].name = "微信";
-    ix.names.items[i] = "微信";
-    ix.launches.items[i] = 0;
+    ix.apps.items[i].launches = 0;
     ix.load(mem.store());
-    try t.expectEqual(@as(u16, 2), ix.launches.items[i]);
+    try t.expectEqual(@as(u16, 2), ix.apps.items[i].launches);
 }
