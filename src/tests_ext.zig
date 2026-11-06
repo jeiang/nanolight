@@ -165,3 +165,189 @@ test "a compact script's last line, as the detail's heading" {
     if (std.c.getenv("NANOLIGHT_SHOT2")) |p| try t.screenshot(std.mem.span(p));
     try std.testing.expect(t.hasText("Hello, Rach - from a script"));
 }
+
+/// A host that answers as script_run.zig's Runner does: inside the call,
+/// with a new view or the screen closed, while the frame that sent the
+/// event is still being drawn. Its views' arenas come from `backing`: the
+/// page allocator hands freed pages back at once, so a read of a view
+/// freed under the frame faults rather than reading stale bytes.
+const Answering = struct {
+    ext: *Ext,
+    backing: std.mem.Allocator,
+    heard: Heard = .{},
+
+    const First = enum { confirm, output, form };
+
+    fn said(ctx: *anyopaque, line: []const u8) void {
+        const h: *Answering = @ptrCast(@alignCast(ctx));
+        Heard.said(&h.heard, line);
+        if (std.mem.indexOf(u8, line, "\"pop\"") != null) return h.ext.stop();
+        const picked = std.mem.indexOf(u8, line, "\"fr\"") != null;
+        if (std.mem.indexOf(u8, line, "\"field\"") != null) return h.form(picked);
+        if (std.mem.indexOf(u8, line, "\"again\"") != null) return h.confirm();
+        if (std.mem.indexOf(u8, line, "\"run\"") != null) return h.output();
+    }
+
+    fn show(h: *Answering, first: First) void {
+        switch (first) {
+            .confirm => h.confirm(),
+            .output => h.output(),
+            .form => h.form(false),
+        }
+    }
+
+    /// "Run Greet?", as the runner asks before a script that needs it.
+    fn confirm(h: *Answering) void {
+        var arena: std.heap.ArenaAllocator = .init(h.backing);
+        const a = arena.allocator();
+        const md = a.dupe(u8, "# Run Greet?\nSays hello.") catch @panic("OOM");
+        const acts = a.dupe(model.Action, &.{.{ .id = "run", .title = "Run" }}) catch @panic("OOM");
+        h.ext.show(arena, .{ .kind = "detail", .title = "Greet", .markdown = md, .actions = acts });
+    }
+
+    /// The script's output, done, with Copy and Run Again.
+    fn output(h: *Answering) void {
+        var arena: std.heap.ArenaAllocator = .init(h.backing);
+        const a = arena.allocator();
+        const out = a.dupe(u8, "Hello, Rach\nfrom a script") catch @panic("OOM");
+        const acts = a.dupe(model.Action, &.{
+            .{ .id = "copy", .title = "Copy Output" },
+            .{ .id = "again", .title = "Run Again" },
+        }) catch @panic("OOM");
+        h.ext.show(arena, .{ .kind = "detail", .title = "Greet", .output = out, .actions = acts });
+    }
+
+    /// The arguments' form: a language to pick.
+    fn form(h: *Answering, french: bool) void {
+        var arena: std.heap.ArenaAllocator = .init(h.backing);
+        const a = arena.allocator();
+        const opts = a.dupe(model.Option, &.{
+            .{ .value = "en", .title = "English" },
+            .{ .value = "fr", .title = "French" },
+        }) catch @panic("OOM");
+        const fields = a.dupe(model.Field, &.{.{
+            .id = "arg1",
+            .type = "dropdown",
+            .title = "Language",
+            .value = .{ .string = a.dupe(u8, if (french) "fr" else "en") catch @panic("OOM") },
+            .options = opts,
+        }}) catch @panic("OOM");
+        const acts = a.dupe(model.Action, &.{.{ .id = "run", .title = "Run" }}) catch @panic("OOM");
+        h.ext.show(arena, .{ .kind = "form", .title = "Greet", .fields = fields, .actions = acts });
+    }
+};
+
+/// A script's screen in a panel, its host answering as the runner does.
+const Rig = struct {
+    ix: Index,
+    s: view.Nanolight,
+    ext: Ext,
+    host: Answering,
+    t: ui.Tester,
+    hidden: bool,
+
+    const Options = struct {
+        first: Answering.First,
+        /// Where the views' arenas come from (`Answering`).
+        backing: std.mem.Allocator = std.heap.page_allocator,
+    };
+
+    /// In place: the panel, the screen and the host point at each other.
+    fn init(r: *Rig, gpa: std.mem.Allocator, opts: Options) !void {
+        r.ix = .init(gpa);
+        r.s = .{ .index = &r.ix };
+        r.hidden = false;
+        r.s.host = .{ .ctx = &r.hidden, .open = noopOpen, .hide = hideFlag };
+        r.ext = .{ .gpa = gpa, .back = &r.s.query };
+        r.s.ext = &r.ext;
+        r.host = .{ .ext = &r.ext, .backing = opts.backing };
+        r.s.reveal();
+        r.ext.start("Greet", null, .{ .ctx = &r.host, .func = Answering.said });
+        r.host.show(opts.first);
+        try r.t.init(gpa, .init(&r.s, view.Nanolight.view), .{
+            .width = view.width,
+            .height = view.max_height,
+            .dark = true,
+        });
+        r.t.settle(1);
+    }
+
+    fn deinit(r: *Rig) void {
+        r.t.deinit();
+        r.ext.deinit();
+        r.s.query.deinit();
+        r.ix.deinit();
+    }
+
+    fn heard(r: *const Rig, what: []const u8) bool {
+        return std.mem.indexOf(u8, r.host.heard.text(), what) != null;
+    }
+};
+
+test "Escape closes a script's screen in the frame that drew it" {
+    var r: Rig = undefined;
+    try r.init(std.testing.allocator, .{ .first = .confirm });
+    defer r.deinit();
+    try std.testing.expect(r.t.hasText("Run Greet?"));
+    _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
+    try std.testing.expect(r.heard("\"pop\"") and r.hidden and !r.ext.open);
+    r.t.settle(1);
+    try std.testing.expect(!r.t.hasText("Run Greet?"));
+}
+
+test "the back button closes a script's screen in the frame that drew it" {
+    var r: Rig = undefined;
+    try r.init(std.testing.allocator, .{ .first = .output });
+    defer r.deinit();
+    try std.testing.expect(r.t.hasText("from a script"));
+    // The chevron, first in the header.
+    r.t.click(18 + 13, view.header_h / 2);
+    try std.testing.expect(r.heard("\"pop\"") and !r.hidden and !r.ext.open);
+    r.t.settle(1);
+    try std.testing.expect(!r.t.hasText("from a script"));
+}
+
+test "Return on Run X? replaces the view in the frame that drew it" {
+    var r: Rig = undefined;
+    try r.init(std.testing.allocator, .{ .first = .confirm });
+    defer r.deinit();
+    r.t.textOps(&.{.{ .command = .insert_newline }});
+    try std.testing.expect(r.heard("\"id\":\"run\""));
+    r.t.settle(1);
+    try std.testing.expect(r.t.hasText("from a script"));
+    try std.testing.expect(!r.t.containsText("Run Greet?"));
+}
+
+test "Run Again replaces the output in the frame that drew it" {
+    var r: Rig = undefined;
+    try r.init(std.testing.allocator, .{ .first = .output });
+    defer r.deinit();
+    try std.testing.expect(r.t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
+    try std.testing.expect(r.heard("\"id\":\"again\""));
+    r.t.settle(1);
+    try std.testing.expect(r.t.hasText("Run Greet?"));
+}
+
+test "a dropdown pick shows the form again in the frame that drew it" {
+    var r: Rig = undefined;
+    try r.init(std.testing.allocator, .{ .first = .form });
+    defer r.deinit();
+    try r.t.clickText("French");
+    try std.testing.expect(r.heard("\"value\":\"fr\""));
+    r.t.settle(1);
+    try std.testing.expect(r.t.hasText("French") and r.ext.open);
+}
+
+test "every view replaced under a frame is freed, the last ones at deinit" {
+    const gpa = std.testing.allocator;
+    var r: Rig = undefined;
+    try r.init(gpa, .{ .first = .confirm, .backing = gpa });
+    defer r.deinit();
+    r.t.textOps(&.{.{ .command = .insert_newline }});
+    _ = r.t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true });
+    r.t.textOps(&.{.{ .command = .insert_newline }});
+    try std.testing.expect(r.t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
+    try std.testing.expect(r.t.hasText("Run Greet?"));
+    _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
+    try std.testing.expect(!r.ext.open);
+}

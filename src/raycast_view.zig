@@ -7,6 +7,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const assert = std.debug.assert;
 const model = @import("raycast_model.zig");
 const pview = @import("view.zig");
 const results = @import("results.zig");
@@ -40,9 +41,20 @@ pub const Ext = struct {
     name_buf: [96]u8 = undefined,
     name_len: usize = 0,
     icon: ?[]const u8 = null,
-    /// The top view and the arena it lives in (one per render).
+    /// The top view and the arena it lives in (one per render). A frame
+    /// reads `view` once, at the top of `panel`: an event sent while it
+    /// draws can replace it.
     arena: ?std.heap.ArenaAllocator = null,
     view: ?model.View = null,
+    /// The arena a frame drew from, replaced since: the frame's nodes may
+    /// still point into it, so it is freed at the top of the next `panel`
+    /// (or at `deinit`). One slot: a frame draws from one arena, and an
+    /// arena no frame drew from is freed at once.
+    retired: ?std.heap.ArenaAllocator = null,
+    /// A frame drew from `arena`.
+    drawn: bool = false,
+    /// `panel` is building a frame.
+    rendering: bool = false,
     query: ui.TextBuffer = .{},
     sent: u64 = 0,
     sel: usize = 0,
@@ -67,6 +79,8 @@ pub const Ext = struct {
     back: ?*ui.TextBuffer = null,
 
     pub fn start(e: *Ext, name: []const u8, icon: ?[]const u8, to: Sender) void {
+        // A command starts from the rows, never from its own screen.
+        assert(!e.rendering);
         e.stop();
         const n = @min(name.len, e.name_buf.len);
         @memcpy(e.name_buf[0..n], name[0..n]);
@@ -82,8 +96,7 @@ pub const Ext = struct {
     pub fn stop(e: *Ext) void {
         e.open = false;
         e.view = null;
-        if (e.arena) |*a| a.deinit();
-        e.arena = null;
+        e.release();
         e.sel = 0;
         e.actions_open = false;
         e.note_len = 0;
@@ -92,7 +105,9 @@ pub const Ext = struct {
     }
 
     pub fn deinit(e: *Ext) void {
+        assert(!e.rendering);
         e.stop();
+        e.freeRetired();
         var it = e.files.iterator();
         while (it.next()) |kv| {
             e.gpa.free(kv.key_ptr.*);
@@ -105,9 +120,9 @@ pub const Ext = struct {
 
     /// The host's new top view; `arena` holds it and is now this one's.
     pub fn show(e: *Ext, arena: std.heap.ArenaAllocator, v: model.View) void {
-        if (e.arena) |*a| a.deinit();
-        e.arena = arena;
         const was_list = if (e.view) |old| old.isList() else true;
+        e.release();
+        e.arena = arena;
         e.view = v;
         // A new kind of view (a push, a pop) starts at the top.
         if (!v.isList() or !was_list) e.sel = 0;
@@ -118,6 +133,25 @@ pub const Ext = struct {
             e.sel = @min(e.sel, v.count() -| 1);
         }
         if (v.isForm()) e.loadForm(v);
+    }
+
+    /// Lets go of the view's arena: freed now if no frame drew from it,
+    /// else kept until the next frame.
+    fn release(e: *Ext) void {
+        var old = e.arena orelse return;
+        e.arena = null;
+        if (!e.drawn) return old.deinit();
+        e.drawn = false;
+        // Only the arena a frame drew from is kept, and the next frame
+        // frees it before it draws.
+        assert(e.retired == null);
+        e.retired = old;
+    }
+
+    fn freeRetired(e: *Ext) void {
+        assert(!e.rendering);
+        if (e.retired) |*a| a.deinit();
+        e.retired = null;
     }
 
     /// Says `text` in the footer for a while, from the next frame.
@@ -176,13 +210,20 @@ pub const Ext = struct {
 
     /// The command in the panel (Nanolight.panel calls it while `open`).
     pub fn panel(e: *Ext, c: *ui.Context, n: *pview.Nanolight, p: Palette) void {
+        // Nodes of the last frame are gone: what it drew from can go too.
+        assert(!e.rendering);
+        e.freeRetired();
+        e.drawn = e.arena != null;
+        e.rendering = true;
+        defer e.rendering = false;
         const h = n.follow(e.height());
         const body = ui.div(c).column().wFull().h(h).clip();
         defer body.end();
+        // Read once: the host may answer an event below with a new view.
         const v = e.view;
         const acts: []const model.Action = if (v) |vv| vv.actionsAt(e.sel) else &.{};
-        e.keys(c, n, acts);
-        e.header(c, p);
+        e.keys(c, n, v, acts);
+        e.header(c, p, v);
         ui.div(c).wFull().h(1).bg(p.hair).end();
         const mid = ui.div(c).column().wFull().grow().clip();
         if (e.actions_open) {
@@ -195,12 +236,17 @@ pub const Ext = struct {
             w.end();
         }
         mid.end();
-        e.footer(c, p, acts);
+        e.footer(c, p, v, acts);
     }
 
-    fn keys(e: *Ext, c: *ui.Context, nl: *pview.Nanolight, acts: []const model.Action) void {
+    fn keys(
+        e: *Ext,
+        c: *ui.Context,
+        nl: *pview.Nanolight,
+        v: ?model.View,
+        acts: []const model.Action,
+    ) void {
         const S = ui.Shortcut;
-        const v = e.view;
         const n = if (e.actions_open) acts.len else if (v) |vv| (if (vv.isList()) vv.count() else 0) else 0;
         const sel = if (e.actions_open) &e.act_sel else &e.sel;
         const before = e.sel;
@@ -238,14 +284,13 @@ pub const Ext = struct {
         }
     }
 
-    fn header(e: *Ext, c: *ui.Context, p: Palette) void {
+    fn header(e: *Ext, c: *ui.Context, p: Palette, v: ?model.View) void {
         const bar = ui.div(c).row().wFull().h(pview.header_h).px(18).gap(12).itemsCenter();
         defer bar.end();
         const back = ui.div(c).size(26, 26).center().rounded(7).bg(p.tile).control();
         if (back.clicked()) e.say("pop", null, null);
         ui.icon(c, "chevron.left", .{ .size = 13, .weight = .semibold, .color = p.sub });
         back.end();
-        const v = e.view;
         if (v == null or v.?.isList()) {
             const ph = if (v) |vv| (if (vv.placeholder) |s| (if (s.len > 0) s else null) else null) else null;
             _ = ui.textField(c, &e.query, .{
@@ -489,7 +534,13 @@ pub const Ext = struct {
         }
     }
 
-    fn footer(e: *Ext, c: *ui.Context, p: Palette, acts: []const model.Action) void {
+    fn footer(
+        e: *Ext,
+        c: *ui.Context,
+        p: Palette,
+        v: ?model.View,
+        acts: []const model.Action,
+    ) void {
         ui.div(c).wFull().h(1).bg(p.hair).end();
         const bar = ui.div(c).row().wFull().h(pview.footer_h).px(16).gap(8).itemsCenter();
         defer bar.end();
@@ -501,7 +552,6 @@ pub const Ext = struct {
         } else ui.text(c, e.name_buf[0..e.name_len], .{ .size = 12, .color = p.sub.alpha(0.8), .truncate = .ellipsis });
         ui.spacer(c);
         if (acts.len == 0) return;
-        const v = e.view;
         const form_view = v != null and v.?.isForm();
         ui.text(c, acts[0].title, .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
         ui.kbd(c, if (form_view and hasArea(v.?)) results.mod ++ "↩" else "↩");
