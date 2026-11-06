@@ -128,6 +128,18 @@ pub const own_mime = "application/x-nanolight-own";
 /// In the order read; STRING is Latin-1 and counts only when it is also UTF-8.
 pub const text_mimes = [_][]const u8{ "text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING" };
 const served_text = text_mimes[0..3];
+const served_image = [_][]const u8{png_mime};
+const served_files = [_][]const u8{ uri_mime, gnome_mime, "text/plain" };
+/// The most types one served copy is offered as (`Served.mimes`); X11 keeps an atom for each.
+pub const max_served_mimes = 3;
+/// The longest of their names, so a caller can copy one into a NUL-ended buffer.
+pub const max_mime_name = 63;
+comptime {
+    for ([_][]const []const u8{ served_text, &served_image, &served_files }) |list| {
+        std.debug.assert(list.len <= max_served_mimes);
+        for (list) |m| std.debug.assert(m.len <= max_mime_name);
+    }
+}
 
 pub const Step = enum { hint, files, text, image };
 pub const Request = struct { step: Step, mime: []const u8, cap: usize };
@@ -317,8 +329,8 @@ pub const Served = struct {
     pub fn mimes(s: *const Served) []const []const u8 {
         return switch (s.kind) {
             .text => served_text,
-            .image => &.{png_mime},
-            .file => &.{ uri_mime, gnome_mime, "text/plain" },
+            .image => &served_image,
+            .file => &served_files,
         };
     }
 
