@@ -27,10 +27,7 @@ pub fn away(l: *main.Live) void {
 }
 
 fn check(l: *main.Live) void {
-    const u = l.updater orelse return;
-    const v = u.ready() orelse return;
     // In use: going away asks again.
     if (l.window) |w| if (w.isVisible()) return;
-    l.kv.set(main.updated_key, v) catch {};
-    if (u.restart()) l.app.quit() else l.kv.remove(main.updated_key);
+    l.restartForUpdate();
 }

@@ -464,13 +464,21 @@ test "the welcome: a key, pressed for real, then a first search" {
     try std.testing.expect(steps.done and !o.active);
     try std.testing.expect(t.hasText("3,072"));
 
-    // Esc skips from the first step, keeping the key shown there.
+    // Esc skips from the first step, keeping the key shown there: applied
+    // only when it is not the one in use already.
     steps = .{};
     o.start(.ctrl_space);
     t.settle(1);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(steps.done and !o.active);
-    try std.testing.expectEqual(shortcut.Choice.ctrl_space, steps.applied.?);
+    try std.testing.expect(steps.applied == null);
+    steps = .{};
+    o.start(.ctrl_space);
+    t.settle(1);
+    t.key(.right);
+    _ = t.shortcut(.{ .key = ui.Shortcut.escape });
+    try std.testing.expect(steps.done and !o.active);
+    try std.testing.expectEqual(shortcut.Choice.opt_cmd_space, steps.applied.?);
 }
 
 const SettingsHost = @import("settings_host.zig").SettingsHost;
@@ -481,6 +489,8 @@ pub const Prefs = struct {
     key: shortcut.Choice = .cmd_space,
     applied: ?shortcut.Choice = null,
     recording: bool = false,
+    /// Whether the recorder can start (an event monitor the system refused).
+    can_record: bool = true,
     login_on: bool = false,
     suggest_sets: u8 = 0,
     searches_out: ?bool = null,
@@ -489,6 +499,8 @@ pub const Prefs = struct {
     clip_on: ?bool = null,
     clip_cleared: u8 = 0,
     box: SettingsHost = undefined,
+    /// The panel whose suggestions and searches the app's host would set.
+    nl: ?*view.Nanolight = null,
 
     pub fn init(p: *Prefs) void {
         p.box = .{
@@ -529,19 +541,25 @@ pub const Prefs = struct {
         p.applied = c;
         p.key = c;
     }
-    fn record(ctx: *anyopaque, on: bool) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).recording = on;
+    fn record(ctx: *anyopaque, on: bool) bool {
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.recording = on and p.can_record;
+        return p.recording;
     }
     fn login(ctx: *anyopaque, set: ?bool) bool {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
         if (set) |on| p.login_on = on;
         return p.login_on;
     }
-    fn suggestSet(ctx: *anyopaque, _: bool) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).suggest_sets += 1;
+    fn suggestSet(ctx: *anyopaque, on: bool) void {
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.suggest_sets += 1;
+        if (p.nl) |s| s.suggest_on = on;
     }
     fn searchesOut(ctx: *anyopaque, on: bool) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).searches_out = on;
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.searches_out = on;
+        if (p.nl) |s| s.searches_out = on;
     }
     fn themeSet(ctx: *anyopaque, t: @import("palette.zig").Theme) void {
         @as(*Prefs, @ptrCast(@alignCast(ctx))).theme = t;
@@ -582,6 +600,7 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     var s: view.Nanolight = .{ .index = &ix };
     defer s.query.deinit();
     s.host = prefs.host();
+    prefs.nl = &s;
     s.reveal();
     var t: ui.Tester = undefined;
     try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
