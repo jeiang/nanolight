@@ -650,7 +650,7 @@ const RatesAsk = struct {
     }
 };
 
-/// This platform's archive in each release (macos/package.sh, pc/package.sh).
+/// This platform's archive in each release (named in tools/release.zig).
 const asset = switch (builtin.os.tag) {
     .macos => "nanolight-macos-arm64.zip",
     .windows => "nanolight-windows-x86_64.zip",
