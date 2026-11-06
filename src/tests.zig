@@ -206,6 +206,9 @@ test "a pending currency card is not the default row, and Return acts on the sea
     defer ix.deinit();
     var web: Web = .{};
     var s: view.Nanolight = .{ .index = &ix };
+    var feed: convert.Feed = .{};
+    defer feed.deinit();
+    s.feed = &feed;
     defer s.query.deinit();
     s.host = web.host();
     s.reveal();
@@ -225,16 +228,21 @@ test "a pending currency card is not the default row, and Return acts on the sea
     try std.testing.expect(t.hasText("Search Google"));
     // The fetch fails: the card stays pending and the selection stays put.
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
-    s.rates_failed = true;
+    feed.begin(1);
+    feed.fail();
     s.ratesLanded();
     t.settle(1);
     try std.testing.expect(s.res.pending);
     try std.testing.expectEqual(@as(usize, 1), s.sel);
-    s.rates_failed = false;
+    try std.testing.expect(t.hasText("Rates unavailable"));
+    // A retry on its way is not a failure.
+    feed.begin(1 + convert.retry_after);
+    s.ratesLanded();
+    t.settle(1);
+    try std.testing.expect(t.hasText("Loading rates…"));
     // The rates land: the card is the answer, and selected.
-    var rates = convert.Rates.parse(gpa, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}").?;
-    defer rates.deinit();
-    s.rates = &rates;
+    const body = "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}";
+    feed.landed(convert.Rates.parse(gpa, body).?, 1 + convert.retry_after);
     s.ratesLanded();
     t.settle(1);
     try std.testing.expect(!s.res.pending);
