@@ -249,7 +249,8 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/panel_mac.zig`, `src/panel_pc.zig` | The panel's window on the Mac, and on Windows and Linux (with X11's focus) |
 | `src/hotkey*.zig`, `src/apps_*.zig`, `src/single*.zig`, `src/login.zig` | Each platform's key, apps, single copy and login item |
 | `src/account.zig`, `src/account_menu.zig` | The sync client: `[sync]`, the PUT and merge, the status line |
-| `src/server.zig`, `src/settings.zig` | `nanolight-server`: the protocol as a pure function, tokens, atomic records; and the record both sides merge |
+| `src/sync_protocol.zig` | The sync wire both sides share: the path, headers, bearer prefix, account rule and size limits |
+| `src/server.zig`, `src/server_protocol.zig`, `src/server_transport.zig`, `src/settings.zig` | `nanolight-server`: its command line; the protocol as a pure function, tokens, atomic records; the socket and its deadline; and the record both sides merge |
 | `src/raycast_model.zig`, `src/raycast_view.zig` | The panel's command screen (a script's output, arguments) |
 | `src/script_commands.zig`, `src/script_run.zig` | Raycast script commands, run in Zig |
 | `src/clipboard.zig` | Clipboard history: the model, the store on disk, retention, search, and the `Watcher` contract every OS keeps |

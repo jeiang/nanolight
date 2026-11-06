@@ -21,7 +21,9 @@ test {
     _ = @import("results.zig");
     _ = @import("suggest.zig");
     _ = @import("settings.zig");
-    _ = @import("server.zig");
+    _ = @import("sync_protocol.zig");
+    _ = @import("server_protocol.zig");
+    _ = @import("server_transport.zig");
     _ = @import("account.zig");
     _ = @import("toml.zig");
     _ = @import("config.zig");

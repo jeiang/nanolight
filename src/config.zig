@@ -10,6 +10,7 @@ const nanoui = @import("nanoui");
 const toml = @import("toml.zig");
 const keys = @import("keys.zig");
 const clipboard = @import("clipboard.zig");
+const account = @import("account.zig");
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 
@@ -32,7 +33,7 @@ pub const Config = struct {
     /// Empty: the built-in ones.
     quicklinks: []const Quicklink = &.{},
     clipboard: clipboard.Config = .{},
-    sync: Sync = .{},
+    sync: account.Config = .{},
 };
 
 pub const Apps = struct {
@@ -43,13 +44,6 @@ pub const Apps = struct {
 pub const ScriptCommands = struct {
     /// Besides `<data dir>/script-commands`; absolute once loaded (`absoluteScriptDirs`).
     dirs: []const []const u8 = &.{},
-};
-
-pub const Sync = struct {
-    /// Empty: syncing is off.
-    url: []const u8 = "",
-    /// The file that holds the bearer token.
-    token_file: []const u8 = "",
 };
 
 /// What a file key seeds in the app's own settings (prefs.zig), in this
