@@ -149,7 +149,10 @@ comptime {
 
 /// In the order macOS draws them.
 const glyphs = [_]struct { u32, []const u8 }{
-    .{ hotkey.control, "⌃" }, .{ hotkey.option, "⌥" }, .{ hotkey.shift, "⇧" }, .{ hotkey.cmd, "⌘" },
+    .{ hotkey.control, "⌃" },
+    .{ hotkey.option, "⌥" },
+    .{ hotkey.shift, "⇧" },
+    .{ hotkey.cmd, "⌘" },
 };
 
 pub const Mods = struct {
@@ -178,12 +181,14 @@ const function_keys = [_]NamedKey{
     .{ 103, "F11" }, .{ 111, "F12" }, .{ 105, "F13" }, .{ 107, "F14" }, .{ 113, "F15" },
     .{ 106, "F16" }, .{ 64, "F17" },  .{ 79, "F18" },  .{ 80, "F19" },  .{ 90, "F20" },
 };
+// zig fmt: off
 /// Keys that type nothing: the function keys, then the rest.
 const named = function_keys ++ [_]NamedKey{
     .{ 49, "Space" }, .{ 36, "↩" },   .{ 76, "⌤" },    .{ 48, "⇥" },    .{ 51, "⌫" },
     .{ 117, "⌦" },   .{ 53, "⎋" },    .{ 123, "←" },   .{ 124, "→" },   .{ 125, "↓" },
     .{ 126, "↑" },   .{ 115, "↖" },   .{ 119, "↘" },   .{ 116, "⇞" },   .{ 121, "⇟" },
 };
+// zig fmt: on
 comptime {
     std.debug.assert(function_keys.len == 20);
     std.debug.assert(std.mem.eql(u8, function_keys[function_keys.len - 1][1], "F20"));
