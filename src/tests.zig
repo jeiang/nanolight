@@ -242,6 +242,37 @@ test "a pending currency card is not the default row, and Return acts on the sea
     try std.testing.expect(t.hasText("Copy Answer"));
 }
 
+test "math being typed asks Google nothing while its card shows" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var web: Web = .{};
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = web.host();
+    s.reveal();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = view.max_height,
+        .dark = true,
+    });
+    defer t.deinit();
+    t.settle(1);
+    // The answer so far, a conversion's, and one waiting on rates.
+    for ([_][]const u8{ "2 + 3 *", "10 km to mi *", "500 usd to eur *" }) |q| {
+        retype(&t, q);
+        try std.testing.expectEqual(results.Kind.calc, s.res.rows[0].kind);
+        try std.testing.expectEqual(@as(usize, 0), web.asked_len);
+    }
+    retype(&t, "2 + 3 is");
+    try std.testing.expectEqualStrings("2 + 3 is", web.asked[0..web.asked_len]);
+}
+
+fn retype(t: *ui.Tester, q: []const u8) void {
+    press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = q } });
+}
+
 test "Google's completions land below, and a search shows in the panel" {
     const gpa = std.testing.allocator;
     var ix: Index = .init(gpa);
