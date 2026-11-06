@@ -83,9 +83,7 @@ fn check(ctx: *anyopaque) void {
 }
 
 fn restart(ctx: *anyopaque) void {
-    const live = l(ctx);
-    const u = live.updater orelse return;
-    if (u.ready() != null and u.restart()) live.app.quit();
+    l(ctx).restartForUpdate();
 }
 
 fn welcome(ctx: *anyopaque) void {

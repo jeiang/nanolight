@@ -55,8 +55,8 @@ pub fn recordKey(ctx: *anyopaque, on: bool) bool {
 pub fn loginItem(ctx: *anyopaque, set: ?bool) bool {
     return Live.login(ctx, set);
 }
-/// The version 0.1.6 and before left when they restarted into an update
-/// themselves (nanoui's updater does it now, `autoRestart`).
+/// Left by a restart into an update off the Mac (`restartForUpdate`), and by
+/// 0.1.6 and before on the Mac (nanoui's updater says so itself now).
 pub const updated_key = "nanolight.updated";
 const sync_at_key = config.sync_at_key;
 const rates_at_key = "nanolight.rates.at";
@@ -443,9 +443,18 @@ pub const Live = struct {
 
     fn updateNow(l: *Live, _: *nanoui.menu.Item) void {
         const u = l.updater orelse return;
-        if (u.ready() != null) {
-            if (u.restart()) l.app.quit();
-        } else u.checkNow();
+        if (u.ready() != null) l.restartForUpdate() else u.checkNow();
+    }
+
+    /// Restarts into the update that is ready, if one is. Off the Mac the
+    /// new copy learns it was updated from `updated_key` (the Mac's
+    /// updater says so itself, `updatedFrom`).
+    pub fn restartForUpdate(l: *Live) void {
+        const u = l.updater orelse return;
+        const v = u.ready() orelse return;
+        // best effort: without the note the new copy only skips "Updated to".
+        if (!mac) l.kv.set(updated_key, v) catch {};
+        if (u.restart()) l.app.quit() else if (!mac) l.kv.remove(updated_key);
     }
 
     fn updated(ctx: *anyopaque) void {
