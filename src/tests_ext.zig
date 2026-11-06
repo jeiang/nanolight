@@ -169,7 +169,7 @@ const Rig = struct {
     }
 
     fn script(r: *Rig) void {
-        const command: rv.Command = .{ .name = "Greet", .icon = r.opts.icon };
+        const command: model.Command = .{ .name = "Greet", .icon = r.opts.icon };
         r.ext.start(command, .{ .ctx = &r.host, .func = Answering.said });
         if (r.opts.silent) return r.ext.stop();
         if (r.opts.first) |first| r.host.show(first);

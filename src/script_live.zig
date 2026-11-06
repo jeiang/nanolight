@@ -19,7 +19,7 @@ pub fn init(l: *Live, env: *const std.process.Environ.Map) void {
     l.scripts = .{
         .gpa = gpa,
         .io = l.app.io,
-        .ext = &l.ext_ui,
+        .screen = l.ext_ui.asScreen(),
         .hooks = .{ .ctx = l, .hide = hide, .redraw = redraw, .copy = copy, .footer = footer },
     };
     l.s.ext = &l.ext_ui;

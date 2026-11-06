@@ -1,8 +1,8 @@
 //! A script command's screen, drawn in the panel in place of the rows while
 //! it runs: its arguments' form, or a detail (its output, or "Run X?"), with
-//! its actions in the footer (Return the first, ⌘↩/Ctrl+↩ the second,
+//! its actions in the footer (in key order, raycast_model.zig `return_at`;
 //! ⌘K/Ctrl+O all of them). What it shows comes from the runner
-//! (script_run.zig) as `View`s; keys and choices go back to it as `Event`s.
+//! (script_run.zig) as `Update`s; keys and choices go back to it as `Event`s.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -25,21 +25,6 @@ const pad: f32 = 6;
 const max_options = 4;
 /// An output's lines shown: its last ones.
 const max_lines = 200;
-
-/// Where the screen's events go. The host answers within the call: a new
-/// view (`Ext.show`), a note, or, on a pop, the screen stopped (`Ext.stop`).
-pub const Sender = struct {
-    ctx: *anyopaque,
-    func: *const fn (ctx: *anyopaque, event: model.Event) void,
-};
-
-/// The command's name and its icon (PNG), for the header and the footer.
-/// The screen copies both: they may come from an index that is replaced
-/// while it is up (script_live.zig `refresh`).
-pub const Command = struct {
-    name: []const u8,
-    icon: ?[]const u8 = null,
-};
 
 /// An arena whose contents frames draw. Replaced after a frame drew from
 /// it, it is kept until the next frame starts (`frame`): that frame's nodes
@@ -112,15 +97,15 @@ pub const Ext = struct {
     note_at: f64 = -10,
     note_bad: bool = false,
     /// What the host is told; set while `open`.
-    to: ?Sender = null,
+    to: ?model.Sender = null,
     /// A form's text fields, by the field's place.
-    fields: [model.max_fields]ui.TextBuffer = @splat(.{}),
+    fields: [model.max_args]ui.TextBuffer = @splat(.{}),
     form_key: u64 = 0,
     /// The field that has the keys once the command's screen goes (the
     /// panel's search).
     back: ?*ui.TextBuffer = null,
 
-    pub fn start(e: *Ext, command: Command, to: Sender) void {
+    pub fn start(e: *Ext, command: model.Command, to: model.Sender) void {
         // A command starts from the rows, never from its own screen.
         assert(!e.rendering);
         e.stop();
@@ -145,6 +130,21 @@ pub const Ext = struct {
         e.note_len = 0;
         e.form_key = 0;
         if (e.back) |b| b.focus();
+    }
+
+    /// Where a runner sends its updates.
+    pub fn asScreen(e: *Ext) model.Screen {
+        return .{ .ctx = e, .func = updated };
+    }
+
+    fn updated(ctx: *anyopaque, update: model.Update) void {
+        const e: *Ext = @ptrCast(@alignCast(ctx));
+        switch (update) {
+            .start => |s| e.start(s.command, s.to),
+            .show => |s| e.show(s.arena, s.view),
+            .note => |n| e.note(n.text, n.bad),
+            .stop => e.stop(),
+        }
     }
 
     /// Closes the screen as its back button does: the host ends the
@@ -274,8 +274,8 @@ pub const Ext = struct {
             e.act_sel = 0;
         }
         if (c.shortcut(.{ .key = S.enter, .cmd = true })) {
-            // A form submits with its first action, as Raycast's does.
-            const k: usize = if (v != null and v.? == .form) 0 else 1;
+            const form_shown = v != null and v.? == .form;
+            const k: usize = if (form_shown) model.return_at else model.cmd_return_at;
             if (acts.len > k) e.run(acts[k]);
         }
         const ret = c.input.key == .enter or for (c.input.ops) |op| {
@@ -286,7 +286,7 @@ pub const Ext = struct {
             e.took_return = true;
             if (e.actions_open) {
                 if (e.act_sel < acts.len) e.run(acts[e.act_sel]);
-            } else if (acts.len > 0) e.run(acts[0]);
+            } else if (acts.len > model.return_at) e.run(acts[model.return_at]);
         }
         if (c.shortcut(.{ .key = S.escape })) {
             e.send(.pop);
@@ -359,7 +359,7 @@ pub const Ext = struct {
     }
 
     fn loadForm(e: *Ext, f: model.Form) void {
-        assert(f.fields.len <= model.max_fields);
+        assert(f.fields.len <= model.max_args);
         var h = std.hash.Wyhash.init(0);
         for (f.fields) |field| h.update(std.mem.asBytes(&field.slot));
         const key = h.final();
@@ -369,7 +369,7 @@ pub const Ext = struct {
         for (f.fields, 0..) |field, i| {
             e.fields[i].set(field.value);
             // The first field typed into has the keys.
-            if (!focused and field.kind == .text) {
+            if (!focused and field.kind != .dropdown) {
                 e.fields[i].focus();
                 focused = true;
             }
@@ -393,7 +393,7 @@ pub const Ext = struct {
             lab.end();
             switch (field.kind) {
                 .dropdown => e.dropdown(c, p, field),
-                .text => e.textBox(c, p, field, &e.fields[i]),
+                .text, .password => e.textBox(c, p, field, &e.fields[i]),
             }
         }
     }
@@ -421,6 +421,7 @@ pub const Ext = struct {
             .size = 14,
             .width = .fill,
             .placeholder = f.placeholder,
+            .password = f.kind == .password,
             .color = p.text,
             .placeholder_color = p.sub.alpha(0.6),
         });
@@ -442,7 +443,8 @@ pub const Ext = struct {
             if (r.clicked()) e.run(a);
             ui.text(c, a.title(), .{ .size = 13.5, .weight = .medium, .color = p.text });
             ui.spacer(c);
-            if (i == 0) ui.kbd(c, "↩") else if (i == 1) ui.kbd(c, results.mod ++ "↩");
+            if (i == model.return_at) ui.kbd(c, "↩") else if (i == model.cmd_return_at)
+                ui.kbd(c, results.mod ++ "↩");
             r.end();
         }
     }
@@ -471,9 +473,9 @@ pub const Ext = struct {
             c.animationFrame();
         } else ui.text(c, name, .{ .size = 12, .color = p.sub.alpha(0.8), .truncate = .ellipsis });
         ui.spacer(c);
-        if (acts.len == 0) return;
+        if (acts.len <= model.return_at) return;
         const first: ui.TextStyle = .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) };
-        ui.text(c, acts[0].title(), first);
+        ui.text(c, acts[model.return_at].title(), first);
         ui.kbd(c, "↩");
         if (acts.len > 1) {
             ui.div(c).w(1).h(14).bg(p.hair).end();
