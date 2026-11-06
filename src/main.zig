@@ -26,7 +26,10 @@ const panel = if (mac) @import("panel_mac.zig") else @import("panel_pc.zig");
 const preview_mod = if (mac) @import("preview.zig") else @import("pc_stubs.zig");
 const Preview = preview_mod.Preview;
 const single = @import("single.zig");
-const ClickThrough = if (mac) @import("clickthrough.zig").ClickThrough else @import("pc_stubs.zig").ClickThrough;
+const ClickThrough = if (mac)
+    @import("clickthrough.zig").ClickThrough
+else
+    @import("pc_stubs.zig").ClickThrough;
 const Recorder = if (mac) @import("recorder.zig").Recorder else @import("pc_stubs.zig").Recorder;
 const account = @import("account.zig");
 const rc = @import("script_live.zig");
@@ -113,7 +116,18 @@ pub const Live = struct {
     fn host(l: *Live) view.Host {
         const bind = @import("settings_bind.zig");
         bind.box.ctx = l;
-        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .files = if (mac) @import("files_live.zig").askFiles else null, .preview = if (mac) showPage else null, .settings = &bind.box, .command = runCommand, .rates = needRates };
+        return .{
+            .ctx = l,
+            .open = open,
+            .hide = hide,
+            .resize = resize,
+            .suggest = ask,
+            .files = if (mac) @import("files_live.zig").askFiles else null,
+            .preview = if (mac) showPage else null,
+            .settings = &bind.box,
+            .command = runCommand,
+            .rates = needRates,
+        };
     }
 
     fn open(ctx: *anyopaque, target: []const u8) void {
@@ -190,7 +204,10 @@ pub const Live = struct {
         var keep: std.ArrayList(settings_mod.Quicklink) = .empty;
         for (list) |q| {
             if (!settings_mod.webUrl(q.url)) {
-                std.log.warn("nanolight: quicklink \"{s}\": only http and https addresses work; ignored", .{q.name});
+                std.log.warn(
+                    "nanolight: quicklink \"{s}\": only http and https addresses work; ignored",
+                    .{q.name},
+                );
                 continue;
             }
             const copy: settings_mod.Quicklink = .{
@@ -421,15 +438,32 @@ pub const Live = struct {
         if (comptime !mac) return;
         const t = l.tray orelse return;
         const ready = if (l.updater) |u| u.ready() else null;
-        const label = if (ready) |v| std.fmt.bufPrint(&l.update_label, "Restart to Update to {s}", .{v}) catch "Restart to Update" else "Check for Updates";
+        const label = if (ready) |v|
+            std.fmt.bufPrint(
+                &l.update_label,
+                "Restart to Update to {s}",
+                .{v},
+            ) catch "Restart to Update"
+        else
+            "Check for Updates";
         const acc = l.accountItem();
         const Item = nanoui.menu.MenuItem;
-        const update = if (nix_managed) [_]Item{} else [_]Item{.{ .label = label, .disabled = l.updater == null, .click = .of(l, Live.updateNow) }};
+        const update = if (nix_managed)
+            [_]Item{}
+        else
+            [_]Item{
+                .{ .label = label, .disabled = l.updater == null, .click = .of(l, Live.updateNow) },
+            };
         t.setMenu("Nanolight", &([_]Item{
             .{ .label = "Settings…", .accelerator = "Cmd+,", .click = .of(l, Live.menuSettings) },
             .{ .label = "Open Nanolight", .click = .of(l, Live.menuShow) },
             .{ .label = "Welcome…", .click = .of(l, Live.welcome) },
-            .{ .label = "Google Suggestions", .kind = .checkbox, .checked = l.s.suggest_on, .click = .of(l, Live.toggleSuggest) },
+            .{
+                .label = "Google Suggestions",
+                .kind = .checkbox,
+                .checked = l.s.suggest_on,
+                .click = .of(l, Live.toggleSuggest),
+            },
             .separator,
             acc,
             .separator,
@@ -518,13 +552,22 @@ pub const Live = struct {
     }
 
     fn hooks(l: *Live) @import("onboard.zig").Hooks {
-        return .{ .ctx = l, .apply = apply, .fix = fix, .login = if (l.o.skip_key) null else login, .done = done };
+        return .{
+            .ctx = l,
+            .apply = apply,
+            .fix = fix,
+            .login = if (l.o.skip_key) null else login,
+            .done = done,
+        };
     }
 
     fn useKey(l: *Live, choice: shortcut.Choice) void {
         l.choice = choice;
         hotkey.register(choice, .{ .ctx = l, .func = toggle }) catch |e|
-            std.log.warn("nanolight: {f} can't be registered ({s}); open it from the menu bar", .{ choice, @errorName(e) });
+            std.log.warn(
+                "nanolight: {f} can't be registered ({s}); open it from the menu bar",
+                .{ choice, @errorName(e) },
+            );
     }
 
     /// Settings records a key: until it has one, keys pressed go to it,
@@ -560,7 +603,9 @@ pub const Live = struct {
     fn fix(ctx: *anyopaque, clash: shortcut.Clash) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (clash.system != null) {
-            _ = nanoui.shell.openUrl("x-apple.systempreferences:com.apple.Keyboard-Settings.extension");
+            _ = nanoui.shell.openUrl(
+                "x-apple.systempreferences:com.apple.Keyboard-Settings.extension",
+            );
         } else for (clash.launchers) |name| shortcut.quit(name);
         // A launcher takes a moment to quit: then the panel looks again.
         nanoui.App.after(900, l, struct {
@@ -635,7 +680,13 @@ const Ask = struct {
         var arena: std.heap.ArenaAllocator = .init(l.app.gpa);
         defer arena.deinit();
         var list: suggest.List = .{};
-        if (r.status != 200 or !suggest.decode(arena.allocator(), r.body, a.text[0..a.len], &list)) return l.s.unanswered(a.text[0..a.len]);
+        if (r.status != 200 or
+            !suggest.decode(
+                arena.allocator(),
+                r.body,
+                a.text[0..a.len],
+                &list,
+            )) return l.s.unanswered(a.text[0..a.len]);
         l.s.answered(a.text[0..a.len], &list);
     }
 };
@@ -657,7 +708,8 @@ const RatesAsk = struct {
             _ = config.kvSet(l.kv, rates_at_key, at_text);
             if (l.ratesPath()) |path| {
                 defer gpa.free(path);
-                std.Io.Dir.cwd().writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch |err|
+                std.Io.Dir.cwd()
+                    .writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch |err|
                     std.log.warn("nanolight: the rates weren't kept in {s}: {t}", .{ path, err });
             }
         } else if (a.which + 1 < convert.urls.len) {
@@ -685,8 +737,12 @@ pub fn main(init: std.process.Init) !void {
     if (try answeredArgs(init, try init.minimal.args.toSlice(arena.allocator()))) return;
     // Linux: GTK 3, where a window can be put somewhere (GTK 4 lets only
     // the compositor place one), unless the user asked for another.
-    if (builtin.os.tag == .linux and std.c.getenv("NANOUI_GTK") == null) _ = setenv("NANOUI_GTK", "3", 0);
-    const app = try nanoui.App.create(init, .{ .name = "Nanolight", .quit_on_last_window_closed = false });
+    if (builtin.os.tag == .linux and
+        std.c.getenv("NANOUI_GTK") == null) _ = setenv("NANOUI_GTK", "3", 0);
+    const app = try nanoui.App.create(
+        init,
+        .{ .name = "Nanolight", .quit_on_last_window_closed = false },
+    );
     defer app.destroy();
     var index: Index = .init(init.gpa);
     defer index.deinit();
@@ -703,11 +759,21 @@ pub fn main(init: std.process.Init) !void {
     const cfg = loaded.config();
     config.apply(kv, init.gpa, loaded, account.now());
     // The key is the config's or the Nix module's: the welcome does not ask.
-    var o: Onboard = .{ .skip_key = nix_managed or (if (cfg.hotkey) |h| shortcut.Choice.parse(h) != null else false) };
+    var o: Onboard = .{
+        .skip_key = nix_managed or
+            (if (cfg.hotkey) |h| shortcut.Choice.parse(h) != null else false),
+    };
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
     defer s.query.deinit();
     defer s.found.deinit();
-    var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa), .cfg = cfg };
+    var live: Live = .{
+        .app = app,
+        .s = &s,
+        .o = &o,
+        .kv = kv,
+        .choice = shortcut.load(kv, init.gpa),
+        .cfg = cfg,
+    };
     defer live.rates.deinit();
     s.feed = &live.rates;
     defer if (live.ql_arena) |a| {
@@ -778,7 +844,10 @@ fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
     rc.init(live, init.environ_map);
     defer rc.deinit(live);
     commands.init(init.io, init.environ_map);
-    live.cmds = .{ .io = app.io, .hooks = .{ .ctx = live, .footer = Live.commandFooter, .done = Live.commandDone } };
+    live.cmds = .{
+        .io = app.io,
+        .hooks = .{ .ctx = live, .footer = Live.commandFooter, .done = Live.commandDone },
+    };
     defer live.cmds.deinit();
     rc.rescan(live);
     var clip_dir = clipboard_live.openDir(init.gpa, init.io);
@@ -790,7 +859,10 @@ fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
     if (clip_dir != null) clipboard_live.init(live, &clip_store);
     defer clipboard_live.deinit(live);
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
-    if (single.claim(.{ .ctx = live, .func = Live.command }) > 0) std.log.info("nanolight: asked an older copy to quit", .{});
+    if (single.claim(.{ .ctx = live, .func = Live.command }) > 0) std.log.info(
+        "nanolight: asked an older copy to quit",
+        .{},
+    );
     panel.setup(app, live.window.?, s, if (o.active) o.height() else s.height());
     live.useKey(live.choice);
     live.through = .{ .window = live.window, .height = &s.last_h };
@@ -807,7 +879,13 @@ fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
     const updater = startUpdater(init, live);
     defer if (updater) |u| u.deinit();
     // `[sync]` names a server: synced now.
-    live.acct = .{ .gpa = init.gpa, .io = init.io, .kv = kv, .hooks = live.accountHooks(), .cfg = live.cfg.sync };
+    live.acct = .{
+        .gpa = init.gpa,
+        .io = init.io,
+        .kv = kv,
+        .hooks = live.accountHooks(),
+        .cfg = live.cfg.sync,
+    };
     live.acct.?.load();
     live.menu();
     var note_buf: [64]u8 = undefined;

@@ -66,7 +66,17 @@ pub const icon_png = @embedFile("icon-256.png");
 
 /// The app's icon, `size` points square.
 pub fn appIcon(c: *ui.Context, size: f32) void {
-    _ = ui.image(c, .{ .key = "nanolight-icon", .bytes = icon_png, .max_width = size, .max_height = size, .radius = 0, .scale = 2 });
+    _ = ui.image(
+        c,
+        .{
+            .key = "nanolight-icon",
+            .bytes = icon_png,
+            .max_width = size,
+            .max_height = size,
+            .radius = 0,
+            .scale = 2,
+        },
+    );
 }
 pub const header_h = 58;
 const row_h = 40;
@@ -79,7 +89,8 @@ pub const shadow_margin: f32 = 40;
 /// The tallest the panel gets: every app row, the three web rows and
 /// Google's completions, under three section heads (math lists fewer), or
 /// a search's page. The window is this tall.
-pub const max_height: f32 = header_h + footer_h + 2 + list_pad * 2 + results.max_rows * row_h + 3 * section_h;
+pub const max_height: f32 = header_h + footer_h + 2 + list_pad * 2 +
+    results.max_rows * row_h + 3 * section_h;
 
 /// Where a search's page goes in a panel `h` tall: from `y` down from its
 /// top, `h` tall, between the header and the footer, the panel's width.
@@ -213,7 +224,13 @@ pub const Nanolight = struct {
     pub fn view(s: *Nanolight, c: *ui.Context) void {
         ui.key(c, c.print("panel-{d}", .{s.shown}));
         const entrance: motion.Target = .{ .opacity = 0, .y = -6, .scale = 0.985 };
-        const f = motion.frame(c, .{ .initial = if (s.window_fades) null else entrance, .transition = .{ .spring = spring } });
+        const f = motion.frame(
+            c,
+            .{
+                .initial = if (s.window_fades) null else entrance,
+                .transition = .{ .spring = spring },
+            },
+        );
         const root = ui.div(c).wFull().p(s.margin).motion(f);
         defer root.end();
         s.panel(c);
@@ -281,13 +298,15 @@ pub const Nanolight = struct {
     /// ↓, ^N or ^J; offered before the field, so the key never edits.
     pub fn moveDown(c: *ui.Context) bool {
         const S = ui.Shortcut;
-        return c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true }) or c.shortcut(.{ .key = 'j', .ctrl = true });
+        return c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true }) or
+            c.shortcut(.{ .key = 'j', .ctrl = true });
     }
 
     /// ↑, ^P or ^K.
     pub fn moveUp(c: *ui.Context) bool {
         const S = ui.Shortcut;
-        return c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true }) or c.shortcut(.{ .key = 'k', .ctrl = true });
+        return c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true }) or
+            c.shortcut(.{ .key = 'k', .ctrl = true });
     }
 
     /// Arrows, ^N/^P, ^J/^K and Escape, before the field sees them.
@@ -307,7 +326,8 @@ pub const Nanolight = struct {
         if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.activateOut(c);
         // Tab takes the faint completion, as → does.
         const more = s.completion();
-        if (!files_view.takeOnTab(s, c) and more.len > 0 and c.shortcut(.{ .key = S.tab })) s.take(more);
+        if (!files_view.takeOnTab(s, c) and more.len > 0 and
+            c.shortcut(.{ .key = S.tab })) s.take(more);
         const n = s.res.n;
         if (moveDown(c)) {
             if (n > 0) s.sel = (s.sel + 1) % n;
@@ -326,7 +346,11 @@ pub const Nanolight = struct {
     fn header(s: *Nanolight, c: *ui.Context, p: Palette) bool {
         const bar = ui.div(c).row().wFull().h(header_h).px(18).gap(12).itemsCenter();
         defer bar.end();
-        ui.icon(c, "magnifyingglass", .{ .size = 19, .weight = .medium, .color = p.sub, .frame = 22 });
+        ui.icon(
+            c,
+            "magnifyingglass",
+            .{ .size = 19, .weight = .medium, .color = p.sub, .frame = 22 },
+        );
         s.rebuild();
         const r = ui.textField(c, &s.query, .{
             .suggestion = s.completion(),
@@ -461,12 +485,17 @@ pub const Nanolight = struct {
         const fresh = c.print("{d}", .{s.built});
         const hy = motion.number(c, fresh, sel_y, .{ .spring = slide });
         const hh = motion.number(c, c.print("{d}h", .{s.built}), sel_h, .{ .spring = slide });
-        ui.div(c).absolute().offset(0, hy).w(width - list_pad * 2).h(hh).rounded(10).bg(p.sel).border(p.rim).end();
+        ui.div(c).absolute().offset(0, hy).w(width - list_pad * 2).h(hh).rounded(10).bg(p.sel)
+            .border(p.rim).end();
         for (s.res.slice(), 0..) |r, i| {
             if (s.res.section(i)) |name| {
                 const head = ui.div(c).row().wFull().h(section_h).px(12).pb(6).itemsEnd();
                 defer head.end();
-                ui.text(c, name, .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) });
+                ui.text(
+                    c,
+                    name,
+                    .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) },
+                );
             }
             s.row(c, p, i, r);
         }
@@ -474,7 +503,8 @@ pub const Nanolight = struct {
 
     fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
         const big = r.kind == .calc;
-        const d = ui.div(c).row().wFull().h(if (big) calc_h else row_h).px(10).gap(12).itemsCenter().control();
+        const d = ui.div(c).row().wFull().h(if (big) calc_h else row_h).px(10).gap(12).itemsCenter()
+            .control();
         defer d.end();
         if (d.clicked()) {
             s.sel = i;
@@ -487,34 +517,71 @@ pub const Nanolight = struct {
             .calc => unreachable,
             .app => {
                 const a = s.index.apps.items[r.app];
-                ui.richText(c, a.name, s.highlight(i, r, p), .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) });
+                ui.richText(
+                    c,
+                    a.name,
+                    s.highlight(i, r, p),
+                    .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) },
+                );
                 ui.text(c, a.folder, .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
             .pane => {
                 const pane = @import("settings_panes.zig").all[r.app];
-                ui.richText(c, pane.name, s.highlight(i, r, p), .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) });
+                ui.richText(
+                    c,
+                    pane.name,
+                    s.highlight(i, r, p),
+                    .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) },
+                );
                 ui.text(c, "System Settings", .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
             .command => {
-                ui.richText(c, commands.all[r.app].name, s.highlight(i, r, p), .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) });
+                ui.richText(
+                    c,
+                    commands.all[r.app].name,
+                    s.highlight(i, r, p),
+                    .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) },
+                );
                 ui.text(c, "System Command", .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
             .clipboard => {
-                ui.text(c, "Clipboard History", .{ .size = 13.5, .weight = .medium, .color = p.text });
-                ui.text(c, "Text, images and files you copied", .{ .size = 12, .color = p.sub.alpha(0.8) });
+                ui.text(
+                    c,
+                    "Clipboard History",
+                    .{ .size = 13.5, .weight = .medium, .color = p.text },
+                );
+                ui.text(
+                    c,
+                    "Text, images and files you copied",
+                    .{ .size = 12, .color = p.sub.alpha(0.8) },
+                );
             },
             .file => files_view.row(s, c, p, i, r),
             .settings => {
-                ui.text(c, "Nanolight Settings", .{ .size = 13.5, .weight = .medium, .color = p.text });
+                ui.text(
+                    c,
+                    "Nanolight Settings",
+                    .{ .size = 13.5, .weight = .medium, .color = p.text },
+                );
                 ui.text(c, "Shortcut, sync, updates", .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
             .suggest => {
                 const w = s.web.get(r.web);
-                ui.richText(c, w, s.added(i, w, p), .{ .size = 13.5, .color = p.text.alpha(0.72), .truncate = .ellipsis });
+                ui.richText(
+                    c,
+                    w,
+                    s.added(i, w, p),
+                    .{ .size = 13.5, .color = p.text.alpha(0.72), .truncate = .ellipsis },
+                );
             },
             .quicklink => {
                 const ql = s.quicklinks[r.ql];
-                ui.textf(c, .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis }, "Search {s} for “{s}”", .{ ql.name, s.res.argument(q) });
+                ui.textf(
+                    c,
+                    .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis },
+                    "Search {s} for “{s}”",
+                    .{ ql.name, s.res.argument(q) },
+                );
                 ui.text(c, results.host(ql.url), .{ .size = 12, .color = p.sub.alpha(0.8) });
             },
         }
@@ -526,21 +593,46 @@ pub const Nanolight = struct {
                 else => "Go",
             }, .{ .size = 12, .weight = .medium, .color = p.sub });
             ui.kbd(c, "↩");
-        } else if (i < 9) ui.textf(c, .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.5), .tabular = true }, "{s}{d}", .{ results.mod, i + 1 });
+        } else if (i < 9) ui.textf(
+            c,
+            .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.5), .tabular = true },
+            "{s}{d}",
+            .{ results.mod, i + 1 },
+        );
     }
 
     fn calcCard(s: *Nanolight, c: *ui.Context, p: Palette) void {
-        @import("calc_card.zig").draw(c, p, if (s.res.expr.len > 0) s.res.expr else s.query.text(), s.res.answer, s.res.hex, s.res.note, c.time - s.copied_at < 1.4);
+        @import("calc_card.zig").draw(
+            c,
+            p,
+            if (s.res.expr.len > 0) s.res.expr else s.query.text(),
+            s.res.answer,
+            s.res.hex,
+            s.res.note,
+            c.time - s.copied_at < 1.4,
+        );
     }
 
     /// The row's picture: the app's icon, or a symbol on a quiet tile.
     fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
         // A pane: System Settings' own icon.
-        const app = if (r.kind == .pane) s.index.find("System Settings") else if (r.kind == .app) r.app else null;
+        const app = if (r.kind == .pane)
+            s.index.find("System Settings")
+        else if (r.kind == .app) r.app else null;
         if (app) |a| if (s.index.icon(a)) |png| {
             const box = ui.div(c).size(26, 26).center();
             defer box.end();
-            _ = ui.image(c, .{ .key = s.index.apps.items[a].path, .bytes = png, .max_width = 26, .max_height = 26, .radius = 0, .scale = 1 });
+            _ = ui.image(
+                c,
+                .{
+                    .key = s.index.apps.items[a].path,
+                    .bytes = png,
+                    .max_width = 26,
+                    .max_height = 26,
+                    .radius = 0,
+                    .scale = 1,
+                },
+            );
             return;
         };
         if (r.kind == .file) return files_view.tile(s, c, p, r);
@@ -567,7 +659,12 @@ pub const Nanolight = struct {
         while (k < hits.len and n < s.spans[i].len) {
             var end = k + 1;
             while (end < hits.len and hits[end] == hits[end - 1] + 1) end += 1;
-            s.spans[i][n] = .{ .start = hits[k], .end = @as(u32, hits[end - 1]) + 1, .color = p.text, .weight = .semibold };
+            s.spans[i][n] = .{
+                .start = hits[k],
+                .end = @as(u32, hits[end - 1]) + 1,
+                .color = p.text,
+                .weight = .semibold,
+            };
             n += 1;
             k = end;
         }
@@ -579,7 +676,12 @@ pub const Nanolight = struct {
     fn added(s: *Nanolight, i: usize, w: []const u8, p: Palette) []const ui.Span {
         const q = std.mem.trim(u8, s.query.text(), " ");
         if (q.len == 0 or w.len <= q.len or !text.utf8StartsWithFold(w, q)) return &.{};
-        s.spans[i][0] = .{ .start = @intCast(q.len), .end = @intCast(w.len), .color = p.text, .weight = .semibold };
+        s.spans[i][0] = .{
+            .start = @intCast(q.len),
+            .end = @intCast(w.len),
+            .color = p.text,
+            .weight = .semibold,
+        };
         return s.spans[i][0..1];
     }
 
@@ -588,7 +690,12 @@ pub const Nanolight = struct {
         const bar = ui.div(c).row().wFull().h(footer_h).px(16).gap(8).itemsCenter();
         defer bar.end();
         appIcon(c, 16);
-        ui.textf(c, .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8) }, "{s} · {d} apps", .{ if (s.note.len > 0) s.note else "Nanolight", s.index.apps.items.len });
+        ui.textf(
+            c,
+            .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8) },
+            "{s} · {d} apps",
+            .{ if (s.note.len > 0) s.note else "Nanolight", s.index.apps.items.len },
+        );
         ui.spacer(c);
         {
             ui.key(c, "settings-gear");
@@ -599,7 +706,11 @@ pub const Nanolight = struct {
             ui.text(c, "Settings", .{ .size = 1, .color = p.sub.alpha(0) });
         }
         if (s.previewing) {
-            ui.text(c, "Open in Browser", .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
+            ui.text(
+                c,
+                "Open in Browser",
+                .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) },
+            );
             ui.kbd(c, results.mod ++ "↩");
             ui.div(c).w(1).h(14).bg(p.hair).end();
             ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
@@ -609,9 +720,23 @@ pub const Nanolight = struct {
         if (s.res.n == 0) return;
         const sel = s.res.rows[s.res.actionable(s.sel)];
         if (sel.kind == .quicklink)
-            ui.textf(c, .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85), .truncate = .ellipsis }, "Search {s}", .{s.quicklinks[sel.ql].name})
+            ui.textf(
+                c,
+                .{
+                    .size = 12,
+                    .weight = .medium,
+                    .color = p.text.alpha(0.85),
+                    .truncate = .ellipsis,
+                },
+                "Search {s}",
+                .{s.quicklinks[sel.ql].name},
+            )
         else
-            ui.text(c, sel.kind.action(), .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
+            ui.text(
+                c,
+                sel.kind.action(),
+                .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) },
+            );
         ui.kbd(c, "↩");
         ui.div(c).w(1).h(14).bg(p.hair).end();
         ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });

@@ -1,7 +1,8 @@
 //! nanolight-server: keeps one settings record (settings.zig) per account
 //! for the clients that sync to it (account.zig).
 //!
-//!   nanolight-server serve --listen 127.0.0.1:8890 --state /var/lib/nanolight --tokens /path/tokens
+//!   nanolight-server serve --listen 127.0.0.1:8890 --state /var/lib/nanolight \
+//!       --tokens /path/tokens
 //!   nanolight-server hash-token <token>
 //!
 //! One connection at a time, by design: a few machines per account sync a
@@ -45,7 +46,11 @@ pub fn validAccount(name: []const u8) bool {
 
 /// A tokens file: `account:sha256hex(token)` per line; `#` starts a comment.
 /// `line` is where it failed.
-pub fn parseTokens(arena: std.mem.Allocator, text: []const u8, line: *usize) error{ BadLine, BadAccount, OutOfMemory }![]Token {
+pub fn parseTokens(
+    arena: std.mem.Allocator,
+    text: []const u8,
+    line: *usize,
+) error{ BadLine, BadAccount, OutOfMemory }![]Token {
     var out: std.ArrayList(Token) = .empty;
     var lines = std.mem.splitScalar(u8, text, '\n');
     var n: usize = 0;
@@ -71,12 +76,19 @@ pub fn parseTokens(arena: std.mem.Allocator, text: []const u8, line: *usize) err
 /// time, so the time taken does not say how close a guess was.
 fn authenticate(tokens: []const Token, authorization: []const u8) ?[]const u8 {
     const prefix = "Bearer ";
-    const given = if (std.mem.startsWith(u8, authorization, prefix)) authorization[prefix.len..] else "";
+    const given = if (std.mem.startsWith(u8, authorization, prefix))
+        authorization[prefix.len..]
+    else
+        "";
     var digest: [sha256.digest_length]u8 = undefined;
     sha256.hash(given, &digest, .{});
     var found: ?[]const u8 = null;
     for (tokens) |t| {
-        if (std.crypto.timing_safe.eql([sha256.digest_length]u8, t.digest, digest)) found = t.account;
+        if (std.crypto.timing_safe.eql(
+            [sha256.digest_length]u8,
+            t.digest,
+            digest,
+        )) found = t.account;
     }
     return if (given.len == 0) null else found;
 }
@@ -99,13 +111,20 @@ pub const Reply = struct {
 };
 
 /// The protocol. `state` holds `<account>.json`; `arena` owns the reply.
-pub fn handle(arena: std.mem.Allocator, io: Io, state: Io.Dir, tokens: []const Token, req: Request) Reply {
+pub fn handle(
+    arena: std.mem.Allocator,
+    io: Io,
+    state: Io.Dir,
+    tokens: []const Token,
+    req: Request,
+) Reply {
     const is_get = std.mem.eql(u8, req.method, "GET");
     const is_put = std.mem.eql(u8, req.method, "PUT");
     if (std.mem.eql(u8, req.path, "/healthz")) {
         return if (is_get) .{ .status = 200, .body = "ok" } else .{ .status = 405 };
     }
-    const account = authenticate(tokens, req.authorization) orelse return .{ .status = 401, .body = "unauthorized" };
+    const account = authenticate(tokens, req.authorization) orelse
+        return .{ .status = 401, .body = "unauthorized" };
     var r: Reply = .{ .status = 404, .account = account };
     if (!std.mem.eql(u8, req.path, "/v1/sync")) return r;
     if (!is_get and !is_put) {
@@ -113,7 +132,12 @@ pub fn handle(arena: std.mem.Allocator, io: Io, state: Io.Dir, tokens: []const T
         return r;
     }
     const name = std.fmt.allocPrint(arena, "{s}.json", .{account}) catch return fail(r);
-    const stored: ?[]const u8 = state.readFileAlloc(io, name, arena, .limited(max_body * 2)) catch |e| switch (e) {
+    const stored: ?[]const u8 = state.readFileAlloc(
+        io,
+        name,
+        arena,
+        .limited(max_body * 2),
+    ) catch |e| switch (e) {
         error.FileNotFound => null,
         else => return fail(r),
     };
@@ -133,8 +157,16 @@ pub fn handle(arena: std.mem.Allocator, io: Io, state: Io.Dir, tokens: []const T
         return r;
     };
     // An unreadable stored record is not replaced: that would lose it.
-    const have: ?settings.Settings = if (stored) |b| settings.decode(arena, b) orelse return fail(r) else null;
-    const merged = settings.merge(arena, incoming, have orelse incoming, req.first) catch return fail(r);
+    const have: ?settings.Settings = if (stored) |b|
+        settings.decode(arena, b) orelse return fail(r)
+    else
+        null;
+    const merged = settings.merge(
+        arena,
+        incoming,
+        have orelse incoming,
+        req.first,
+    ) catch return fail(r);
     const body = (settings.encodeWithin(arena, merged, max_body * 2) catch return fail(r)) orelse {
         r.status = 413;
         return r;
@@ -158,7 +190,10 @@ fn fail(r: Reply) Reply {
 fn write(io: Io, dir: Io.Dir, name: []const u8, bytes: []const u8) !void {
     var buf: [96]u8 = undefined;
     const tmp = try std.fmt.bufPrint(&buf, "{s}.tmp", .{name});
-    errdefer dir.deleteFile(io, tmp) catch |err| std.log.warn("{s}: not removed: {t}", .{ tmp, err });
+    errdefer dir.deleteFile(io, tmp) catch |err| std.log.warn(
+        "{s}: not removed: {t}",
+        .{ tmp, err },
+    );
     const f = try dir.createFile(io, tmp, .{ .truncate = true });
     defer f.close(io);
     try f.writeStreamingAll(io, bytes);
@@ -264,8 +299,14 @@ fn serveOne(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, serve: Serve)
     var first = false;
     var headers = req.iterateHeaders();
     while (headers.next()) |h| {
-        if (std.ascii.eqlIgnoreCase(h.name, "authorization")) auth = arena.dupe(u8, h.value) catch return;
-        if (std.ascii.eqlIgnoreCase(h.name, "x-nanolight-first")) first = std.mem.eql(u8, h.value, "1");
+        if (std.ascii.eqlIgnoreCase(
+            h.name,
+            "authorization",
+        )) auth = arena.dupe(u8, h.value) catch return;
+        if (std.ascii.eqlIgnoreCase(
+            h.name,
+            "x-nanolight-first",
+        )) first = std.mem.eql(u8, h.value, "1");
     }
     var reply: Reply = undefined;
     if (length > max_body) {
@@ -298,7 +339,10 @@ fn serveOne(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, serve: Serve)
             reply = handle(arena, io, serve.state, serve.tokens, parsed);
         }
     }
-    std.log.info("{s} {s} {d} {s}", .{ method, path, reply.status, if (reply.account.len > 0) reply.account else "-" });
+    std.log.info(
+        "{s} {s} {d} {s}",
+        .{ method, path, reply.status, if (reply.account.len > 0) reply.account else "-" },
+    );
     req.respond(reply.body, .{
         .status = @fromBackingInt(@intCast(reply.status)),
         .keep_alive = false,
@@ -332,7 +376,13 @@ pub fn main(init: std.process.Init) !void {
     var state_path: ?[]const u8 = null;
     var tokens_path: ?[]const u8 = null;
     while (args.next()) |a| {
-        const slot = if (std.mem.eql(u8, a, "--listen")) &listen_arg else if (std.mem.eql(u8, a, "--state")) &state_path else if (std.mem.eql(u8, a, "--tokens")) &tokens_path else return fatal(usage);
+        const slot = if (std.mem.eql(u8, a, "--listen"))
+            &listen_arg
+        else if (std.mem.eql(u8, a, "--state")) &state_path else if (std.mem.eql(
+            u8,
+            a,
+            "--tokens",
+        )) &tokens_path else return fatal(usage);
         const v = args.next() orelse return fatal(usage);
         slot.* = v;
     }
@@ -340,7 +390,8 @@ pub fn main(init: std.process.Init) !void {
     const state_dir = state_path orelse return fatal(usage);
     const tokens_file = tokens_path orelse return fatal(usage);
 
-    const text = Io.Dir.cwd().readFileAlloc(init.io, tokens_file, init.arena.allocator(), .limited(1 << 20)) catch |e|
+    const text = Io.Dir.cwd()
+        .readFileAlloc(init.io, tokens_file, init.arena.allocator(), .limited(1 << 20)) catch |e|
         return fatalf("nanolight-server: {s}: {t}\n", .{ tokens_file, e });
     var line: usize = 0;
     const tokens = parseTokens(init.arena.allocator(), text, &line) catch |e|
@@ -351,12 +402,23 @@ pub fn main(init: std.process.Init) !void {
     // directory is a symlink, which createDirPath rejects as NotDir.
     const state = Io.Dir.cwd().openDir(init.io, state_dir, .{}) catch |e| switch (e) {
         error.FileNotFound => blk: {
-            Io.Dir.cwd().createDirPath(init.io, state_dir) catch |ce| return fatalf("nanolight-server: {s}: {t}\n", .{ state_dir, ce });
-            break :blk Io.Dir.cwd().openDir(init.io, state_dir, .{}) catch |oe| return fatalf("nanolight-server: {s}: {t}\n", .{ state_dir, oe });
+            Io.Dir.cwd()
+                .createDirPath(init.io, state_dir) catch |ce| return fatalf(
+                "nanolight-server: {s}: {t}\n",
+                .{ state_dir, ce },
+            );
+            break :blk Io.Dir.cwd()
+                .openDir(init.io, state_dir, .{}) catch |oe| return fatalf(
+                "nanolight-server: {s}: {t}\n",
+                .{ state_dir, oe },
+            );
         },
         else => return fatalf("nanolight-server: {s}: {t}\n", .{ state_dir, e }),
     };
-    const addr = Io.net.IpAddress.parseLiteral(listen) catch return fatalf("nanolight-server: bad --listen {s}\n", .{listen});
+    const addr = Io.net.IpAddress.parseLiteral(listen) catch return fatalf(
+        "nanolight-server: bad --listen {s}\n",
+        .{listen},
+    );
     var server = try addr.listen(init.io, .{ .reuse_address = true });
     defer server.deinit(init.io);
     std.log.info("listening on {s}, {d} account(s)", .{ listen, tokens.len });
@@ -391,7 +453,11 @@ fn testTokens(arena: std.mem.Allocator) ![]Token {
     sha256.hash(test_token, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
     var line: usize = 0;
-    return parseTokens(arena, try std.fmt.allocPrint(arena, "# accounts\nalice:{s}  # laptop\n\n", .{hex}), &line);
+    return parseTokens(
+        arena,
+        try std.fmt.allocPrint(arena, "# accounts\nalice:{s}  # laptop\n\n", .{hex}),
+        &line,
+    );
 }
 
 const bearer = "Bearer " ++ test_token;
@@ -412,15 +478,32 @@ test "a record round-trips with the right token, and is not there before the fir
     const a = arena.allocator();
     const tokens = try testTokens(a);
 
-    try testing.expectEqual(@as(u16, 404), send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/v1/sync", .authorization = bearer }).status);
+    try testing.expectEqual(
+        @as(u16, 404),
+        send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/v1/sync", .authorization = bearer })
+            .status,
+    );
     const body = try record(a, "cmd_space", 10);
-    const put = send(a, tmp.dir, tokens, .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = body });
+    const put = send(
+        a,
+        tmp.dir,
+        tokens,
+        .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = body },
+    );
     try testing.expectEqual(@as(u16, 200), put.status);
     try testing.expectEqualStrings("alice", put.account);
-    const got = send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/v1/sync", .authorization = bearer });
+    const got = send(
+        a,
+        tmp.dir,
+        tokens,
+        .{ .method = "GET", .path = "/v1/sync", .authorization = bearer },
+    );
     try testing.expectEqual(@as(u16, 200), got.status);
     try testing.expect(settings.same(settings.decode(a, got.body).?, settings.decode(a, body).?));
-    try testing.expectEqualStrings("ok", send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/healthz" }).body);
+    try testing.expectEqualStrings(
+        "ok",
+        send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/healthz" }).body,
+    );
 }
 
 test "a missing or wrong token is refused, and nothing is read or written" {
@@ -431,9 +514,20 @@ test "a missing or wrong token is refused, and nothing is read or written" {
     const a = arena.allocator();
     const tokens = try testTokens(a);
     const body = try record(a, "cmd_space", 10);
-    for ([_][]const u8{ "", "Bearer ", "Bearer wrong", "Basic " ++ test_token, test_token }) |auth| {
+    for ([_][]const u8{
+        "",
+        "Bearer ",
+        "Bearer wrong",
+        "Basic " ++ test_token,
+        test_token,
+    }) |auth| {
         for ([_][]const u8{ "GET", "PUT" }) |m| {
-            const r = send(a, tmp.dir, tokens, .{ .method = m, .path = "/v1/sync", .authorization = auth, .body = body });
+            const r = send(
+                a,
+                tmp.dir,
+                tokens,
+                .{ .method = m, .path = "/v1/sync", .authorization = auth, .body = body },
+            );
             try testing.expectEqual(@as(u16, 401), r.status);
         }
     }
@@ -447,13 +541,37 @@ test "a body that is not a record is a 400, and one over 256 KiB a 413" {
     defer arena.deinit();
     const a = arena.allocator();
     const tokens = try testTokens(a);
-    for ([_][]const u8{ "not json", "{}", "{\"v\":9,\"hotkey\":\"x\",\"suggest\":true,\"at\":1}" }) |b| {
-        try testing.expectEqual(@as(u16, 400), send(a, tmp.dir, tokens, .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = b }).status);
+    for ([_][]const u8{
+        "not json",
+        "{}",
+        "{\"v\":9,\"hotkey\":\"x\",\"suggest\":true,\"at\":1}",
+    }) |b| {
+        try testing.expectEqual(
+            @as(u16, 400),
+            send(
+                a,
+                tmp.dir,
+                tokens,
+                .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = b },
+            ).status,
+        );
     }
     const big = try a.alloc(u8, max_body + 1);
     @memset(big, ' ');
-    try testing.expectEqual(@as(u16, 413), send(a, tmp.dir, tokens, .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = big }).status);
-    try testing.expectEqual(@as(u16, 404), send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/v1/sync", .authorization = bearer }).status);
+    try testing.expectEqual(
+        @as(u16, 413),
+        send(
+            a,
+            tmp.dir,
+            tokens,
+            .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = big },
+        ).status,
+    );
+    try testing.expectEqual(
+        @as(u16, 404),
+        send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/v1/sync", .authorization = bearer })
+            .status,
+    );
 }
 
 test "a merge that outgrows the stored limit sheds apps and stays readable" {
@@ -467,13 +585,30 @@ test "a merge that outgrows the stored limit sheds apps and stays readable" {
     @memset(pad, 'x');
     for (0..3) |k| {
         const launches = try a.alloc(settings.Launch, 450);
-        for (launches, 0..) |*l, i| l.* = .{ .name = "App", .path = try std.fmt.allocPrint(a, "/Applications/{d}/{d:0>3}/{s}", .{ k, i, pad }), .count = 1 };
-        const body = try settings.encode(a, .{ .hotkey = "cmd_space", .suggest = true, .at = 1, .launches = launches });
+        for (launches, 0..) |*l, i| l.* = .{
+            .name = "App",
+            .path = try std.fmt.allocPrint(a, "/Applications/{d}/{d:0>3}/{s}", .{ k, i, pad }),
+            .count = 1,
+        };
+        const body = try settings.encode(
+            a,
+            .{ .hotkey = "cmd_space", .suggest = true, .at = 1, .launches = launches },
+        );
         try testing.expect(body.len <= max_body);
-        const put = send(a, tmp.dir, tokens, .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = body });
+        const put = send(
+            a,
+            tmp.dir,
+            tokens,
+            .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = body },
+        );
         try testing.expectEqual(@as(u16, 200), put.status);
         try testing.expect(put.body.len <= max_body * 2);
-        const got = send(a, tmp.dir, tokens, .{ .method = "GET", .path = "/v1/sync", .authorization = bearer });
+        const got = send(
+            a,
+            tmp.dir,
+            tokens,
+            .{ .method = "GET", .path = "/v1/sync", .authorization = bearer },
+        );
         try testing.expectEqual(@as(u16, 200), got.status);
     }
 }
@@ -486,18 +621,48 @@ test "a first sync keeps the stored record, a later one the newer" {
     const a = arena.allocator();
     const tokens = try testTokens(a);
     const put = struct {
-        fn f(al: std.mem.Allocator, dir: Io.Dir, t: []const Token, hotkey: []const u8, at: i64, first: bool) ![]const u8 {
-            const r = send(al, dir, t, .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .first = first, .body = try record(al, hotkey, at) });
+        fn f(
+            al: std.mem.Allocator,
+            dir: Io.Dir,
+            t: []const Token,
+            hotkey: []const u8,
+            at: i64,
+            first: bool,
+        ) ![]const u8 {
+            const r = send(
+                al,
+                dir,
+                t,
+                .{
+                    .method = "PUT",
+                    .path = "/v1/sync",
+                    .authorization = bearer,
+                    .first = first,
+                    .body = try record(al, hotkey, at),
+                },
+            );
             try testing.expectEqual(@as(u16, 200), r.status);
             return settings.decode(al, r.body).?.hotkey;
         }
     }.f;
-    try testing.expectEqualStrings("cmd_space", try put(a, tmp.dir, tokens, "cmd_space", 100, false));
+    try testing.expectEqualStrings(
+        "cmd_space",
+        try put(a, tmp.dir, tokens, "cmd_space", 100, false),
+    );
     // A new machine's first sync: the account's choice wins, though this one is newer.
-    try testing.expectEqualStrings("cmd_space", try put(a, tmp.dir, tokens, "opt_space", 500, true));
+    try testing.expectEqualStrings(
+        "cmd_space",
+        try put(a, tmp.dir, tokens, "opt_space", 500, true),
+    );
     // Later: the newer wins, either way round.
-    try testing.expectEqualStrings("opt_space", try put(a, tmp.dir, tokens, "opt_space", 600, false));
-    try testing.expectEqualStrings("opt_space", try put(a, tmp.dir, tokens, "cmd_space", 200, false));
+    try testing.expectEqualStrings(
+        "opt_space",
+        try put(a, tmp.dir, tokens, "opt_space", 600, false),
+    );
+    try testing.expectEqualStrings(
+        "opt_space",
+        try put(a, tmp.dir, tokens, "cmd_space", 200, false),
+    );
 }
 
 test "a write leaves no temp file, and an unreadable record is not overwritten" {
@@ -508,7 +673,15 @@ test "a write leaves no temp file, and an unreadable record is not overwritten" 
     const a = arena.allocator();
     const tokens = try testTokens(a);
     const body = try record(a, "cmd_space", 10);
-    try testing.expectEqual(@as(u16, 200), send(a, tmp.dir, tokens, .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = body }).status);
+    try testing.expectEqual(
+        @as(u16, 200),
+        send(
+            a,
+            tmp.dir,
+            tokens,
+            .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = body },
+        ).status,
+    );
     var it = tmp.dir.iterate();
     var names: usize = 0;
     while (try it.next(testing.io)) |e| {
@@ -518,7 +691,15 @@ test "a write leaves no temp file, and an unreadable record is not overwritten" 
     try testing.expectEqual(@as(usize, 1), names);
 
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "alice.json", .data = "garbage" });
-    try testing.expectEqual(@as(u16, 500), send(a, tmp.dir, tokens, .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = body }).status);
+    try testing.expectEqual(
+        @as(u16, 500),
+        send(
+            a,
+            tmp.dir,
+            tokens,
+            .{ .method = "PUT", .path = "/v1/sync", .authorization = bearer, .body = body },
+        ).status,
+    );
     const kept = try tmp.dir.readFileAlloc(testing.io, "alice.json", a, .limited(100));
     try testing.expectEqualStrings("garbage", kept);
 }
@@ -537,9 +718,16 @@ test "an invalid account name in the tokens file is rejected" {
     try testing.expectError(error.BadLine, parseTokens(a, "ok:abc", &line));
     try testing.expectError(error.BadLine, parseTokens(a, "ok\n", &line));
     const not_hex: [64]u8 = @splat('g');
-    try testing.expectError(error.BadLine, parseTokens(a, try std.fmt.allocPrint(a, "# fine\nok:{s}", .{not_hex}), &line));
+    try testing.expectError(
+        error.BadLine,
+        parseTokens(a, try std.fmt.allocPrint(a, "# fine\nok:{s}", .{not_hex}), &line),
+    );
     try testing.expectEqual(@as(usize, 2), line);
-    const ok = try parseTokens(a, try std.fmt.allocPrint(a, "a_b-1:{0s}\n# c\nz:{0s} # trailing\n", .{hash}), &line);
+    const ok = try parseTokens(
+        a,
+        try std.fmt.allocPrint(a, "a_b-1:{0s}\n# c\nz:{0s} # trailing\n", .{hash}),
+        &line,
+    );
     try testing.expectEqual(@as(usize, 2), ok.len);
 }
 

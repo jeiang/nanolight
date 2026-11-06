@@ -63,10 +63,32 @@ const Fake = struct {
 
     fn fill(f: *Fake) void {
         const now = account.now();
-        _ = f.store.add(.{ .kind = .text, .text = "old note", .source = "com.apple.Notes" }, now - 7200);
-        _ = f.store.add(.{ .kind = .file, .text = "/Users/me/report.pdf", .source = "com.apple.finder" }, now - 3600);
-        _ = f.store.add(.{ .kind = .image, .png = "png", .width = 800, .height = 600, .source = "com.apple.Preview" }, now - 600);
-        _ = f.store.add(.{ .kind = .text, .text = "hello world\nsecond line\nthird line", .source = "com.apple.Safari" }, now - 300);
+        _ = f.store.add(
+            .{ .kind = .text, .text = "old note", .source = "com.apple.Notes" },
+            now - 7200,
+        );
+        _ = f.store.add(
+            .{ .kind = .file, .text = "/Users/me/report.pdf", .source = "com.apple.finder" },
+            now - 3600,
+        );
+        _ = f.store.add(
+            .{
+                .kind = .image,
+                .png = "png",
+                .width = 800,
+                .height = 600,
+                .source = "com.apple.Preview",
+            },
+            now - 600,
+        );
+        _ = f.store.add(
+            .{
+                .kind = .text,
+                .text = "hello world\nsecond line\nthird line",
+                .source = "com.apple.Safari",
+            },
+            now - 300,
+        );
     }
 };
 
@@ -311,7 +333,10 @@ test "an entry added while the screen is open appears at once" {
     opened(t, s);
     _ = t.shortcut(.{ .key = S.down });
     const image = f.store.entries.items[1].hash;
-    _ = f.store.add(.{ .kind = .text, .text = "fresh copy", .source = "org.mozilla.firefox" }, account.now());
+    _ = f.store.add(
+        .{ .kind = .text, .text = "fresh copy", .source = "org.mozilla.firefox" },
+        account.now(),
+    );
     t.settle(1);
     try testing.expect(t.hasText("fresh copy"));
     try testing.expect(t.hasText("Text · firefox · just now"));

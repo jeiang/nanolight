@@ -37,7 +37,10 @@ pub fn place(w: *nanoui.Window) void {
     const ph = objc.msg(objc.CGRect, primary, "frame", .{}).size.height;
     const top = ph - (f.origin.y + f.size.height);
     // The panel there; the window is the shadow's margin bigger.
-    w.setPosition(f.origin.x + (f.size.width - view.width) / 2 - view.shadow_margin, top + f.size.height * 0.2 - view.shadow_margin);
+    w.setPosition(
+        f.origin.x + (f.size.width - view.width) / 2 - view.shadow_margin,
+        top + f.size.height * 0.2 - view.shadow_margin,
+    );
     // Unseen as it orders in: it still holds the frame it hid with, until
     // the next one is drawn (issue #9). `shown` fades it in.
     objc.msg(void, w.nswindow, "setAlphaValue:", .{@as(f64, 0)});
@@ -66,7 +69,12 @@ pub fn shown(w: *nanoui.Window) void {
     const cls = objc.class("NSAnimationContext");
     objc.msg(void, cls, "beginGrouping", .{});
     objc.msg(void, objc.msg(objc.Object, cls, "currentContext", .{}), "setDuration:", .{fade_s});
-    objc.msg(void, objc.msg(objc.Object, w.nswindow, "animator", .{}), "setAlphaValue:", .{@as(f64, 1)});
+    objc.msg(
+        void,
+        objc.msg(objc.Object, w.nswindow, "animator", .{}),
+        "setAlphaValue:",
+        .{@as(f64, 1)},
+    );
     objc.msg(void, cls, "endGrouping", .{});
     // Whole once the fade is over, whatever became of it: a launcher
     // left see-through would be worse than one that didn't fade.

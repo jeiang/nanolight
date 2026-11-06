@@ -44,7 +44,9 @@ fn argCount(comptime sig: []const u8) usize {
 }
 
 fn msg(comptime name: [:0]const u8, comptime sig: [:0]const u8, comptime types: anytype) Message {
-    if (@typeInfo(@typeInfo(@TypeOf(types)).pointer.child).array.len != argCount(sig)) @compileError("types of " ++ name ++ " do not match " ++ sig);
+    if (@typeInfo(@typeInfo(@TypeOf(types)).pointer.child).array.len != argCount(sig)) {
+        @compileError("types of " ++ name ++ " do not match " ++ sig);
+    }
     return .{ .name = name, .signature = sig, .types = types };
 }
 
@@ -108,7 +110,10 @@ fn DataControl(comptime ns: []const u8, comptime version: c_int) type {
         const source_events = [_]Message{ msg("send", "sh", &none2), msg("cancelled", "", &none0) };
 
         pub const offer = described(name("offer"), version, &offer_methods, &offer_events);
-        const offer_methods = [_]Message{ msg("receive", "sh", &none2), msg("destroy", "", &none0) };
+        const offer_methods = [_]Message{
+            msg("receive", "sh", &none2),
+            msg("destroy", "", &none0),
+        };
         const offer_events = [_]Message{msg("offer", "s", &none1)};
 
         /// The seat's interface comes from libwayland at run time.
@@ -132,7 +137,13 @@ const Proto = struct {
     setSeat: *const fn (*const Interface) void,
 
     fn of(comptime T: type) Proto {
-        return .{ .manager = &T.manager, .device = &T.device, .source = &T.source, .offer = &T.offer, .setSeat = T.setSeat };
+        return .{
+            .manager = &T.manager,
+            .device = &T.device,
+            .source = &T.source,
+            .offer = &T.offer,
+            .setSeat = T.setSeat,
+        };
     }
 };
 
@@ -167,8 +178,19 @@ const Lib = struct {
     wl_display_dispatch_pending: *const fn (*Display) callconv(.c) c_int,
     wl_display_prepare_read: *const fn (*Display) callconv(.c) c_int,
     wl_display_read_events: *const fn (*Display) callconv(.c) c_int,
-    wl_proxy_marshal_flags: *const fn (*Proxy, u32, ?*const Interface, u32, u32, ...) callconv(.c) ?*Proxy,
-    wl_proxy_add_listener: *const fn (*Proxy, [*]const ?*const anyopaque, ?*anyopaque) callconv(.c) c_int,
+    wl_proxy_marshal_flags: *const fn (
+        *Proxy,
+        u32,
+        ?*const Interface,
+        u32,
+        u32,
+        ...,
+    ) callconv(.c) ?*Proxy,
+    wl_proxy_add_listener: *const fn (
+        *Proxy,
+        [*]const ?*const anyopaque,
+        ?*anyopaque,
+    ) callconv(.c) c_int,
     wl_proxy_get_user_data: *const fn (*Proxy) callconv(.c) ?*anyopaque,
     wl_proxy_get_version: *const fn (*Proxy) callconv(.c) u32,
     wl_registry_interface: *const Interface,
@@ -188,7 +210,9 @@ pub const keymap_text =
     \\xkb_keycodes { <LCTL> = 37; <AB04> = 55; };
     \\xkb_types { include "complete" };
     \\xkb_compat { include "complete" };
-    \\xkb_symbols { key <LCTL> { [ Control_L ] }; key <AB04> { [ v, V ] }; modifier_map Control { <LCTL> }; };
+    \\xkb_symbols { key <LCTL> { [ Control_L ] }; key <AB04> { [ v, V ] }; modifier_map Control {
+++
+    \\ <LCTL> }; };
     \\};
     \\
 ;
@@ -322,8 +346,19 @@ pub const Wl = struct {
         const lib = w.lib;
         const d = lib.wl_display_connect(null) orelse return error.NoConnection;
         w.d = d;
-        w.registry = lib.wl_proxy_marshal_flags(@ptrCast(d), 1, lib.wl_registry_interface, lib.wl_proxy_get_version(@ptrCast(d)), 0, @as(?*anyopaque, null));
-        _ = lib.wl_proxy_add_listener(w.registry orelse return error.NoConnection, &registry_listener, w);
+        w.registry = lib.wl_proxy_marshal_flags(
+            @ptrCast(d),
+            1,
+            lib.wl_registry_interface,
+            lib.wl_proxy_get_version(@ptrCast(d)),
+            0,
+            @as(?*anyopaque, null),
+        );
+        _ = lib.wl_proxy_add_listener(
+            w.registry orelse return error.NoConnection,
+            &registry_listener,
+            w,
+        );
         if (lib.wl_display_roundtrip(d) < 0) return error.NoConnection;
         const seat = w.seat orelse return error.NoDataControl;
         if (w.ext_manager) |m| {
@@ -336,13 +371,26 @@ pub const Wl = struct {
         w.proto.setSeat(lib.wl_seat_interface);
         vk_create_types[0] = lib.wl_seat_interface;
         const m = w.manager.?;
-        const device = lib.wl_proxy_marshal_flags(m, 1, w.proto.device, lib.wl_proxy_get_version(m), 0, @as(?*anyopaque, null), seat) orelse return error.NoConnection;
+        const device = lib.wl_proxy_marshal_flags(
+            m,
+            1,
+            w.proto.device,
+            lib.wl_proxy_get_version(m),
+            0,
+            @as(?*anyopaque, null),
+            seat,
+        ) orelse
+            return error.NoConnection;
         w.device = device;
         _ = lib.wl_proxy_add_listener(device, &device_listener, w);
         // The selection that is there already arrives now, and is not recorded.
         if (lib.wl_display_roundtrip(d) < 0) return error.NoConnection;
         ignoreSigpipe();
-        w.watch = nanoui.fdwatch.readable(lib.wl_display_get_fd(d), w, readable) catch return error.NoConnection;
+        w.watch = nanoui.fdwatch.readable(
+            lib.wl_display_get_fd(d),
+            w,
+            readable,
+        ) catch return error.NoConnection;
     }
 
     pub fn close(w: *Wl) void {
@@ -353,7 +401,11 @@ pub const Wl = struct {
     }
 
     fn ignoreSigpipe() void {
-        var act: std.c.Sigaction = .{ .handler = .{ .handler = std.c.SIG.IGN }, .mask = undefined, .flags = 0 };
+        var act: std.c.Sigaction = .{
+            .handler = .{ .handler = std.c.SIG.IGN },
+            .mask = undefined,
+            .flags = 0,
+        };
         _ = std.c.sigemptyset(&act.mask);
         _ = std.c.sigaction(.PIPE, &act, null);
     }
@@ -384,9 +436,18 @@ pub const Wl = struct {
 
     // ----- the registry -----
 
-    const registry_listener = [2]?*const anyopaque{ @ptrCast(&onGlobal), @ptrCast(&onGlobalRemove) };
+    const registry_listener = [2]?*const anyopaque{
+        @ptrCast(&onGlobal),
+        @ptrCast(&onGlobalRemove),
+    };
 
-    fn onGlobal(data: ?*anyopaque, registry: *Proxy, name: u32, interface: [*:0]const u8, _: u32) callconv(.c) void {
+    fn onGlobal(
+        data: ?*anyopaque,
+        registry: *Proxy,
+        name: u32,
+        interface: [*:0]const u8,
+        _: u32,
+    ) callconv(.c) void {
         const w: *Wl = @ptrCast(@alignCast(data.?));
         const i = std.mem.span(interface);
         if (std.mem.eql(u8, i, "wl_seat")) {
@@ -403,12 +464,27 @@ pub const Wl = struct {
     fn onGlobalRemove(_: ?*anyopaque, _: *Proxy, _: u32) callconv(.c) void {}
 
     fn bind(w: *Wl, registry: *Proxy, name: u32, interface: *const Interface, v: u32) ?*Proxy {
-        return w.lib.wl_proxy_marshal_flags(registry, 0, interface, v, 0, name, interface.name, v, @as(?*anyopaque, null));
+        return w.lib.wl_proxy_marshal_flags(
+            registry,
+            0,
+            interface,
+            v,
+            0,
+            name,
+            interface.name,
+            v,
+            @as(?*anyopaque, null),
+        );
     }
 
     // ----- what is copied -----
 
-    const device_listener = [4]?*const anyopaque{ @ptrCast(&onDataOffer), @ptrCast(&onSelection), @ptrCast(&onFinished), @ptrCast(&onPrimary) };
+    const device_listener = [4]?*const anyopaque{
+        @ptrCast(&onDataOffer),
+        @ptrCast(&onSelection),
+        @ptrCast(&onFinished),
+        @ptrCast(&onPrimary),
+    };
     const offer_listener = [1]?*const anyopaque{@ptrCast(&onOfferType)};
 
     fn onDataOffer(data: ?*anyopaque, _: *Proxy, proxy: *Proxy) callconv(.c) void {
@@ -467,7 +543,15 @@ pub const Wl = struct {
         @memcpy(name[0..n], r.mime[0..n]);
         name[n] = 0;
         // `receive` is the offer's first request; libwayland keeps its own copy of the fd.
-        _ = w.lib.wl_proxy_marshal_flags(o.proxy, 0, null, w.version(o.proxy), 0, @as([*:0]const u8, &name), fds[1]);
+        _ = w.lib.wl_proxy_marshal_flags(
+            o.proxy,
+            0,
+            null,
+            w.version(o.proxy),
+            0,
+            @as([*:0]const u8, &name),
+            fds[1],
+        );
         _ = closeFd(fds[1]);
         w.flush();
         w.rd_fd = fds[0];
@@ -534,7 +618,8 @@ pub const Wl = struct {
 
     fn onSend(data: ?*anyopaque, src: *Proxy, mime: [*:0]const u8, fd: c_int) callconv(.c) void {
         const w: *Wl = @ptrCast(@alignCast(data.?));
-        const bytes = if (src == w.source and w.served != null) w.served.?.bytes(std.mem.span(mime)) else null;
+        const bytes = if (src == w.source and
+            w.served != null) w.served.?.bytes(std.mem.span(mime)) else null;
         const data_copy = if (bytes) |b| gpa.dupe(u8, b) catch null else null;
         const job = if (data_copy != null) gpa.create(Write) catch null else null;
         if (job) |j| {
@@ -561,10 +646,18 @@ pub const Wl = struct {
     fn serve(w: *Wl, c: clipboard.Content) bool {
         var s = lx.Served.init(gpa, c) catch return false;
         const m = w.manager.?;
-        const src = w.lib.wl_proxy_marshal_flags(m, 0, w.proto.source, w.version(m), 0, @as(?*anyopaque, null)) orelse {
-            s.deinit();
-            return false;
-        };
+        const src = w.lib.wl_proxy_marshal_flags(
+            m,
+            0,
+            w.proto.source,
+            w.version(m),
+            0,
+            @as(?*anyopaque, null),
+        ) orelse
+            {
+                s.deinit();
+                return false;
+            };
         _ = w.lib.wl_proxy_add_listener(src, &source_listener, w);
         const sv = w.version(src);
         for (s.mimes()) |mime| w.offerType(src, sv, mime);
@@ -610,9 +703,27 @@ pub const Wl = struct {
         const fd = memfdWith(keymap_text);
         if (fd < 0) return false;
         defer _ = closeFd(fd);
-        const vk = w.lib.wl_proxy_marshal_flags(m, 0, &vk_interface, w.version(m), 0, seat, @as(?*anyopaque, null)) orelse return false;
+        const vk = w.lib.wl_proxy_marshal_flags(
+            m,
+            0,
+            &vk_interface,
+            w.version(m),
+            0,
+            seat,
+            @as(?*anyopaque, null),
+        ) orelse
+            return false;
         // format 1: xkb_v1 text.
-        _ = w.lib.wl_proxy_marshal_flags(vk, 0, null, w.version(vk), 0, @as(u32, 1), fd, @as(u32, @intCast(keymap_text.len + 1)));
+        _ = w.lib.wl_proxy_marshal_flags(
+            vk,
+            0,
+            null,
+            w.version(vk),
+            0,
+            @as(u32, 1),
+            fd,
+            @as(u32, @intCast(keymap_text.len + 1)),
+        );
         w.vk = vk;
         w.flush();
         return true;
@@ -623,11 +734,36 @@ pub const Wl = struct {
         const v = w.version(vk);
         const t = nowMs();
         const lib = w.lib;
-        _ = lib.wl_proxy_marshal_flags(vk, 2, null, v, 0, mod_control, @as(u32, 0), @as(u32, 0), @as(u32, 0));
-        for ([_][2]u32{ .{ key_leftctrl, 1 }, .{ key_v, 1 }, .{ key_v, 0 }, .{ key_leftctrl, 0 } }) |k| {
+        _ = lib.wl_proxy_marshal_flags(
+            vk,
+            2,
+            null,
+            v,
+            0,
+            mod_control,
+            @as(u32, 0),
+            @as(u32, 0),
+            @as(u32, 0),
+        );
+        for ([_][2]u32{
+            .{ key_leftctrl, 1 },
+            .{ key_v, 1 },
+            .{ key_v, 0 },
+            .{ key_leftctrl, 0 },
+        }) |k| {
             _ = lib.wl_proxy_marshal_flags(vk, 1, null, v, 0, t, k[0], k[1]);
         }
-        _ = lib.wl_proxy_marshal_flags(vk, 2, null, v, 0, @as(u32, 0), @as(u32, 0), @as(u32, 0), @as(u32, 0));
+        _ = lib.wl_proxy_marshal_flags(
+            vk,
+            2,
+            null,
+            v,
+            0,
+            @as(u32, 0),
+            @as(u32, 0),
+            @as(u32, 0),
+            @as(u32, 0),
+        );
         w.flush();
     }
 };
@@ -639,7 +775,10 @@ const testing = std.testing;
 test "the protocol tables describe every request and event, ending where they should" {
     inline for (.{ Ext, Wlr }) |P| {
         try testing.expectEqual(@as(usize, 3), @as(usize, @intCast(P.manager.method_count)));
-        try testing.expectEqualStrings("create_data_source", std.mem.span(P.manager.methods[0].name));
+        try testing.expectEqualStrings(
+            "create_data_source",
+            std.mem.span(P.manager.methods[0].name),
+        );
         try testing.expectEqualStrings("no", std.mem.span(P.manager.methods[1].signature));
         try testing.expectEqualStrings("set_selection", std.mem.span(P.device.methods[0].name));
         try testing.expectEqualStrings("selection", std.mem.span(P.device.events[1].name));
@@ -665,7 +804,13 @@ test "argument letters are counted without versions or nullability" {
 test "the keymap names the two keys it presses and is a whole keymap" {
     try testing.expect(std.mem.startsWith(u8, keymap_text, "xkb_keymap {\n"));
     try testing.expect(std.mem.endsWith(u8, keymap_text, "};\n"));
-    for ([_][]const u8{ "<LCTL> = 37", "<AB04> = 55", "Control_L", "[ v, V ]", "modifier_map Control" }) |part| {
+    for ([_][]const u8{
+        "<LCTL> = 37",
+        "<AB04> = 55",
+        "Control_L",
+        "[ v, V ]",
+        "modifier_map Control",
+    }) |part| {
         try testing.expect(std.mem.indexOf(u8, keymap_text, part) != null);
     }
     // evdev code plus 8 is the xkb keycode.

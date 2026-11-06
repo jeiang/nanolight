@@ -21,7 +21,12 @@ const Mac = struct {
     fn login(set: ?bool) bool {
         const cls = objc_getClass("SMAppService") orelse return false;
         const svc = objc.msg(objc.Object, cls, "mainAppService", .{});
-        if (set) |on| _ = objc.msg(objc.BOOL, svc, if (on) "registerAndReturnError:" else "unregisterAndReturnError:", .{@as(?*anyopaque, null)});
+        if (set) |on| _ = objc.msg(
+            objc.BOOL,
+            svc,
+            if (on) "registerAndReturnError:" else "unregisterAndReturnError:",
+            .{@as(?*anyopaque, null)},
+        );
         return objc.msg(objc.NSInteger, svc, "status", .{}) == 1; // enabled
     }
 };
@@ -33,10 +38,33 @@ const Windows = struct {
     const value = L("Nanolight");
     const reg_sz: u32 = 1;
     const rrf_rt_reg_sz: u32 = 2;
-    extern "advapi32" fn RegSetKeyValueW(key: *anyopaque, sub: [*:0]const u16, name: [*:0]const u16, kind: u32, data: ?*const anyopaque, size: u32) callconv(.winapi) i32;
-    extern "advapi32" fn RegGetValueW(key: *anyopaque, sub: [*:0]const u16, name: [*:0]const u16, flags: u32, kind: ?*u32, data: ?*anyopaque, size: ?*u32) callconv(.winapi) i32;
-    extern "advapi32" fn RegDeleteKeyValueW(key: *anyopaque, sub: [*:0]const u16, name: [*:0]const u16) callconv(.winapi) i32;
-    extern "kernel32" fn GetModuleFileNameW(module: ?*anyopaque, buf: [*]u16, size: u32) callconv(.winapi) u32;
+    extern "advapi32" fn RegSetKeyValueW(
+        key: *anyopaque,
+        sub: [*:0]const u16,
+        name: [*:0]const u16,
+        kind: u32,
+        data: ?*const anyopaque,
+        size: u32,
+    ) callconv(.winapi) i32;
+    extern "advapi32" fn RegGetValueW(
+        key: *anyopaque,
+        sub: [*:0]const u16,
+        name: [*:0]const u16,
+        flags: u32,
+        kind: ?*u32,
+        data: ?*anyopaque,
+        size: ?*u32,
+    ) callconv(.winapi) i32;
+    extern "advapi32" fn RegDeleteKeyValueW(
+        key: *anyopaque,
+        sub: [*:0]const u16,
+        name: [*:0]const u16,
+    ) callconv(.winapi) i32;
+    extern "kernel32" fn GetModuleFileNameW(
+        module: ?*anyopaque,
+        buf: [*]u16,
+        size: u32,
+    ) callconv(.winapi) u32;
 
     fn login(set: ?bool) bool {
         if (set) |on| {
@@ -61,9 +89,17 @@ const Linux = struct {
     }
 
     fn entryPath(buf: []u8) ?[]const u8 {
-        if (std.c.getenv("XDG_CONFIG_HOME")) |d| return std.fmt.bufPrint(buf, "{s}/autostart/nanolight.desktop", .{std.mem.span(d)}) catch null;
+        if (std.c.getenv("XDG_CONFIG_HOME")) |d| return std.fmt.bufPrint(
+            buf,
+            "{s}/autostart/nanolight.desktop",
+            .{std.mem.span(d)},
+        ) catch null;
         const home = std.c.getenv("HOME") orelse return null;
-        return std.fmt.bufPrint(buf, "{s}/.config/autostart/nanolight.desktop", .{std.mem.span(home)}) catch null;
+        return std.fmt.bufPrint(
+            buf,
+            "{s}/.config/autostart/nanolight.desktop",
+            .{std.mem.span(home)},
+        ) catch null;
     }
 
     fn login(set: ?bool) bool {
@@ -76,7 +112,13 @@ const Linux = struct {
                 const n = std.c.readlink("/proc/self/exe", &exe, exe.len);
                 if (n <= 0) return false;
                 var entry: [2048]u8 = undefined;
-                const text = std.fmt.bufPrint(&entry, "[Desktop Entry]\nType=Application\nName=Nanolight\nComment=A launcher, on Alt Space\nExec=\"{s}\"\nIcon=nanolight\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n", .{exe[0..@intCast(n)]}) catch return false;
+                const text = std.fmt.bufPrint(
+                    &entry,
+                    "[Desktop Entry]\nType=Application\nName=Nanolight\nComment=A launcher, on " ++
+                        "Alt Space\nExec=\"{s}\"\nIcon=nanolight\n" ++
+                        "X-GNOME-Autostart-enabled=true\nNoDisplay=true\n",
+                    .{exe[0..@intCast(n)]},
+                ) catch return false;
                 // best effort: without the folder the write below fails and reports it off.
                 if (std.fs.path.dirname(path)) |dir| cwd.createDirPath(io(), dir) catch {};
                 cwd.writeFile(io(), .{ .sub_path = path, .data = text }) catch return false;

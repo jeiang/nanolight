@@ -4,7 +4,15 @@
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 
-pub const Palette = struct { text: ui.Color, sub: ui.Color, hair: ui.Color, sel: ui.Color, rim: ui.Color, tile: ui.Color, fill: ui.Color };
+pub const Palette = struct {
+    text: ui.Color,
+    sub: ui.Color,
+    hair: ui.Color,
+    sel: ui.Color,
+    rim: ui.Color,
+    tile: ui.Color,
+    fill: ui.Color,
+};
 
 const pc = @import("builtin").os.tag != .macos;
 
@@ -62,7 +70,10 @@ pub fn palette(dark: bool, theme: Theme) Palette {
         .sel = h.alpha(0.3),
         .rim = h.alpha(0.2),
         .tile = h.alpha(0.16),
-        .fill = if (pc) ui.Color.hex(0x161616).mix(h, 0.14) else ui.Color.hex(0x141414).mix(h, 0.18).alpha(0.72),
+        .fill = if (pc)
+            ui.Color.hex(0x161616).mix(h, 0.14)
+        else
+            ui.Color.hex(0x141414).mix(h, 0.18).alpha(0.72),
     } else .{
         .text = base.text,
         .sub = base.sub.mix(h, 0.2),
@@ -70,7 +81,10 @@ pub fn palette(dark: bool, theme: Theme) Palette {
         .sel = h.alpha(0.18),
         .rim = h.alpha(0.14),
         .tile = h.alpha(0.12),
-        .fill = if (pc) ui.Color.hex(0xfafafa).mix(h, 0.08) else ui.Color.white.mix(h, 0.1).alpha(0.7),
+        .fill = if (pc)
+            ui.Color.hex(0xfafafa).mix(h, 0.08)
+        else
+            ui.Color.white.mix(h, 0.1).alpha(0.7),
     };
 }
 

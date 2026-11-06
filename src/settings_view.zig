@@ -17,7 +17,20 @@ const mac = @import("builtin").os.tag == .macos;
 /// A Nix build: the Nix modules own startup and updates.
 const nix = @import("build_options").nix_managed;
 
-const RowKind = enum { choice, suggest, files, browser, login, menu_bar, clipboard, clear_clipboard, updates, welcome, quit, theme };
+const RowKind = enum {
+    choice,
+    suggest,
+    files,
+    browser,
+    login,
+    menu_bar,
+    clipboard,
+    clear_clipboard,
+    updates,
+    welcome,
+    quit,
+    theme,
+};
 
 /// Recording a key of one's own: not, waiting for one, or waiting after
 /// one that was refused. Recording only while the host's recorder runs.
@@ -169,7 +182,10 @@ pub const Settings = struct {
         if (s.sel >= rows.len) s.sel = rows.len - 1;
         s.keys(c, n, rows);
         ui.key(c, "settings");
-        const f = motion.frame(c, .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = panel.spring } });
+        const f = motion.frame(
+            c,
+            .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = panel.spring } },
+        );
         const page = ui.div(c).column().wFull().grow().motion(f);
         defer page.end();
         s.head(c, n, p, rows);
@@ -177,29 +193,51 @@ pub const Settings = struct {
         foot(c, p);
     }
 
-    fn head(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
+    fn head(
+        s: *Settings,
+        c: *ui.Context,
+        n: *panel.Nanolight,
+        p: Palette,
+        rows: []const RowKind,
+    ) void {
         const bar = ui.div(c).row().wFull().h(panel.header_h).px(16).gap(10).itemsCenter();
         defer bar.end();
         const badge = ui.div(c).size(28, 28).rounded(8).center().bg(p.tile);
         ui.icon(c, "gearshape", .{ .size = 15, .weight = .medium, .color = p.text });
         badge.end();
-        ui.text(c, "Settings", .{ .size = 18, .weight = .semibold, .color = p.text, .tracking = -0.2 });
+        ui.text(
+            c,
+            "Settings",
+            .{ .size = 18, .weight = .semibold, .color = p.text, .tracking = -0.2 },
+        );
         ui.spacer(c);
         s.themes(c, n, p, rows);
     }
 
     /// The theme's swatches, in the header: always in sight, however many
     /// rows are under it. The last row for ↑/↓; ←/→ step through them.
-    fn themes(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
+    fn themes(
+        s: *Settings,
+        c: *ui.Context,
+        n: *panel.Nanolight,
+        p: Palette,
+        rows: []const RowKind,
+    ) void {
         const on = isSel(rows, s.sel, .theme);
         ui.key(c, "theme");
-        const group = ui.div(c).row().h(30).px(10).gap(4).itemsCenter().rounded(10).bg(if (on) p.sel else p.fill.alpha(0));
+        const group = ui.div(c).row().h(30).px(10).gap(4).itemsCenter().rounded(10)
+            .bg(if (on) p.sel else p.fill.alpha(0));
         defer group.end();
-        ui.text(c, n.theme.title(), .{ .size = 12.5, .weight = .medium, .color = if (on) p.text else p.sub });
+        ui.text(
+            c,
+            n.theme.title(),
+            .{ .size = 12.5, .weight = .medium, .color = if (on) p.text else p.sub },
+        );
         ui.div(c).w(4).end();
         for (Theme.all) |t| {
             ui.key(c, c.print("theme-{s}", .{@tagName(t)}));
-            const ring = ui.div(c).size(20, 20).roundedFull().center().control().border(if (t == n.theme) p.text.alpha(0.7) else p.fill.alpha(0));
+            const ring = ui.div(c).size(20, 20).roundedFull().center().control()
+                .border(if (t == n.theme) p.text.alpha(0.7) else p.fill.alpha(0));
             defer ring.end();
             if (ring.clicked()) s.setTheme(n, t);
             ui.div(c).size(12, 12).roundedFull().bg(t.hue(c.theme.dark) orelse p.sub).end();
@@ -212,7 +250,13 @@ pub const Settings = struct {
         h.theme(h.ctx, t);
     }
 
-    fn body(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
+    fn body(
+        s: *Settings,
+        c: *ui.Context,
+        n: *panel.Nanolight,
+        p: Palette,
+        rows: []const RowKind,
+    ) void {
         const clip = s.clip_here;
         const col = ui.div(c).column().wFull().px(20).pt(2).pb(6).gap(if (mac) 8 else 10).grow();
         defer col.end();
@@ -259,10 +303,19 @@ pub const Settings = struct {
             ui.key(c, c.print("key-{d}-{d}", .{ ch.code, ch.mods }));
             const on = ch.eql(s.choice) and s.key_input == .idle;
             const b = ui.div(c).row().h(36).px(14).itemsCenter().rounded(10).control()
-                .bg(if (on) p.sel else p.tile.alpha(0.5)).border(if (on) p.text.alpha(0.35) else p.rim);
+                .bg(if (on) p.sel else p.tile.alpha(0.5))
+                .border(if (on) p.text.alpha(0.35) else p.rim);
             defer b.end();
             if (b.clicked()) s.pick(n, ch);
-            ui.text(c, c.print("{f}", .{ch}), .{ .size = 13.5, .weight = if (on) .semibold else .medium, .color = if (on) p.text else p.sub });
+            ui.text(
+                c,
+                c.print("{f}", .{ch}),
+                .{
+                    .size = 13.5,
+                    .weight = if (on) .semibold else .medium,
+                    .color = if (on) p.text else p.sub,
+                },
+            );
         }
         // One's own: the key recorded, or a press away (on the Mac, where
         // Carbon takes any key; a PC keeps to the four).
@@ -325,7 +378,8 @@ pub const Settings = struct {
         title: []const u8,
     ) void {
         const on = isSel(rows, s.sel, t.row());
-        const d = ui.div(c).row().wFull().h(36).px(4).gap(10).itemsCenter().rounded(10).control().bg(if (on) p.sel else p.fill.alpha(0));
+        const d = ui.div(c).row().wFull().h(36).px(4).gap(10).itemsCenter().rounded(10).control()
+            .bg(if (on) p.sel else p.fill.alpha(0));
         defer d.end();
         if (d.clicked()) s.flip(n, t);
         ui.text(c, title, .{ .size = 13.5, .weight = .medium, .color = p.text });
@@ -337,7 +391,8 @@ pub const Settings = struct {
     /// and this row already does.
     fn mark(c: *ui.Context, p: Palette, on: bool) void {
         const ok = c.theme.success;
-        const d = ui.div(c).row().w(40).h(24).px(2).itemsCenter().roundedFull().bg(if (on) ok else p.tile);
+        const d = ui.div(c).row().w(40).h(24).px(2).itemsCenter().roundedFull()
+            .bg(if (on) ok else p.tile);
         defer d.end();
         // On: the knob at the right, as the system's switches have it.
         if (on) ui.spacer(c);
@@ -350,13 +405,30 @@ pub const Settings = struct {
         t.set(n, h, !t.get(n, h));
     }
 
-    fn updates(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
+    fn updates(
+        s: *Settings,
+        c: *ui.Context,
+        n: *panel.Nanolight,
+        p: Palette,
+        rows: []const RowKind,
+    ) void {
         ui.textf(c, .{ .size = 12.5, .color = p.sub }, "Nanolight {s}", .{s.version});
-        const text = if (s.ready) |v| c.print("Restart to Update to {s}", .{v}) else "Check for Updates";
+        const text = if (s.ready) |v|
+            c.print("Restart to Update to {s}", .{v})
+        else
+            "Check for Updates";
         s.button(c, n, p, rows, .updates, text);
     }
 
-    fn button(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind, kind: RowKind, text: []const u8) void {
+    fn button(
+        s: *Settings,
+        c: *ui.Context,
+        n: *panel.Nanolight,
+        p: Palette,
+        rows: []const RowKind,
+        kind: RowKind,
+        text: []const u8,
+    ) void {
         const on = isSel(rows, s.sel, kind);
         ui.key(c, @tagName(kind));
         const d = ui.div(c).row().wFull().h(36).px(12).gap(8).itemsCenter().rounded(10).control()

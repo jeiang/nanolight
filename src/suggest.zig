@@ -25,7 +25,8 @@ pub const pause_ms = 90;
 pub fn eligible(typed: []const u8) bool {
     const t = std.mem.trim(u8, typed, " \t\r\n");
     if (t.len < 2 or t.len > max_len) return false;
-    if (std.ascii.startsWithIgnoreCase(t, "www.") or std.ascii.startsWithIgnoreCase(t, "localhost")) return false;
+    if (std.ascii.startsWithIgnoreCase(t, "www.") or
+        std.ascii.startsWithIgnoreCase(t, "localhost")) return false;
     for (t) |ch| switch (ch) {
         0...0x1f, 0x7f, ':', '@', '\\', '/', '.' => return false,
         else => {},
@@ -188,7 +189,16 @@ test "addresses, emails and paths never go out" {
     try t.expect(eligible("liquid glass"));
     try t.expect(eligible("  zig  "));
     try t.expect(!eligible("z"));
-    for ([_][]const u8{ "github.com", "www.zig", "localhost 3000", "me@x", "a/b", "http://x", "c:\\x", "tab\there" }) |q|
+    for ([_][]const u8{
+        "github.com",
+        "www.zig",
+        "localhost 3000",
+        "me@x",
+        "a/b",
+        "http://x",
+        "c:\\x",
+        "tab\there",
+    }) |q|
         try t.expect(!eligible(q));
     var long: [max_len + 1]u8 = @splat('a');
     try t.expect(!eligible(&long));
@@ -196,14 +206,19 @@ test "addresses, emails and paths never go out" {
 
 test "the address is escaped" {
     var buf: [url_max]u8 = undefined;
-    try std.testing.expectEqualStrings("https://suggestqueries.google.com/complete/search?client=firefox&q=liquid+gl+%26+co", url(&buf, " liquid gl & co "));
+    try std.testing.expectEqualStrings(
+        "https://suggestqueries.google.com/complete/search?client=firefox&q=liquid+gl+%26+co",
+        url(&buf, " liquid gl & co "),
+    );
 }
 
 test "an answer counts only for the words it answers" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const body =
-        \\["liquid gl",["liquid glass","Liquid  Gl","liquid glass","liquid glue","liquid glass apple","liquid glass ui","liquid glucose"],[],{"google:suggestsubtypes":[[512]]}]
+        \\["liquid gl",["liquid glass","Liquid  Gl","liquid glass","liquid glue","liquid glass
+    ++
+        \\ apple","liquid glass ui","liquid glucose"],[],{"google:suggestsubtypes":[[512]]}]
     ;
     var l: List = .{};
     try std.testing.expect(decode(arena.allocator(), body, "Liquid  GL", &l));

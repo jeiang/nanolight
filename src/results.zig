@@ -73,7 +73,10 @@ pub const Kind = enum {
     fn section(k: Kind, suggested: bool) []const u8 {
         return switch (k) {
             .calc => "Calculator",
-            .app, .file, .settings, .pane, .command, .clipboard => if (suggested) "Suggestions" else "Results",
+            .app, .file, .settings, .pane, .command, .clipboard => if (suggested)
+                "Suggestions"
+            else
+                "Results",
             .quicklink, .suggest => unreachable,
         };
     }
@@ -119,7 +122,8 @@ pub const Keyed = struct { ql: u16, arg: usize };
 pub fn keyed(ql: []const Quicklink, query: []const u8) ?Keyed {
     for (ql[0..@min(ql.len, std.math.maxInt(u16))], 0..) |q, i| {
         const k = q.keyword;
-        if (k.len == 0 or query.len <= k.len or query[k.len] != ' ' or !std.ascii.eqlIgnoreCase(query[0..k.len], k)) continue;
+        if (k.len == 0 or query.len <= k.len or query[k.len] != ' ' or
+            !std.ascii.eqlIgnoreCase(query[0..k.len], k)) continue;
         const rest = std.mem.trimStart(u8, query[k.len..], " ");
         return .{ .ql = @intCast(i), .arg = query.len - rest.len };
     }
@@ -135,12 +139,16 @@ pub fn host(address: []const u8) []const u8 {
 
 fn isGoogle(address: []const u8) bool {
     const h = host(address);
-    return std.ascii.eqlIgnoreCase(h, "google.com") or (h.len > 11 and std.ascii.eqlIgnoreCase(h[h.len - 11 ..], ".google.com"));
+    return std.ascii.eqlIgnoreCase(h, "google.com") or (h.len > 11 and
+        std.ascii.eqlIgnoreCase(h[h.len - 11 ..], ".google.com"));
 }
 
 /// The listed quicklink whose address is Google's: the one its completions go with.
 pub fn google(ql: []const Quicklink) ?u16 {
-    for (ql[0..@min(ql.len, max_quicklink_rows)], 0..) |q, i| if (isGoogle(q.url)) return @intCast(i);
+    for (ql[0..@min(
+        ql.len,
+        max_quicklink_rows,
+    )], 0..) |q, i| if (isGoogle(q.url)) return @intCast(i);
     return null;
 }
 
@@ -193,12 +201,21 @@ pub const Results = struct {
     /// Lists what `query` finds among the apps of `ix` (lifted by how often
     /// each was opened) and in `found`, the quicklinks `ql`, and Google's
     /// completions of it (`web`), or `suggestions` when the query is empty.
-    pub fn build(r: *Results, query_in: []const u8, ix: *const Index, suggestions: []const u32, web: []const []const u8, ql: []const Quicklink) void {
+    pub fn build(
+        r: *Results,
+        query_in: []const u8,
+        ix: *const Index,
+        suggestions: []const u32,
+        web: []const []const u8,
+        ql: []const Quicklink,
+    ) void {
         r.clear();
         const query = std.mem.trim(u8, query_in, " ");
         r.suggested = query.len == 0;
         if (query.len == 0) {
-            for (suggestions[0..@min(suggestions.len, max_apps)]) |i| r.push(.{ .kind = .app, .app = i });
+            for (suggestions[0..@min(suggestions.len, max_apps)]) |i| r.push(
+                .{ .kind = .app, .app = i },
+            );
             return;
         }
         // "2 + 3 *" or "500 usd to eur *": the answer so far, so the card
@@ -220,7 +237,9 @@ pub const Results = struct {
             .match = search.score(query, "Settings") orelse .{ .score = 0 },
         });
         const clip = r.clip_on and isClipboard(query);
-        if (clip) r.push(.{ .kind = .clipboard, .match = search.score(query, "Clipboard History").? });
+        if (clip) r.push(
+            .{ .kind = .clipboard, .match = search.score(query, "Clipboard History").? },
+        );
         if (local_start > 0 and !r.pending) {
             r.rankLocal(local_start, query);
             return;
@@ -231,11 +250,14 @@ pub const Results = struct {
         const key = keyed(ql, query);
         const shown = @min(ql.len, max_quicklink_rows);
         var cmd_rows: [max_commands]search.Ranked = undefined;
-        const nc = if (key != null or isSettings(query) or clip) 0 else commands.rank(query, &cmd_rows);
+        const nc = if (key != null or isSettings(query) or
+            clip) 0 else commands.rank(query, &cmd_rows);
         for (cmd_rows[0..nc]) |x| r.push(.{ .kind = .command, .app = x.index, .match = x.match });
         // Files and folders compete by their names' match (equal scores
         // after the rest); a path typed out that exists leads (files.zig).
-        if (r.found) |found| for (found.entries[0..found.n], 0..) |e, i| r.push(.{ .kind = .file, .file = @intCast(i), .match = e.match });
+        if (r.found) |found| for (found.entries[0..found.n], 0..) |e, i| r.push(
+            .{ .kind = .file, .file = @intCast(i), .match = e.match },
+        );
         r.rankLocal(local_start, query);
         // Reserve the quicklinks and one completion before filling local rows.
         // A pending card's extra height and header cost two ordinary rows.
@@ -253,7 +275,9 @@ pub const Results = struct {
         r.google = google(ql);
         for (0..shown) |i| {
             r.push(.{ .kind = .quicklink, .ql = @intCast(i) });
-            if (r.google == @as(u16, @intCast(i))) for (0..@min(web.len, max_web, room)) |j| r.push(.{ .kind = .suggest, .web = @intCast(j) });
+            if (r.google == @as(u16, @intCast(i))) for (0..@min(web.len, max_web, room)) |j| r.push(
+                .{ .kind = .suggest, .web = @intCast(j) },
+            );
         }
     }
 
@@ -299,13 +323,25 @@ pub const Results = struct {
             .unit => |u| {
                 r.answer = convert.formatUnit(&r.answer_buf, u, true);
                 r.copy = convert.formatUnitValue(&r.copy_buf, u.value, false);
-                r.expr = std.fmt.bufPrint(&r.expr_buf, "{s} {s}", .{ calc.format(&nb, u.amount, true), u.from }) catch "";
+                r.expr = std.fmt.bufPrint(
+                    &r.expr_buf,
+                    "{s} {s}",
+                    .{ calc.format(&nb, u.amount, true), u.from },
+                ) catch "";
             },
             .money => |m| {
                 r.need_rates = true;
-                r.answer = std.fmt.bufPrint(&r.answer_buf, "{s} {s}", .{ convert.formatMoney(&nb, m.value, true), m.to }) catch "";
+                r.answer = std.fmt.bufPrint(
+                    &r.answer_buf,
+                    "{s} {s}",
+                    .{ convert.formatMoney(&nb, m.value, true), m.to },
+                ) catch "";
                 r.copy = convert.formatMoney(&r.copy_buf, m.value, false);
-                r.expr = std.fmt.bufPrint(&r.expr_buf, "{s} {s}", .{ calc.format(&nb, m.amount, true), m.from }) catch "";
+                r.expr = std.fmt.bufPrint(
+                    &r.expr_buf,
+                    "{s} {s}",
+                    .{ calc.format(&nb, m.amount, true), m.from },
+                ) catch "";
                 r.note = convert.rateLine(&r.note_buf, m);
             },
             .pending => {
@@ -324,7 +360,8 @@ pub const Results = struct {
 
     /// "settings" and "preferences", the words people type for this.
     fn isSettings(query: []const u8) bool {
-        if (std.ascii.eqlIgnoreCase(query, "settings") or std.ascii.eqlIgnoreCase(query, "preferences")) return true;
+        if (std.ascii.eqlIgnoreCase(query, "settings") or
+            std.ascii.eqlIgnoreCase(query, "preferences")) return true;
         const keys = [_][]const u8{ "设置", "偏好设置", "系统设置", "nanolight 设置" };
         const q = std.mem.trim(u8, query, " ");
         for (keys) |k| if (std.mem.eql(u8, q, k)) return true;
@@ -459,7 +496,10 @@ test "math first, then apps; quicklinks only without an answer" {
     try t.expectEqual(Kind.app, r.rows[1].kind);
     try t.expectEqual(@as(u32, 1), r.rows[1].app);
     // A full list of apps still ends with every quicklink.
-    var many_ix = try testIndex(t.allocator, &.{ "Safari", "Mail", "Maps", "Pages", "Calendar", "Calculator", "FaceTime" });
+    var many_ix = try testIndex(
+        t.allocator,
+        &.{ "Safari", "Mail", "Maps", "Pages", "Calendar", "Calculator", "FaceTime" },
+    );
     defer many_ix.deinit();
     r.build("a", &many_ix, &.{}, &.{ "a1", "a2", "a3", "a4" }, defaults);
     try t.expectEqual(max_rows, r.n);
@@ -510,11 +550,26 @@ test "Google's completions go with the quicklink that is Google, wherever it is"
 
 test "queries are escaped into the address" {
     var buf: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("https://x.com/search?f=live&q=liquid%20glass%20%26%20UI", url(&buf, "https://x.com/search?f=live&q={argument}", " liquid glass & UI "));
-    try std.testing.expectEqualStrings("https://claude.ai/new?q=what%20is%20zig%3F", url(&buf, "https://claude.ai/new?q={argument}", "what is zig?"));
-    try std.testing.expectEqualStrings("https://example.com/hello%20world", url(&buf, "https://example.com/{argument}", "hello world"));
-    try std.testing.expectEqualStrings("https://a/zig/zig", url(&buf, "https://a/{argument}/{argument}", "zig"));
-    try std.testing.expectEqualStrings("https://example.com/", url(&buf, "https://example.com/", "ignored"));
+    try std.testing.expectEqualStrings(
+        "https://x.com/search?f=live&q=liquid%20glass%20%26%20UI",
+        url(&buf, "https://x.com/search?f=live&q={argument}", " liquid glass & UI "),
+    );
+    try std.testing.expectEqualStrings(
+        "https://claude.ai/new?q=what%20is%20zig%3F",
+        url(&buf, "https://claude.ai/new?q={argument}", "what is zig?"),
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.com/hello%20world",
+        url(&buf, "https://example.com/{argument}", "hello world"),
+    );
+    try std.testing.expectEqualStrings(
+        "https://a/zig/zig",
+        url(&buf, "https://a/{argument}/{argument}", "zig"),
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.com/",
+        url(&buf, "https://example.com/", "ignored"),
+    );
     var tiny: [8]u8 = undefined;
     try std.testing.expectEqualStrings("", url(&tiny, "https://x.com/?q={argument}", "q"));
 }
@@ -525,7 +580,13 @@ test "System Settings' panes share the local results header and keep the panel's
     var ix = try testIndex(t.allocator, &.{ "Safari", "System Settings", "Calculator" });
     defer ix.deinit();
     var r: Results = .{};
-    r.build("login items", &ix, &.{}, &.{ "login items mac", "login items windows", "login items iphone" }, defaults);
+    r.build(
+        "login items",
+        &ix,
+        &.{},
+        &.{ "login items mac", "login items windows", "login items iphone" },
+        defaults,
+    );
     try t.expectEqual(Kind.pane, r.rows[0].kind);
     try t.expectEqualStrings("Results", r.section(0).?);
     try t.expectEqualStrings("Login Items & Extensions", panes.all[r.rows[0].app].name);
@@ -545,7 +606,10 @@ test "a full list of apps, panes and files still fits, with every quicklink" {
     // Six apps match "ho", and so do three panes (Desktop & Dock, Sound,
     // Keyboard): typing "hola" used to overflow the room left for Google.
     // They share the local rows, ranked by match; every quicklink stays.
-    var ix = try testIndex(t.allocator, &.{ "Home", "Hopper", "Hotspot Shield", "Photos", "Shortcuts", "Photo Booth", "Phone" });
+    var ix = try testIndex(
+        t.allocator,
+        &.{ "Home", "Hopper", "Hotspot Shield", "Photos", "Shortcuts", "Photo Booth", "Phone" },
+    );
     defer ix.deinit();
     var r: Results = .{};
     const web = [_][]const u8{ "hola", "hotmail", "hoy", "horoscopo" };
@@ -577,7 +641,10 @@ test "a full list of apps, panes and files still fits, with every quicklink" {
     for (r.slice()) |row| counts.set(row.kind, counts.get(row.kind) + 1);
     try t.expectEqual(Kind.file, r.rows[0].kind);
     try t.expectEqual(@as(usize, 1), counts.get(.file));
-    try t.expectEqual(local, counts.get(.app) + counts.get(.pane) + counts.get(.command) + counts.get(.file));
+    try t.expectEqual(
+        local,
+        counts.get(.app) + counts.get(.pane) + counts.get(.command) + counts.get(.file),
+    );
     try t.expectEqual(@as(usize, max_quicklink_rows), counts.get(.quicklink));
     heads = 0;
     for (0..r.n) |i| heads += @intFromBool(r.section(i) != null);
@@ -615,7 +682,10 @@ test "a conversion is answered like math, with the rate under a currency's" {
     try t.expect(r.pending);
     try t.expectEqual(@as(usize, 1), r.actionable(0));
     try t.expectEqual(Kind.quicklink, r.rows[r.actionable(0)].kind);
-    var rates = convert.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}").?;
+    var rates = convert.Rates.parse(
+        t.allocator,
+        "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}",
+    ).?;
     defer rates.deinit();
     r.rates = &rates;
     r.build("100 USD in TTD", &ix, &.{}, &.{}, defaults);
@@ -667,7 +737,10 @@ test "math around a conversion: the card shows the amount worked out and copies 
     try t.expectEqualStrings("", r.copy);
     r.build("12 ttd to usd /", &ix, &.{}, &.{}, defaults);
     try t.expect(r.pending);
-    var rates = convert.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785,\"eur\":0.86}}").?;
+    var rates = convert.Rates.parse(
+        t.allocator,
+        "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785,\"eur\":0.86}}",
+    ).?;
     defer rates.deinit();
     r.rates = &rates;
     r.build("35 * 7 ttd to usd", &ix, &.{}, &.{}, defaults);
@@ -695,7 +768,18 @@ test "system commands compete by match without taking a quicklink's row" {
     const t = std.testing;
     commands.listForTests(true);
     defer commands.listForTests(false);
-    var ix = try testIndex(t.allocator, &.{ "Sleep Aid", "Sleepy", "Sleeper", "Sleeping", "Sleep Cycle", "Sleep Timer", "Sleep Log" });
+    var ix = try testIndex(
+        t.allocator,
+        &.{
+            "Sleep Aid",
+            "Sleepy",
+            "Sleeper",
+            "Sleeping",
+            "Sleep Cycle",
+            "Sleep Timer",
+            "Sleep Log",
+        },
+    );
     defer ix.deinit();
     var r: Results = .{};
     // An exact command beats prefix app matches; every quicklink stays.

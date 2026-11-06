@@ -80,8 +80,11 @@ pub const Account = struct {
     pub fn load(a: *Account) void {
         if (a.cfg.url.len == 0) return;
         if (a.cfg.token_file.len == 0) return a.fail("sync.token_file is not set");
-        if (baseUrl(a.cfg.url) == null) return a.fail("sync.url must start with http:// or https://");
-        const text = std.Io.Dir.cwd().readFileAlloc(a.io, a.cfg.token_file, a.gpa, .limited(4096)) catch |e|
+        if (baseUrl(a.cfg.url) == null) return a.fail(
+            "sync.url must start with http:// or https://",
+        );
+        const text = std.Io.Dir.cwd()
+            .readFileAlloc(a.io, a.cfg.token_file, a.gpa, .limited(4096)) catch |e|
             return a.failf("cannot read token_file ({t})", .{e});
         defer a.gpa.free(text);
         const t = tokenOf(text) orelse return a.fail("token_file holds no token");
@@ -162,8 +165,16 @@ pub const Account = struct {
         const sent = a.hooks.snapshot(a.hooks.ctx, al);
         const body = settings.encode(al, sent) catch return a.fail("out of memory");
         const base = baseUrl(a.cfg.url).?;
-        const url = std.fmt.allocPrint(al, "{s}/v1/sync", .{base}) catch return a.fail("out of memory");
-        const auth = std.fmt.allocPrint(al, "Bearer {s}", .{token}) catch return a.fail("out of memory");
+        const url = std.fmt.allocPrint(
+            al,
+            "{s}/v1/sync",
+            .{base},
+        ) catch return a.fail("out of memory");
+        const auth = std.fmt.allocPrint(
+            al,
+            "Bearer {s}",
+            .{token},
+        ) catch return a.fail("out of memory");
         var headers = [_]nanoui.http.Header{
             .{ .name = "Authorization", .value = auth },
             .{ .name = "Content-Type", .value = "application/json" },
@@ -189,12 +200,18 @@ pub const Account = struct {
         var arena: std.heap.ArenaAllocator = .init(a.gpa);
         defer arena.deinit();
         const al = arena.allocator();
-        const theirs = settings.decode(al, r.body) orelse return a.fail("the server's answer is not a record");
+        const theirs = settings.decode(al, r.body) orelse
+            return a.fail("the server's answer is not a record");
         // Changed again while this was out: those choices are newer, and stay,
         // even on a first sync.
         const now_here = a.hooks.snapshot(a.hooks.ctx, al);
         const first = out.first and now_here.at == out.sent_at;
-        const merged = settings.merge(al, now_here, theirs, first) catch return a.fail("out of memory");
+        const merged = settings.merge(
+            al,
+            now_here,
+            theirs,
+            first,
+        ) catch return a.fail("out of memory");
         a.hooks.apply(a.hooks.ctx, merged);
         // best effort: unkept, the next sync is sent as a first one again.
         a.kv.set(synced_key, a.cfg.url) catch {};
@@ -210,7 +227,8 @@ pub const Account = struct {
 
 /// `url` without a trailing slash, if it is an http(s) address.
 fn baseUrl(url: []const u8) ?[]const u8 {
-    if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) return null;
+    if (!std.mem.startsWith(u8, url, "http://") and
+        !std.mem.startsWith(u8, url, "https://")) return null;
     return std.mem.trimEnd(u8, url, "/");
 }
 
@@ -253,7 +271,10 @@ pub fn now() i64 {
 }
 
 test "the server's address and the token file's token" {
-    try std.testing.expectEqualStrings("http://100.64.0.3:8890", baseUrl("http://100.64.0.3:8890/").?);
+    try std.testing.expectEqualStrings(
+        "http://100.64.0.3:8890",
+        baseUrl("http://100.64.0.3:8890/").?,
+    );
     try std.testing.expect(baseUrl("100.64.0.3:8890") == null);
     try std.testing.expect(baseUrl("ftp://x") == null);
     try std.testing.expectEqualStrings("100.64.0.3:8890", hostOf("http://100.64.0.3:8890/v1"));
@@ -269,7 +290,13 @@ test "the status line says when it last synced" {
     try std.testing.expectEqualStrings("3 min ago", ago(&buf, 190));
     try std.testing.expectEqualStrings("2 h ago", ago(&buf, 7300));
     try std.testing.expectEqualStrings("2 d ago", ago(&buf, 2 * 86400 + 5));
-    const off: Account = .{ .gpa = std.testing.allocator, .io = std.testing.io, .kv = undefined, .hooks = undefined, .cfg = .{} };
+    const off: Account = .{
+        .gpa = std.testing.allocator,
+        .io = std.testing.io,
+        .kv = undefined,
+        .hooks = undefined,
+        .cfg = .{},
+    };
     var line: [160]u8 = undefined;
     try std.testing.expectEqualStrings(off_text, off.status(&line));
     var bad = off;

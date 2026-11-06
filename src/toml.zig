@@ -60,7 +60,8 @@ pub fn parse(arena: std.mem.Allocator, src: []const u8, diag: *Diag) Error!*Tabl
             const aot = std.mem.startsWith(u8, src[p.pos..], "[[");
             p.pos += if (aot) 2 else 1;
             const path = try p.keyPath();
-            if (!p.eat(']') or (aot and !p.eat(']'))) return p.fail("expected ] to close the table name");
+            if (!p.eat(']') or (aot and
+                !p.eat(']'))) return p.fail("expected ] to close the table name");
             cur = try p.header(root, path, aot);
         } else {
             try p.keyValue(cur);
@@ -124,7 +125,13 @@ const Parser = struct {
         p.skipComment();
         const rest = p.src[p.pos..];
         if (rest.len == 0) return;
-        if (std.mem.startsWith(u8, rest, "\r\n")) p.pos += 2 else if (rest[0] == '\n') p.pos += 1 else return p.fail("expected the end of the line");
+        if (std.mem.startsWith(
+            u8,
+            rest,
+            "\r\n",
+        )) p.pos += 2 else if (rest[0] == '\n') p.pos += 1 else return p.fail(
+            "expected the end of the line",
+        );
     }
 
     fn newTable(p: *Parser, kind: Table.Kind) Error!*Table {
@@ -152,7 +159,8 @@ const Parser = struct {
             else => {},
         }
         const start = p.pos;
-        while (p.peek()) |c| : (p.pos += 1) if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') break;
+        while (p.peek()) |c| : (p.pos += 1) if (!std.ascii.isAlphanumeric(c) and c != '_' and
+            c != '-') break;
         if (p.pos == start) return p.fail("expected a key");
         return p.src[start..p.pos];
     }
@@ -169,7 +177,10 @@ const Parser = struct {
                 arr.* = .{ .aot = true };
                 gop.value_ptr.* = .{ .array = arr };
             }
-            if (gop.value_ptr.* != .array or !gop.value_ptr.array.aot) return p.fail("this name is already used by something that is not an array of tables");
+            if (gop.value_ptr.* != .array or
+                !gop.value_ptr.array.aot) return p.fail(
+                "this name is already used by something that is not an array of tables",
+            );
             const nt = try p.newTable(.explicit);
             try gop.value_ptr.array.items.append(p.a, .{ .table = nt });
             return nt;
@@ -179,7 +190,8 @@ const Parser = struct {
             gop.value_ptr.* = .{ .table = nt };
             return nt;
         }
-        if (gop.value_ptr.* != .table or gop.value_ptr.table.kind != .implicit) return p.fail("this table is already defined");
+        if (gop.value_ptr.* != .table or
+            gop.value_ptr.table.kind != .implicit) return p.fail("this table is already defined");
         gop.value_ptr.table.kind = .explicit;
         return gop.value_ptr.table;
     }
@@ -202,7 +214,10 @@ const Parser = struct {
             },
             else => return p.fail("this name is a value, not a table"),
         };
-        if (next.kind == .inline_ or (dotted and next.kind != .dotted)) return p.fail("this table is closed: it cannot be added to here");
+        if (next.kind == .inline_ or (dotted and
+            next.kind != .dotted)) return p.fail(
+            "this table is closed: it cannot be added to here",
+        );
         return next;
     }
 
@@ -303,13 +318,18 @@ const Parser = struct {
 
     fn scalar(p: *Parser) Error!Value {
         const start = p.pos;
-        while (p.peek()) |c| : (p.pos += 1) if (std.mem.indexOfScalar(u8, " \t\r\n,]}#", c) != null) break;
+        while (p.peek()) |c| : (p.pos += 1) if (std.mem.indexOfScalar(
+            u8,
+            " \t\r\n,]}#",
+            c,
+        ) != null) break;
         const tok = p.src[start..p.pos];
         p.pos = start;
         if (tok.len == 0) return p.fail("expected a value");
         if (std.mem.eql(u8, tok, "true")) return p.done(tok, .{ .boolean = true });
         if (std.mem.eql(u8, tok, "false")) return p.done(tok, .{ .boolean = false });
-        if (std.mem.indexOfScalar(u8, tok, ':') != null or (tok.len >= 10 and tok[4] == '-' and tok[7] == '-' and std.ascii.isDigit(tok[0])))
+        if (std.mem.indexOfScalar(u8, tok, ':') != null or (tok.len >= 10 and tok[4] == '-' and
+            tok[7] == '-' and std.ascii.isDigit(tok[0])))
             return p.fail("dates and times are not supported");
         return p.done(tok, try p.number(tok));
     }
@@ -324,19 +344,27 @@ const Parser = struct {
         var body = tok;
         const neg = body[0] == '-';
         if (body[0] == '+' or neg) body = body[1..];
-        if (std.mem.eql(u8, body, "inf")) return .{ .float = if (neg) -std.math.inf(f64) else std.math.inf(f64) };
+        if (std.mem.eql(u8, body, "inf")) return .{
+            .float = if (neg) -std.math.inf(f64) else std.math.inf(f64),
+        };
         if (std.mem.eql(u8, body, "nan")) return .{ .float = std.math.nan(f64) };
         if (body.len == 0 or !std.ascii.isDigit(body[0])) return p.fail(bad);
         // `_` goes between digits only.
-        for (body, 0..) |c, i| if (c == '_' and (i == 0 or i + 1 == body.len or !std.ascii.isHex(body[i - 1]) or !std.ascii.isHex(body[i + 1]))) return p.fail(bad);
-        const prefixed = body.len > 2 and body[0] == '0' and std.mem.indexOfScalar(u8, "xob", body[1]) != null;
+        for (body, 0..) |c, i| if (c == '_' and (i == 0 or i + 1 == body.len or
+            !std.ascii.isHex(body[i - 1]) or !std.ascii.isHex(body[i + 1]))) return p.fail(bad);
+        const prefixed = body.len > 2 and body[0] == '0' and
+            std.mem.indexOfScalar(u8, "xob", body[1]) != null;
         if (prefixed) {
             if (tok[0] == '+' or neg) return p.fail("a hex, octal or binary number takes no sign");
             return .{ .int = std.fmt.parseInt(i64, body, 0) catch return p.fail(bad) };
         }
         if (std.mem.indexOfAny(u8, body, ".eE") == null) {
             if (body.len > 1 and body[0] == '0') return p.fail("an integer takes no leading zeros");
-            return .{ .int = std.fmt.parseInt(i64, tok, 0) catch return p.fail("not a valid integer (or it does not fit in 64 bits)") };
+            return .{
+                .int = std.fmt.parseInt(i64, tok, 0) catch return p.fail(
+                    "not a valid integer (or it does not fit in 64 bits)",
+                ),
+            };
         }
         // A digit on both sides of the point, and after `e`.
         for (body, 0..) |c, i| switch (c) {
@@ -417,7 +445,9 @@ const Parser = struct {
                 },
                 '\r' => {
                     if (!multi) break;
-                    if (!std.mem.startsWith(u8, p.src[p.pos..], "\r\n")) return p.fail("a control character in the string");
+                    if (!std.mem.startsWith(u8, p.src[p.pos..], "\r\n")) return p.fail(
+                        "a control character in the string",
+                    );
                     p.pos += 1;
                 },
                 else => {
@@ -438,7 +468,11 @@ const Parser = struct {
     }
 
     fn skipFirstNewline(p: *Parser) void {
-        if (std.mem.startsWith(u8, p.src[p.pos..], "\r\n")) p.pos += 2 else if (p.peek() == '\n') p.pos += 1;
+        if (std.mem.startsWith(
+            u8,
+            p.src[p.pos..],
+            "\r\n",
+        )) p.pos += 2 else if (p.peek() == '\n') p.pos += 1;
     }
 
     /// After a `\` in a multiline string: spaces, then a line break, then
@@ -474,11 +508,17 @@ const Parser = struct {
             else => return p.fail("unknown escape in the string"),
         };
         if (p.pos + digits > p.src.len) return p.fail("the escape is cut short");
-        const cp = std.fmt.parseInt(u21, p.src[p.pos..][0..digits], 16) catch return p.fail("the escape is not a valid code point");
-        if (!std.unicode.utf8ValidCodepoint(cp)) return p.fail("the escape is not a valid code point");
+        const cp = std.fmt.parseInt(u21, p.src[p.pos..][0..digits], 16) catch return p.fail(
+            "the escape is not a valid code point",
+        );
+        if (!std.unicode.utf8ValidCodepoint(cp)) return p.fail(
+            "the escape is not a valid code point",
+        );
         p.pos += digits;
         var buf: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(cp, &buf) catch return p.fail("the escape is not a valid code point");
+        const n = std.unicode.utf8Encode(cp, &buf) catch return p.fail(
+            "the escape is not a valid code point",
+        );
         try out.appendSlice(p.a, buf[0..n]);
     }
 };
@@ -566,7 +606,10 @@ test "string escapes and multiline strings" {
         \\empty = ""
         \\emptylit = ''
     );
-    try testing.expectEqualStrings("tab\there \"quoted\" back\\slash \u{e9} \u{1F600} A", r.get("esc").?.string);
+    try testing.expectEqualStrings(
+        "tab\there \"quoted\" back\\slash \u{e9} \u{1F600} A",
+        r.get("esc").?.string,
+    );
     try testing.expectEqualStrings("Roses are red\nViolets are blue", r.get("multi").?.string);
     try testing.expectEqualStrings("The quick brown fox", r.get("folded").?.string);
     try testing.expectEqualStrings("She said \"\"hi\"\"", r.get("quotes").?.string);
@@ -579,7 +622,10 @@ test "string escapes and multiline strings" {
 test "comments, CRLF, a BOM and no final newline" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const r = try parseOk(arena.allocator(), "\xEF\xBB\xBF# top\r\na = 1 # one\r\n\r\n[t] # table\r\nb = \"x#y\"\r\nc = 3");
+    const r = try parseOk(
+        arena.allocator(),
+        "\xEF\xBB\xBF# top\r\na = 1 # one\r\n\r\n[t] # table\r\nb = \"x#y\"\r\nc = 3",
+    );
     try testing.expectEqual(@as(i64, 1), r.get("a").?.int);
     try testing.expectEqualStrings("x#y", r.get("t").?.table.get("b").?.string);
     try testing.expectEqual(@as(i64, 3), r.get("t").?.table.get("c").?.int);
@@ -642,7 +688,10 @@ test "tables, dotted and quoted keys" {
         \\[fruit.apple.texture]
         \\smooth = true
     );
-    try testing.expectEqual(@as(i64, 1), r.get("top").?.table.get("dotted").?.table.get("key").?.int);
+    try testing.expectEqual(
+        @as(i64, 1),
+        r.get("top").?.table.get("dotted").?.table.get("key").?.int,
+    );
     try testing.expectEqual(@as(i64, 2), r.get("quoted key").?.int);
     try testing.expectEqual(@as(i64, 3), r.get("lit key").?.int);
     try testing.expectEqual(@as(i64, 4), r.get("bare-key_1").?.int);
@@ -719,11 +768,23 @@ test "what pkgs.formats.toml writes" {
     );
     try testing.expectEqualStrings("cmd_space", r.get("hotkey").?.string);
     try testing.expectEqual(@as(usize, 2), r.get("apps").?.table.get("extra_dirs").?.items().len);
-    try testing.expectEqualStrings("com.yubico.yubioath", r.get("clipboard").?.table.get("exclude_apps").?.items()[1].string);
+    try testing.expectEqualStrings(
+        "com.yubico.yubioath",
+        r.get("clipboard").?.table.get("exclude_apps").?.items()[1].string,
+    );
     try testing.expectEqual(@as(usize, 2), r.get("quicklinks").?.items().len);
-    try testing.expectEqualStrings("https://duckduckgo.com/?q={argument}", r.get("quicklinks").?.items()[0].table.get("url").?.string);
-    try testing.expectEqual(@as(usize, 0), r.get("script_commands").?.table.get("dirs").?.items().len);
-    try testing.expectEqualStrings("http://100.64.0.1:8890", r.get("sync").?.table.get("url").?.string);
+    try testing.expectEqualStrings(
+        "https://duckduckgo.com/?q={argument}",
+        r.get("quicklinks").?.items()[0].table.get("url").?.string,
+    );
+    try testing.expectEqual(
+        @as(usize, 0),
+        r.get("script_commands").?.table.get("dirs").?.items().len,
+    );
+    try testing.expectEqualStrings(
+        "http://100.64.0.1:8890",
+        r.get("sync").?.table.get("url").?.string,
+    );
 }
 
 test "errors carry the line" {

@@ -298,7 +298,9 @@ test "a script command's header" {
         \\# @raycast.packageName Web Searches
         \\# @raycast.icon 📖
         \\# @raycast.argument1 { "type": "text", "placeholder": "Query", "percentEncoded": true }
-        \\# @raycast.argument2 { "type": "dropdown", "placeholder": "Lang", "data": [{"title": "English", "value": "en"}] }
+        \\# @raycast.argument2 { "type": "dropdown", "placeholder": "Lang", "data": [{"title":
+    ++
+        \\ "English", "value": "en"}] }
         \\open "https://$2.wikipedia.org/w/index.php?search=$1"
     ;
     const m = parse(arena.allocator(), src).?;
@@ -310,14 +312,23 @@ test "a script command's header" {
     try std.testing.expectEqualStrings("en", m.args[1].?.data[0].value);
     try std.testing.expect(parse(arena.allocator(), "#!/bin/sh\necho hi\n") == null);
     // AppleScript's and JavaScript's comments too.
-    try std.testing.expectEqualStrings("A", parse(arena.allocator(), "-- @raycast.schemaVersion 1\n-- @raycast.title A\n").?.title);
-    try std.testing.expectEqualStrings("B", parse(arena.allocator(), "// @raycast.schemaVersion 1\n// @raycast.title B\n").?.title);
+    try std.testing.expectEqualStrings(
+        "A",
+        parse(arena.allocator(), "-- @raycast.schemaVersion 1\n-- @raycast.title A\n").?.title,
+    );
+    try std.testing.expectEqualStrings(
+        "B",
+        parse(arena.allocator(), "// @raycast.schemaVersion 1\n// @raycast.title B\n").?.title,
+    );
 
     var out: [8][]const u8 = undefined;
     const argv = command(src, "/s/wiki.sh", &out);
     try std.testing.expectEqualStrings("/s/wiki.sh", argv[argv.len - 1]);
     if (!windows) try std.testing.expectEqualStrings("/usr/bin/env", argv[0]);
-    try std.testing.expectEqualStrings(if (windows) "sh" else "/bin/sh", command("echo", "x", &out)[0]);
+    try std.testing.expectEqualStrings(
+        if (windows) "sh" else "/bin/sh",
+        command("echo", "x", &out)[0],
+    );
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("a%20b%26c", encode(&buf, "a b&c"));
 }
@@ -326,7 +337,14 @@ test "a folder named in config.toml is scanned for script commands, a folder dow
     const t = std.testing;
     var tmp = t.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(t.io, .{ .sub_path = "hello.sh", .data = "#!/bin/sh\n# @raycast.schemaVersion 1\n# @raycast.title Say Hello\n# @raycast.mode silent\necho hi\n" });
+    try tmp.dir.writeFile(
+        t.io,
+        .{
+            .sub_path = "hello.sh",
+            .data = "#!/bin/sh\n# @raycast.schemaVersion 1\n# @raycast.title Say Hello\n# " ++
+                "@raycast.mode silent\necho hi\n",
+        },
+    );
     try tmp.dir.writeFile(t.io, .{ .sub_path = "plain.sh", .data = "#!/bin/sh\necho no header\n" });
     const header = "#!/bin/sh\n# @raycast.schemaVersion 1\n# @raycast.title ";
     try tmp.dir.createDirPath(t.io, "sub/old");

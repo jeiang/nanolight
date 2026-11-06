@@ -162,7 +162,10 @@ pub const Mods = struct {
         if (!mac) {
             const p = (Choice{ .mods = m.mods }).pc();
             var sep: []const u8 = "";
-            for ([_]struct { bool, []const u8 }{ .{ p.ctrl, "Ctrl" }, .{ p.alt, "Alt" }, .{ p.shift, "Shift" } }) |n| if (n[0]) {
+            for ([_]struct {
+                bool,
+                []const u8,
+            }{ .{ p.ctrl, "Ctrl" }, .{ p.alt, "Alt" }, .{ p.shift, "Shift" } }) |n| if (n[0]) {
                 try w.print("{s}{s}", .{ sep, n[1] });
                 sep = " ";
             };
@@ -233,7 +236,11 @@ pub fn recorded(code: u16, flags: u64, ch: u21) Recorded {
     if (flags & ns_ctrl != 0) mods |= hotkey.control;
     if (flags & ns_shift != 0) mods |= hotkey.shift;
     if (code == 53 and mods == 0) return .cancel;
-    const c: Choice = .{ .code = code, .mods = mods, .ch = if (ch > 0x20 and ch != 0x7f and ch < 0xF700) ch else 0 };
+    const c: Choice = .{
+        .code = code,
+        .mods = mods,
+        .ch = if (ch > 0x20 and ch != 0x7f and ch < 0xF700) ch else 0,
+    };
     return if (c.usable()) .{ .key = c } else .unusable;
 }
 
@@ -324,8 +331,19 @@ pub fn systemKeys(buf: []SystemKey) []SystemKey {
     const pool = objc.Pool.push();
     defer pool.pop();
     const ud = objc.msg(objc.Object, objc.class("NSUserDefaults"), "standardUserDefaults", .{});
-    const domain = as(objc.msg(?objc.Object, ud, "persistentDomainForName:", .{objc.nsString("com.apple.symbolichotkeys")}), "NSDictionary");
-    const table = if (domain) |d| objc.msg(?objc.Object, d, "objectForKey:", .{objc.nsString("AppleSymbolicHotKeys")}) else null;
+    const domain = as(
+        objc.msg(
+            ?objc.Object,
+            ud,
+            "persistentDomainForName:",
+            .{objc.nsString("com.apple.symbolichotkeys")},
+        ),
+        "NSDictionary",
+    );
+    const table = if (domain) |d|
+        objc.msg(?objc.Object, d, "objectForKey:", .{objc.nsString("AppleSymbolicHotKeys")})
+    else
+        null;
     return withDefaults(readTable(table, buf), buf);
 }
 
@@ -378,9 +396,19 @@ fn readTable(table_in: ?objc.Object, buf: []SystemKey) []SystemKey {
         const k = objc.msg(objc.Object, keys, "objectAtIndex:", .{i});
         // Ids are strings ("64"); numbers read as well.
         if (as(k, "NSString") == null and as(k, "NSNumber") == null) continue;
-        const entry = as(objc.msg(?objc.Object, table, "objectForKey:", .{k}), "NSDictionary") orelse continue;
+        const entry = as(
+            objc.msg(?objc.Object, table, "objectForKey:", .{k}),
+            "NSDictionary",
+        ) orelse
+            continue;
         const enabled = field(entry, "enabled", "NSNumber") orelse continue;
-        const id: u32 = @intCast(std.math.clamp(objc.msg(objc.NSInteger, k, "integerValue", .{}), 0, std.math.maxInt(u32)));
+        const id: u32 = @intCast(
+            std.math.clamp(
+                objc.msg(objc.NSInteger, k, "integerValue", .{}),
+                0,
+                std.math.maxInt(u32),
+            ),
+        );
         // Turned off, it holds no key, and the entry may say no more than that.
         if (!objc.msg(objc.BOOL, enabled, "boolValue", .{})) {
             buf[n] = .{ .id = id, .enabled = false, .key = 0, .mods = 0 };
@@ -433,9 +461,19 @@ pub fn quit(name: []const u8) void {
     const id = for (launchers) |l| {
         if (std.mem.eql(u8, l[1], name)) break l[0];
     } else return;
-    const apps = objc.msg(objc.Object, objc.class("NSRunningApplication"), "runningApplicationsWithBundleIdentifier:", .{objc.nsString(id)});
+    const apps = objc.msg(
+        objc.Object,
+        objc.class("NSRunningApplication"),
+        "runningApplicationsWithBundleIdentifier:",
+        .{objc.nsString(id)},
+    );
     for (0..objc.msg(objc.NSUInteger, apps, "count", .{})) |i|
-        _ = objc.msg(objc.BOOL, objc.msg(objc.Object, apps, "objectAtIndex:", .{i}), "terminate", .{});
+        _ = objc.msg(
+            objc.BOOL,
+            objc.msg(objc.Object, apps, "objectAtIndex:", .{i}),
+            "terminate",
+            .{},
+        );
 }
 
 /// The launchers that are running now.
@@ -479,7 +517,10 @@ test "a clash is found in the system's shortcuts and among launchers" {
     // Turned off in System Settings: free.
     try t.expect(clash(.ctrl_space, &sys, &.{}).clear());
     // Device bits beyond the modifiers don't hide a clash.
-    try t.expectEqualStrings("Finder's search window", clash(.opt_cmd_space, &sys, &others).system.?);
+    try t.expectEqualStrings(
+        "Finder's search window",
+        clash(.opt_cmd_space, &sys, &others).system.?,
+    );
     try t.expect(clash(.opt_cmd_space, &sys, &others).launchers.len == 0);
 }
 
@@ -513,10 +554,19 @@ test "any key with ⌘, ⌥ or ⌃ can be recorded, kept and named" {
     // The offered ones keep the names older versions read.
     try t.expectEqualStrings("opt_space", Choice.opt_space.name(&buf));
     try t.expect(Choice.parse("ctrl_space").?.eql(.ctrl_space));
-    try t.expectEqualStrings("⌥ ⌘ Space", try std.fmt.bufPrint(&buf, "{f}", .{Choice.opt_cmd_space}));
-    try t.expectEqualStrings("⌥⌘", try std.fmt.bufPrint(&buf, "{f}", .{Choice.opt_cmd_space.held()}));
+    try t.expectEqualStrings(
+        "⌥ ⌘ Space",
+        try std.fmt.bufPrint(&buf, "{f}", .{Choice.opt_cmd_space}),
+    );
+    try t.expectEqualStrings(
+        "⌥⌘",
+        try std.fmt.bufPrint(&buf, "{f}", .{Choice.opt_cmd_space.held()}),
+    );
     // ⇧⌃F5 and F5 by itself are fine; a letter alone or with Shift is not.
-    try t.expectEqualStrings("⌃ ⇧ F5", try std.fmt.bufPrint(&buf, "{f}", .{recorded(96, ns_ctrl | ns_shift, 0xF708).key}));
+    try t.expectEqualStrings(
+        "⌃ ⇧ F5",
+        try std.fmt.bufPrint(&buf, "{f}", .{recorded(96, ns_ctrl | ns_shift, 0xF708).key}),
+    );
     try t.expect(recorded(96, 0, 0xF708) == .key);
     try t.expect(recorded(7, 0, 'x') == .unusable);
     try t.expect(recorded(7, ns_shift, 'x') == .unusable);
@@ -546,21 +596,38 @@ test "the system's shortcuts are read past entries of the wrong type (#14)" {
     const xml =
         \\<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
         \\<key>64</key><dict><key>enabled</key><true/><key>value</key><dict><key>parameters</key>
-        \\<array><integer>32</integer><integer>49</integer><integer>1048576</integer></array></dict></dict>
+        \\<array><integer>32</integer><integer>49</integer><integer>1048576</integer></array></dict>
+    ++
+        \\</dict>
         \\<key>65</key><true/>
         \\<key>60</key><dict><key>enabled</key><true/><key>value</key><true/></dict>
-        \\<key>61</key><dict><key>enabled</key><true/><key>value</key><dict><key>parameters</key><true/></dict></dict>
+        \\<key>61</key><dict><key>enabled</key><true/><key>value</key><dict><key>parameters</key>
+    ++
+        \\<true/></dict></dict>
         \\<key>62</key><dict><key>enabled</key><true/><key>value</key><dict><key>parameters</key>
         \\<array><integer>32</integer><string>49</string><integer>0</integer></array></dict></dict>
         \\<key>63</key><dict><key>enabled</key><true/></dict>
         \\</dict></plist>
     ;
-    const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ @as(*const anyopaque, xml.ptr), @as(objc.NSUInteger, xml.len) });
-    const table = objc.msg(?objc.Object, objc.class("NSPropertyListSerialization"), "propertyListWithData:options:format:error:", .{ data, @as(objc.NSUInteger, 0), @as(?*anyopaque, null), @as(?*anyopaque, null) });
+    const data = objc.msg(
+        objc.Object,
+        objc.class("NSData"),
+        "dataWithBytes:length:",
+        .{ @as(*const anyopaque, xml.ptr), @as(objc.NSUInteger, xml.len) },
+    );
+    const table = objc.msg(
+        ?objc.Object,
+        objc.class("NSPropertyListSerialization"),
+        "propertyListWithData:options:format:error:",
+        .{ data, @as(objc.NSUInteger, 0), @as(?*anyopaque, null), @as(?*anyopaque, null) },
+    );
     var buf: [8]SystemKey = undefined;
     const got = readTable(table, &buf);
     try std.testing.expectEqual(@as(usize, 1), got.len);
-    try std.testing.expectEqual(SystemKey{ .id = 64, .enabled = true, .key = 49, .mods = ns_cmd }, got[0]);
+    try std.testing.expectEqual(
+        SystemKey{ .id = 64, .enabled = true, .key = 49, .mods = ns_cmd },
+        got[0],
+    );
     // The table itself the wrong type: nothing, no abort.
     const yes = objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{objc.YES});
     try std.testing.expectEqual(@as(usize, 0), readTable(yes, &buf).len);
@@ -573,7 +640,10 @@ test "Spotlight holds ⌘Space unless the system's table says otherwise" {
     // A clean Mac: no entry for it.
     const clean = withDefaults(buf[0..0], &buf);
     try std.testing.expectEqualStrings("Spotlight", clash(.cmd_space, clean, &none).system.?);
-    try std.testing.expectEqualStrings("Finder's search window", clash(.opt_cmd_space, clean, &none).system.?);
+    try std.testing.expectEqualStrings(
+        "Finder's search window",
+        clash(.opt_cmd_space, clean, &none).system.?,
+    );
     try std.testing.expect(clash(.ctrl_space, clean, &none).clear());
     // Turned off.
     buf[0] = .{ .id = 64, .enabled = false, .key = 0, .mods = 0 };
@@ -596,8 +666,18 @@ test "a shortcut turned off is read, whatever else its entry lacks" {
         \\<key>64</key><dict><key>enabled</key><false/></dict>
         \\</dict></plist>
     ;
-    const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ @as(*const anyopaque, xml.ptr), @as(objc.NSUInteger, xml.len) });
-    const table = objc.msg(?objc.Object, objc.class("NSPropertyListSerialization"), "propertyListWithData:options:format:error:", .{ data, @as(objc.NSUInteger, 0), @as(?*anyopaque, null), @as(?*anyopaque, null) });
+    const data = objc.msg(
+        objc.Object,
+        objc.class("NSData"),
+        "dataWithBytes:length:",
+        .{ @as(*const anyopaque, xml.ptr), @as(objc.NSUInteger, xml.len) },
+    );
+    const table = objc.msg(
+        ?objc.Object,
+        objc.class("NSPropertyListSerialization"),
+        "propertyListWithData:options:format:error:",
+        .{ data, @as(objc.NSUInteger, 0), @as(?*anyopaque, null), @as(?*anyopaque, null) },
+    );
     var buf: [4]SystemKey = undefined;
     const found = withDefaults(readTable(table, &buf), &buf);
     try std.testing.expect(clash(.cmd_space, found, &.{}).clear());

@@ -99,7 +99,10 @@ test "the panel finds, moves, answers and hands off" {
     try std.testing.expectEqual(@as(usize, 1), s.sel);
     _ = t.shortcut(.{ .key = ui.Shortcut.up });
     press(t, &.{.{ .command = .insert_newline }});
-    try std.testing.expectEqualStrings("/Applications/System Settings.app", probe.opened[0..probe.opened_len]);
+    try std.testing.expectEqualStrings(
+        "/Applications/System Settings.app",
+        probe.opened[0..probe.opened_len],
+    );
     try std.testing.expect(probe.hidden);
     try std.testing.expectEqual(@as(u16, 1), ix.apps.items[ix.find("System Settings").?].launches);
 
@@ -108,7 +111,10 @@ test "the panel finds, moves, answers and hands off" {
     retype(t, "s");
     try std.testing.expect(t.hasText(results.mod ++ "2"));
     try std.testing.expect(t.shortcut(.{ .key = '2', .cmd = true }));
-    try std.testing.expectEqualStrings("/Applications/Safari.app", probe.opened[0..probe.opened_len]);
+    try std.testing.expectEqualStrings(
+        "/Applications/Safari.app",
+        probe.opened[0..probe.opened_len],
+    );
 
     // Math: answered, and Return copies it.
     retype(t, "2^10 * 3");
@@ -124,7 +130,10 @@ test "the panel finds, moves, answers and hands off" {
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     press(t, &.{.{ .command = .insert_newline }});
-    try std.testing.expectEqualStrings("https://claude.ai/new?q=liquid%20glass", probe.opened[0..probe.opened_len]);
+    try std.testing.expectEqualStrings(
+        "https://claude.ai/new?q=liquid%20glass",
+        probe.opened[0..probe.opened_len],
+    );
 
     // Escape closes at once, even with a query; the query waits for next time.
     probe.hidden = false;
@@ -283,7 +292,10 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(t.shortcut(.{ .key = '3', .cmd = true }));
     t.settle(1);
     try std.testing.expectEqualStrings("liquid glass apple", s.query.text());
-    try std.testing.expectEqualStrings("https://www.google.com/search?q=liquid%20glass%20apple", web.page[0..web.page_len.?]);
+    try std.testing.expectEqualStrings(
+        "https://www.google.com/search?q=liquid%20glass%20apple",
+        web.page[0..web.page_len.?],
+    );
     t.settle(2);
     try std.testing.expect(t.hasText("Open in Browser"));
     try std.testing.expectEqual(view.max_height, s.height());
@@ -298,7 +310,10 @@ test "Google's completions land below, and a search shows in the panel" {
     // Return on words no app matches: Google's page; typing takes it away.
     retype(t, "pizza");
     press(t, &.{.{ .command = .insert_newline }});
-    try std.testing.expectEqualStrings("https://www.google.com/search?q=pizza", web.page[0..web.page_len.?]);
+    try std.testing.expectEqualStrings(
+        "https://www.google.com/search?q=pizza",
+        web.page[0..web.page_len.?],
+    );
     press(t, &.{.{ .insert = "s" }});
     try std.testing.expect(web.page_len == null);
     try std.testing.expect(t.hasText("Search Google for “pizzas”"));
@@ -308,7 +323,10 @@ test "Google's completions land below, and a search shows in the panel" {
     press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expect(web.page_len != null);
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
-    try std.testing.expectEqualStrings("https://www.google.com/search?q=pizzas", web.probe.opened[0..web.probe.opened_len]);
+    try std.testing.expectEqualStrings(
+        "https://www.google.com/search?q=pizzas",
+        web.probe.opened[0..web.probe.opened_len],
+    );
     try std.testing.expect(web.probe.hidden);
     s.reveal();
     try std.testing.expect(web.page_len == null);
@@ -316,7 +334,10 @@ test "Google's completions land below, and a search shows in the panel" {
     t.settle(1);
     while (!onFirstQuicklink(s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
-    try std.testing.expectEqualStrings("https://www.google.com/search?q=pizzas", web.probe.opened[0..web.probe.opened_len]);
+    try std.testing.expectEqualStrings(
+        "https://www.google.com/search?q=pizzas",
+        web.probe.opened[0..web.probe.opened_len],
+    );
 }
 
 const onboard = @import("onboard.zig");

@@ -56,8 +56,17 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{ .root_module = appModule(b, "src/tests.zig", app_options) });
     // zig-out/bin/nanolight-tests: the tests, to run on another machine.
-    b.step("test-bin", "Install the tests as zig-out/bin/nanolight-tests").dependOn(&b.addInstallArtifact(tests, .{ .dest_sub_path = if (os == .windows) "nanolight-tests.exe" else "nanolight-tests" }).step);
-    const test_step = b.step("test", "Test Nanolight's search, math, suggestions and panel, and the lint");
+    b.step("test-bin", "Install the tests as zig-out/bin/nanolight-tests")
+        .dependOn(
+        &b.addInstallArtifact(
+            tests,
+            .{ .dest_sub_path = if (os == .windows) "nanolight-tests.exe" else "nanolight-tests" },
+        ).step,
+    );
+    const test_step = b.step(
+        "test",
+        "Test Nanolight's search, math, suggestions and panel, and the lint",
+    );
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
     addLint(b, test_step);
@@ -70,7 +79,8 @@ pub fn build(b: *std.Build) void {
             .name = "clip-probe",
             .root_module = appModule(b, "src/clipboard_probe.zig", app_options),
         });
-        b.step("clip-probe", "Build the Linux clipboard probe (zig-out/bin/clip-probe)").dependOn(&b.addInstallArtifact(probe, .{}).step);
+        b.step("clip-probe", "Build the Linux clipboard probe (zig-out/bin/clip-probe)")
+            .dependOn(&b.addInstallArtifact(probe, .{}).step);
     }
 
     addReleaseSteps(b, .{
@@ -85,8 +95,14 @@ pub fn build(b: *std.Build) void {
 /// frameworks and libraries (`<dir>/System/Library/Frameworks`, `<dir>/usr/lib`).
 fn addCheck(b: *std.Build, exe: *std.Build.Step.Compile) void {
     const chk = b.addObject(.{ .name = "nanolight-check", .root_module = exe.root_module });
-    if (b.option([]const u8, "sdk", "SDK root whose frameworks and libraries satisfy `check` (any target)")) |sdk| {
-        exe.root_module.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sdk}) });
+    if (b.option(
+        []const u8,
+        "sdk",
+        "SDK root whose frameworks and libraries satisfy `check` (any target)",
+    )) |sdk| {
+        exe.root_module.addFrameworkPath(
+            .{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sdk}) },
+        );
         exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib", .{sdk}) });
     }
     b.step("check", "Type-check without linking").dependOn(&chk.step);
@@ -135,7 +151,8 @@ fn addServer(
         .optimize = optimize,
     }) });
     if (optimize != .debug) server.root_module.strip = true;
-    b.step("server", "Build the sync server (zig-out/bin/nanolight-server)").dependOn(&b.addInstallArtifact(server, .{}).step);
+    b.step("server", "Build the sync server (zig-out/bin/nanolight-server)")
+        .dependOn(&b.addInstallArtifact(server, .{}).step);
 }
 
 /// Reads config.toml files as the app does (src/check_config.zig); the flake's
@@ -244,7 +261,9 @@ fn bundle(b: *std.Build, exe: *std.Build.Step.Compile, version: []const u8) std.
 pub fn infoPlist(b: *std.Build, version: []const u8) []const u8 {
     return b.fmt(
         \\<?xml version="1.0" encoding="UTF-8"?>
-        \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    ++
+        \\ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         \\<plist version="1.0">
         \\<dict>
         \\  <key>CFBundleExecutable</key><string>nanolight</string>
@@ -261,11 +280,21 @@ pub fn infoPlist(b: *std.Build, version: []const u8) []const u8 {
         \\  <key>NSPrincipalClass</key><string>NSApplication</string>
         \\  <key>NSHighResolutionCapable</key><true/>
         \\  <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
-        \\  <key>NSDesktopFolderUsageDescription</key><string>File Search lists the files and folders in a folder you type.</string>
-        \\  <key>NSDocumentsFolderUsageDescription</key><string>File Search lists the files and folders in a folder you type.</string>
-        \\  <key>NSDownloadsFolderUsageDescription</key><string>File Search lists the files and folders in a folder you type.</string>
-        \\  <key>NSRemovableVolumesUsageDescription</key><string>File Search lists the files and folders in a folder you type.</string>
-        \\  <key>NSNetworkVolumesUsageDescription</key><string>File Search lists the files and folders in a folder you type.</string>
+        \\  <key>NSDesktopFolderUsageDescription</key><string>File Search lists the files and
+    ++
+        \\ folders in a folder you type.</string>
+        \\  <key>NSDocumentsFolderUsageDescription</key><string>File Search lists the files and
+    ++
+        \\ folders in a folder you type.</string>
+        \\  <key>NSDownloadsFolderUsageDescription</key><string>File Search lists the files and
+    ++
+        \\ folders in a folder you type.</string>
+        \\  <key>NSRemovableVolumesUsageDescription</key><string>File Search lists the files and
+    ++
+        \\ folders in a folder you type.</string>
+        \\  <key>NSNetworkVolumesUsageDescription</key><string>File Search lists the files and
+    ++
+        \\ folders in a folder you type.</string>
         \\</dict>
         \\</plist>
         \\

@@ -29,7 +29,20 @@ const X = struct {
     XSetErrorHandler: *const fn (?ErrorHandler) callconv(.c) ?ErrorHandler,
     XSelectInput: *const fn (*Display, Window, c_long) callconv(.c) c_int,
     XInternAtom: *const fn (*Display, [*:0]const u8, c_int) callconv(.c) c_ulong,
-    XGetWindowProperty: *const fn (*Display, Window, c_ulong, c_long, c_long, c_int, c_ulong, *c_ulong, *c_int, *c_ulong, *c_ulong, *?[*]u8) callconv(.c) c_int,
+    XGetWindowProperty: *const fn (
+        *Display,
+        Window,
+        c_ulong,
+        c_long,
+        c_long,
+        c_int,
+        c_ulong,
+        *c_ulong,
+        *c_int,
+        *c_ulong,
+        *c_ulong,
+        *?[*]u8,
+    ) callconv(.c) c_int,
     XFree: *const fn (?*anyopaque) callconv(.c) c_int,
 };
 
@@ -71,7 +84,8 @@ fn env(name: [*:0]const u8) ?[]const u8 {
 /// Why no key can be taken here: on Wayland, or without a display.
 pub fn unavailable() ?[]const u8 {
     if (std.mem.eql(u8, env("XDG_SESSION_TYPE") orelse "", "wayland") or env("DISPLAY") == null)
-        return "Wayland gives no app a key of its own: in your desktop's keyboard settings, add a shortcut that runs \"nanolight --toggle\".";
+        return "Wayland gives no app a key of its own: in your desktop's keyboard settings, add " ++
+            "a shortcut that runs \"nanolight --toggle\".";
     return null;
 }
 
@@ -100,13 +114,19 @@ fn readable(_: ?*anyopaque) callconv(.c) void {
         _ = xl.XNextEvent(d, &ev);
         if (ev.type == property_notify) {
             const bytes = std.mem.asBytes(&ev);
-            const atom = std.mem.readInt(c_ulong, bytes[atom_offset..][0..@sizeOf(c_ulong)], .little);
+            const atom = std.mem.readInt(
+                c_ulong,
+                bytes[atom_offset..][0..@sizeOf(c_ulong)],
+                .little,
+            );
             if (atom == net_active and panelActive() == false) if (away) |a| a.func(a.ctx);
             continue;
         }
         if (ev.type != key_press) continue;
         const bytes = std.mem.asBytes(&ev);
-        last_time = @truncate(std.mem.readInt(c_ulong, bytes[time_offset..][0..@sizeOf(c_ulong)], .little));
+        last_time = @truncate(
+            std.mem.readInt(c_ulong, bytes[time_offset..][0..@sizeOf(c_ulong)], .little),
+        );
         if (pressed) |p| p.func(p.ctx);
     }
 }
@@ -139,7 +159,20 @@ pub fn panelActive() ?bool {
     var left: c_ulong = 0;
     var data: ?[*]u8 = null;
     // XA_WINDOW is 33.
-    if (xl.XGetWindowProperty(d, xl.XDefaultRootWindow(d), net_active, 0, 1, 0, 33, &kind, &format, &n, &left, &data) != 0) return null;
+    if (xl.XGetWindowProperty(
+        d,
+        xl.XDefaultRootWindow(d),
+        net_active,
+        0,
+        1,
+        0,
+        33,
+        &kind,
+        &format,
+        &n,
+        &left,
+        &data,
+    ) != 0) return null;
     defer _ = xl.XFree(data);
     const bytes = data orelse return null;
     if (n == 0 or format != 32) return null;

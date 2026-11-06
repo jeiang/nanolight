@@ -16,7 +16,14 @@ const prune_every_ms = 60 * 60 * 1000;
 pub fn init(l: *Live, store: *clipboard.Store) void {
     l.clip = store;
     store.load(account.now());
-    l.clip_host = .{ .ctx = l, .store = store, .status = status, .paste = paste, .copy = copy, .copy_only = !l.cfg.clipboard.paste_plain_text };
+    l.clip_host = .{
+        .ctx = l,
+        .store = store,
+        .status = status,
+        .paste = paste,
+        .copy = copy,
+        .copy_only = !l.cfg.clipboard.paste_plain_text,
+    };
     l.s.host.?.clipboard = &l.clip_host;
     if (store.cfg.enabled) startWatching(l);
     nanoui.App.after(prune_every_ms, l, pruneTick);

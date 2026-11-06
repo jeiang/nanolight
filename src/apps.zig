@@ -1,9 +1,10 @@
 //! The apps Nanolight finds: on the Mac every `.app` in the usual folders
 //! (and one folder down, for Utilities and suites), named without `.app`;
 //! on Linux the desktop entries (apps_linux.zig), on Windows the Start
-//! menu's shortcuts (apps_win.zig). Sorted and without duplicates. How often each was opened is kept in the
-//! app's defaults and lifts it in the ranking. Icons are asked of the
-//! system only for the rows on screen, and kept.
+//! menu's shortcuts (apps_win.zig). Sorted and without duplicates. How
+//! often each was opened is kept in the app's defaults and lifts it in the
+//! ranking. Icons are asked of the system only for the rows on screen, and
+//! kept.
 const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
@@ -64,13 +65,18 @@ pub fn scanExtra(ix: *Index, io: std.Io, dirs: []const []const u8) void {
 /// An address for the browser or the system (a pane of System Settings),
 /// not a file to open.
 pub fn isUrl(target: []const u8) bool {
-    for ([_][]const u8{ "https://", "http://", @import("settings_panes.zig").url_prefix }) |p| if (std.mem.startsWith(u8, target, p)) return true;
+    for ([_][]const u8{
+        "https://",
+        "http://",
+        @import("settings_panes.zig").url_prefix,
+    }) |p| if (std.mem.startsWith(u8, target, p)) return true;
     return false;
 }
 
 /// Opens an app found by `scanSystem` (or a file, a folder).
 pub fn launch(io: std.Io, path: []const u8) bool {
-    if (builtin.os.tag == .linux and std.mem.endsWith(u8, path, ".desktop")) return @import("apps_linux.zig").launch(io, path);
+    if (builtin.os.tag == .linux and
+        std.mem.endsWith(u8, path, ".desktop")) return @import("apps_linux.zig").launch(io, path);
     if (mac and std.mem.endsWith(u8, path, ".app")) {
         openApp(path);
         return true;
@@ -208,7 +214,11 @@ pub const Index = struct {
         ix.add("Finder", "/System/Library/CoreServices/Finder.app") catch {};
         if (home) |h| {
             var buf: [512]u8 = undefined;
-            if (std.fmt.bufPrint(&buf, "{s}/Applications", .{h})) |p| ix.scanDir(io, p, 1) else |_| {}
+            if (std.fmt.bufPrint(
+                &buf,
+                "{s}/Applications",
+                .{h},
+            )) |p| ix.scanDir(io, p, 1) else |_| {}
         }
         ix.sort();
         ix.localize();
@@ -428,10 +438,25 @@ fn resolveLaunchKey(ix: *const Index, key: []const u8) ?u32 {
 fn openApp(path: []const u8) void {
     const pool = objc.Pool.push();
     defer pool.pop();
-    const url = objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(path)});
-    const config = objc.msg(objc.Object, objc.class("NSWorkspaceOpenConfiguration"), "configuration", .{});
+    const url = objc.msg(
+        objc.Object,
+        objc.class("NSURL"),
+        "fileURLWithPath:",
+        .{objc.nsString(path)},
+    );
+    const config = objc.msg(
+        objc.Object,
+        objc.class("NSWorkspaceOpenConfiguration"),
+        "configuration",
+        .{},
+    );
     const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
-    objc.msg(void, ws, "openApplicationAtURL:configuration:completionHandler:", .{ url, config, @as(?*anyopaque, null) });
+    objc.msg(
+        void,
+        ws,
+        "openApplicationAtURL:configuration:completionHandler:",
+        .{ url, config, @as(?*anyopaque, null) },
+    );
 }
 
 fn wantsLocalizedDisplayName(path: []const u8) bool {
@@ -443,7 +468,11 @@ fn wantsLocalizedDisplayName(path: []const u8) bool {
 /// Finder can include the bundle extension in its localized display name.
 fn withoutAppSuffix(name: []const u8) []const u8 {
     const suffix = ".app";
-    if (name.len >= suffix.len and std.ascii.eqlIgnoreCase(name[name.len - suffix.len ..], suffix)) return name[0 .. name.len - suffix.len];
+    if (name.len >= suffix.len and
+        std.ascii.eqlIgnoreCase(
+            name[name.len - suffix.len ..],
+            suffix,
+        )) return name[0 .. name.len - suffix.len];
     return name;
 }
 
@@ -461,8 +490,18 @@ fn pinyinKey(a: std.mem.Allocator, name: []const u8) ?[]const u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
     const ns = objc.nsString(name);
-    const step1 = objc.msg(objc.Object, ns, "stringByApplyingTransform:reverse:", .{ objc.nsString("Mandarin-Latin"), objc.NO });
-    const step2 = objc.msg(objc.Object, step1, "stringByApplyingTransform:reverse:", .{ objc.nsString("Latin-ASCII"), objc.NO });
+    const step1 = objc.msg(
+        objc.Object,
+        ns,
+        "stringByApplyingTransform:reverse:",
+        .{ objc.nsString("Mandarin-Latin"), objc.NO },
+    );
+    const step2 = objc.msg(
+        objc.Object,
+        step1,
+        "stringByApplyingTransform:reverse:",
+        .{ objc.nsString("Latin-ASCII"), objc.NO },
+    );
     const latin = objc.msg(?[*]const u8, step2, "UTF8String", .{}) orelse return null;
     var buf: [128]u8 = undefined;
     var n: usize = 0;
@@ -482,12 +521,24 @@ pub fn iconPng(gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
     const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
     const img = objc.msg(objc.Object, ws, "iconForFile:", .{objc.nsString(path)});
     var rect: objc.CGRect = .{ .size = .{ .width = 64, .height = 64 } };
-    const cg = objc.msg(?*anyopaque, img, "CGImageForProposedRect:context:hints:", .{ &rect, @as(?objc.Object, null), @as(?objc.Object, null) }) orelse return null;
+    const cg = objc.msg(
+        ?*anyopaque,
+        img,
+        "CGImageForProposedRect:context:hints:",
+        .{ &rect, @as(?objc.Object, null), @as(?objc.Object, null) },
+    ) orelse
+        return null;
     const rep = objc.msg(objc.Object, objc.alloc("NSBitmapImageRep"), "initWithCGImage:", .{cg});
     defer objc.release(rep);
     const props = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{});
     // NSBitmapImageFileTypePNG
-    const data = objc.msg(?objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), props }) orelse return null;
+    const data = objc.msg(
+        ?objc.Object,
+        rep,
+        "representationUsingType:properties:",
+        .{ @as(objc.NSUInteger, 4), props },
+    ) orelse
+        return null;
     const len = objc.msg(objc.NSUInteger, data, "length", .{});
     const bytes = objc.msg(?[*]const u8, data, "bytes", .{}) orelse return null;
     return gpa.dupe(u8, bytes[0..len]) catch null;

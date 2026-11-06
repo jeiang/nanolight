@@ -5,11 +5,29 @@ const std = @import("std");
 
 const EventTypeSpec = extern struct { class: u32, kind: u32 };
 const HotKeyId = extern struct { signature: u32, id: u32 };
-const Handler = *const fn (call: ?*anyopaque, event: ?*anyopaque, user: ?*anyopaque) callconv(.c) i32;
+const Handler = *const fn (
+    call: ?*anyopaque,
+    event: ?*anyopaque,
+    user: ?*anyopaque,
+) callconv(.c) i32;
 
 extern "c" fn GetApplicationEventTarget() ?*anyopaque;
-extern "c" fn InstallEventHandler(target: ?*anyopaque, handler: Handler, count: u32, list: [*]const EventTypeSpec, user: ?*anyopaque, out: ?*?*anyopaque) i32;
-extern "c" fn RegisterEventHotKey(key_code: u32, modifiers: u32, id: HotKeyId, target: ?*anyopaque, options: u32, out: *?*anyopaque) i32;
+extern "c" fn InstallEventHandler(
+    target: ?*anyopaque,
+    handler: Handler,
+    count: u32,
+    list: [*]const EventTypeSpec,
+    user: ?*anyopaque,
+    out: ?*?*anyopaque,
+) i32;
+extern "c" fn RegisterEventHotKey(
+    key_code: u32,
+    modifiers: u32,
+    id: HotKeyId,
+    target: ?*anyopaque,
+    options: u32,
+    out: *?*anyopaque,
+) i32;
 extern "c" fn UnregisterEventHotKey(ref: ?*anyopaque) i32;
 
 /// Carbon's modifier bits.
@@ -38,13 +56,29 @@ fn handle(_: ?*anyopaque, _: ?*anyopaque, _: ?*anyopaque) callconv(.c) i32 {
 pub fn registerKey(key: u32, modifiers: u32, on: Pressed) !void {
     pressed = on;
     if (!installed) {
-        const spec = [_]EventTypeSpec{.{ .class = fourcc("keyb"), .kind = 5 }}; // kEventHotKeyPressed
-        if (InstallEventHandler(GetApplicationEventTarget(), &handle, 1, &spec, null, null) != 0) return error.HandlerFailed;
+        const spec = [_]EventTypeSpec{
+            .{ .class = fourcc("keyb"), .kind = 5 },
+        }; // kEventHotKeyPressed
+        if (InstallEventHandler(
+            GetApplicationEventTarget(),
+            &handle,
+            1,
+            &spec,
+            null,
+            null,
+        ) != 0) return error.HandlerFailed;
         installed = true;
     }
     if (current) |r| _ = UnregisterEventHotKey(r);
     current = null;
-    if (RegisterEventHotKey(key, modifiers, .{ .signature = fourcc("nsPL"), .id = 1 }, GetApplicationEventTarget(), 0, &current) != 0) return error.HotKeyTaken;
+    if (RegisterEventHotKey(
+        key,
+        modifiers,
+        .{ .signature = fourcc("nsPL"), .id = 1 },
+        GetApplicationEventTarget(),
+        0,
+        &current,
+    ) != 0) return error.HotKeyTaken;
 }
 
 /// `choice`'s key with its modifiers (hotkey.zig).

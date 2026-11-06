@@ -97,7 +97,8 @@ pub fn plain(buf: []u8, md: []const u8) []const u8 {
     while (i < md.len and n < buf.len) {
         const ch = md[i];
         if (line_start) {
-            while (i < md.len and (md[i] == '#' or (md[i] == '>' and (i + 1 >= md.len or md[i + 1] == ' ')))) i += 1;
+            while (i < md.len and (md[i] == '#' or (md[i] == '>' and (i + 1 >= md.len or
+                md[i + 1] == ' ')))) i += 1;
             while (i < md.len and md[i] == ' ' and n > 0 and buf[n - 1] == '\n') i += 1;
             line_start = false;
             continue;
@@ -110,7 +111,9 @@ pub fn plain(buf: []u8, md: []const u8) []const u8 {
         }
         if (ch == '[') {
             // [words](href): the words.
-            if (std.mem.indexOfScalarPos(u8, md, i, ']')) |rb| if (rb + 1 < md.len and md[rb + 1] == '(') {
+            if (std.mem.indexOfScalarPos(u8, md, i, ']')) |rb| if (rb + 1 < md.len and
+                md[rb + 1] == '(')
+            {
                 const words = md[i + 1 .. rb];
                 const m = @min(words.len, buf.len - n);
                 @memcpy(buf[n..][0..m], words[0..m]);

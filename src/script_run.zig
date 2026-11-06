@@ -159,17 +159,34 @@ pub const Runner = struct {
         const cmd = sc.command(r.bytes, r.file, &cmd_buf);
         var argv: std.ArrayList([]const u8) = .empty;
         // Its errors with its output: through sh, where there is one.
-        if (!windows) argv.appendSlice(a, &.{ "/bin/sh", "-c", "exec \"$@\" 2>&1", "sh" }) catch return;
+        if (!windows) argv.appendSlice(
+            a,
+            &.{ "/bin/sh", "-c", "exec \"$@\" 2>&1", "sh" },
+        ) catch return;
         argv.appendSlice(a, cmd) catch return;
         for (r.meta.args, 0..) |maybe, i| {
             const arg = maybe orelse continue;
             const v = r.args[i].items;
-            if (v.len == 0 and !arg.optional) return r.fail("Fill in every argument that isn't optional.");
+            if (v.len == 0 and
+                !arg.optional) return r.fail("Fill in every argument that isn't optional.");
             var enc: [2048]u8 = undefined;
-            argv.append(a, a.dupe(u8, if (arg.percentEncoded) sc.encode(&enc, v) else v) catch return) catch return;
+            argv.append(
+                a,
+                a.dupe(u8, if (arg.percentEncoded) sc.encode(&enc, v) else v) catch return,
+            ) catch return;
         }
         const dir = r.workDir(a);
-        const child = std.process.spawn(r.io, .{ .argv = argv.items, .cwd = .{ .path = dir }, .stdin = .ignore, .stdout = .pipe, .stderr = if (windows) .ignore else .inherit, .create_no_window = windows }) catch
+        const child = std.process.spawn(
+            r.io,
+            .{
+                .argv = argv.items,
+                .cwd = .{ .path = dir },
+                .stdin = .ignore,
+                .stdout = .pipe,
+                .stderr = if (windows) .ignore else .inherit,
+                .create_no_window = windows,
+            },
+        ) catch
             return r.fail("The script couldn't be started (is its interpreter installed?).");
         r.child = child;
         const out = child.stdout.?;
@@ -343,7 +360,11 @@ pub const Runner = struct {
         if (!ok) {
             var buf: [64]u8 = undefined;
             const why = if (term) |t| switch (t) {
-                .exited => |code| std.fmt.bufPrint(&buf, "Exited with code {d}", .{code}) catch "Failed",
+                .exited => |code| std.fmt.bufPrint(
+                    &buf,
+                    "Exited with code {d}",
+                    .{code},
+                ) catch "Failed",
                 else => "Stopped",
             } else "Failed";
             r.ext.note(why, true);

@@ -33,7 +33,12 @@ fn sendFiles(l: *Live) void {
     const q = l.files.query[0..l.files.len];
     if (!std.mem.eql(u8, q, std.mem.trim(u8, l.s.query.text(), " \t\r\n"))) return;
     const a = l.app.gpa.create(FileAsk) catch return;
-    a.* = .{ .live = l, .len = q.len, .epoch = l.files.epoch, .found = .{ .allocator = l.app.gpa } };
+    a.* = .{
+        .live = l,
+        .len = q.len,
+        .epoch = l.files.epoch,
+        .found = .{ .allocator = l.app.gpa },
+    };
     @memcpy(a.text[0..q.len], q);
     a.locations = l.kv.get(l.app.gpa, files.locations_key) catch null;
     a.exclusions = l.kv.get(l.app.gpa, files.exclusions_key) catch null;
@@ -63,7 +68,13 @@ const FileAsk = struct {
         if (files.isPath(q)) {
             files.complete(a.live.app.io, q, &a.found);
             a.ok = true;
-        } else a.ok = files.find(a.live.app.io, q, a.locations orelse "", a.exclusions orelse "", &a.found);
+        } else a.ok = files.find(
+            a.live.app.io,
+            q,
+            a.locations orelse "",
+            a.exclusions orelse "",
+            &a.found,
+        );
         if (a.ok) a.found.icons();
         nanoui.App.after(0, a, done);
     }

@@ -23,7 +23,11 @@ fn dataDirs(buf: *[16][]const u8, home_buf: []u8) [][]const u8 {
         buf[n] = p;
         n += 1;
     } else |_| {};
-    var it = std.mem.tokenizeScalar(u8, env("XDG_DATA_DIRS") orelse "/usr/local/share:/usr/share", ':');
+    var it = std.mem.tokenizeScalar(
+        u8,
+        env("XDG_DATA_DIRS") orelse "/usr/local/share:/usr/share",
+        ':',
+    );
     while (it.next()) |d| if (n < buf.len - 2) {
         buf[n] = d;
         n += 1;
@@ -90,7 +94,15 @@ pub fn parse(bytes: []const u8) Entry {
         const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const key = std.mem.trim(u8, line[0..eq], " ");
         const value = std.mem.trim(u8, line[eq + 1 ..], " ");
-        if (std.mem.eql(u8, key, "Name")) e.name = value else if (std.mem.eql(u8, key, "Exec")) e.exec = value else if (std.mem.eql(u8, key, "Icon")) e.icon = value else if (std.mem.eql(u8, key, "Type")) e.app = std.mem.eql(u8, value, "Application") else if (std.mem.eql(u8, key, "NoDisplay") or std.mem.eql(u8, key, "Hidden")) {
+        if (std.mem.eql(u8, key, "Name"))
+            e.name = value
+        else if (std.mem.eql(u8, key, "Exec"))
+            e.exec = value
+        else if (std.mem.eql(u8, key, "Icon"))
+            e.icon = value
+        else if (std.mem.eql(u8, key, "Type"))
+            e.app = std.mem.eql(u8, value, "Application")
+        else if (std.mem.eql(u8, key, "NoDisplay") or std.mem.eql(u8, key, "Hidden")) {
             if (std.mem.eql(u8, value, "true")) e.hidden = true;
         }
     }
@@ -145,7 +157,10 @@ pub fn launch(io: std.Io, path: []const u8) bool {
 }
 
 fn spawn(io: std.Io, args: []const []const u8) bool {
-    var child = std.process.spawn(io, .{ .argv = args, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore, .pgid = 0 }) catch return false;
+    var child = std.process.spawn(
+        io,
+        .{ .argv = args, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore, .pgid = 0 },
+    ) catch return false;
     // Reaped once it ends (gio returns at once; an app runs on).
     const t = std.Thread.spawn(.{}, reap, .{ io, child }) catch {
         child.kill(io);
@@ -162,11 +177,16 @@ fn reap(io: std.Io, child: std.process.Child) void {
 }
 
 test "a desktop entry's keys and its Exec line" {
-    const e = parse("[Desktop Entry]\nName=Files\nName[de]=Dateien\nExec=nautilus --new-window %U\nIcon=org.gnome.Nautilus\nType=Application\n[Desktop Action new]\nName=New\n");
+    const e = parse(
+        "[Desktop Entry]\nName=Files\nName[de]=Dateien\nExec=nautilus --new-window %U\n" ++
+            "Icon=org.gnome.Nautilus\nType=Application\n[Desktop Action new]\nName=New\n",
+    );
     try std.testing.expectEqualStrings("Files", e.name);
     try std.testing.expectEqualStrings("org.gnome.Nautilus", e.icon);
     try std.testing.expect(e.shown());
-    try std.testing.expect(!parse("[Desktop Entry]\nName=X\nExec=x\nType=Application\nNoDisplay=true\n").shown());
+    try std.testing.expect(
+        !parse("[Desktop Entry]\nName=X\nExec=x\nType=Application\nNoDisplay=true\n").shown(),
+    );
     var store: [256]u8 = undefined;
     var out: [8][]const u8 = undefined;
     const a = argv("\"/opt/My App/run\" --x=\"a b\" %f 100%%", &store, &out);
@@ -178,7 +198,16 @@ test "a desktop entry's keys and its Exec line" {
 
 // ----- icons -----
 
-const sizes = [_][]const u8{ "64x64", "48x48", "96x96", "128x128", "256x256", "scalable", "512x512", "32x32" };
+const sizes = [_][]const u8{
+    "64x64",
+    "48x48",
+    "96x96",
+    "128x128",
+    "256x256",
+    "scalable",
+    "512x512",
+    "32x32",
+};
 const themes = [_][]const u8{ "hicolor", "Adwaita", "breeze", "Papirus" };
 
 /// The icon file for `name` (a path, or a name in the icon themes).
@@ -188,12 +217,23 @@ fn findIcon(io: std.Io, name: []const u8, out: []u8) ?[]const u8 {
     var dirs: [16][]const u8 = undefined;
     var home: [512]u8 = undefined;
     const data = dataDirs(&dirs, &home);
-    for (themes) |theme| for (sizes) |size| for (data) |d| for ([_][]const u8{ "png", "svg" }) |ext| {
-        const p = std.fmt.bufPrint(out, "{s}/icons/{s}/{s}/apps/{s}.{s}", .{ d, theme, size, name, ext }) catch continue;
+    for (themes) |theme| for (sizes) |size| for (data) |d| for ([_][]const u8{
+        "png",
+        "svg",
+    }) |ext| {
+        const p = std.fmt.bufPrint(
+            out,
+            "{s}/icons/{s}/{s}/apps/{s}.{s}",
+            .{ d, theme, size, name, ext },
+        ) catch continue;
         if (cwd.access(io, p, .{})) |_| return p else |_| {}
     };
     for ([_][]const u8{ "png", "svg", "xpm" }) |ext| {
-        const p = std.fmt.bufPrint(out, "/usr/share/pixmaps/{s}.{s}", .{ name, ext }) catch continue;
+        const p = std.fmt.bufPrint(
+            out,
+            "/usr/share/pixmaps/{s}.{s}",
+            .{ name, ext },
+        ) catch continue;
         if (cwd.access(io, p, .{})) |_| return p else |_| {}
     }
     return null;
@@ -201,8 +241,21 @@ fn findIcon(io: std.Io, name: []const u8, out: []u8) ?[]const u8 {
 
 const Pixbuf = opaque {};
 const Pb = struct {
-    gdk_pixbuf_new_from_file_at_size: *const fn ([*:0]const u8, c_int, c_int, ?*?*anyopaque) callconv(.c) ?*Pixbuf,
-    gdk_pixbuf_save_to_bufferv: *const fn (*Pixbuf, *?[*]u8, *usize, [*:0]const u8, ?*anyopaque, ?*anyopaque, ?*?*anyopaque) callconv(.c) c_int,
+    gdk_pixbuf_new_from_file_at_size: *const fn (
+        [*:0]const u8,
+        c_int,
+        c_int,
+        ?*?*anyopaque,
+    ) callconv(.c) ?*Pixbuf,
+    gdk_pixbuf_save_to_bufferv: *const fn (
+        *Pixbuf,
+        *?[*]u8,
+        *usize,
+        [*:0]const u8,
+        ?*anyopaque,
+        ?*anyopaque,
+        ?*?*anyopaque,
+    ) callconv(.c) c_int,
     g_object_unref: *const fn (*anyopaque) callconv(.c) void,
     g_free: *const fn (?*anyopaque) callconv(.c) void,
 };
@@ -217,7 +270,9 @@ fn pixbuf() ?Pb {
     const glib = std.c.dlopen("libglib-2.0.so.0", .{ .NOW = true }) orelse return null;
     var v: Pb = undefined;
     inline for (@typeInfo(Pb).@"struct".field_names) |name| {
-        const from = if (std.mem.startsWith(u8, name, "gdk")) lib else if (std.mem.eql(u8, name, "g_free")) glib else gobj;
+        const from = if (std.mem.startsWith(u8, name, "gdk"))
+            lib
+        else if (std.mem.eql(u8, name, "g_free")) glib else gobj;
         @field(v, name) = @ptrCast(@alignCast(std.c.dlsym(from, name) orelse return null));
     }
     pb = v;
@@ -239,7 +294,8 @@ pub fn icon(gpa: std.mem.Allocator, io: std.Io, path: []const u8) ?[]u8 {
     var z: [1025]u8 = undefined;
     @memcpy(z[0..file.len], file);
     z[file.len] = 0;
-    const img = p.gdk_pixbuf_new_from_file_at_size(z[0..file.len :0], 64, 64, null) orelse return null;
+    const img = p.gdk_pixbuf_new_from_file_at_size(z[0..file.len :0], 64, 64, null) orelse
+        return null;
     defer p.g_object_unref(img);
     var out: ?[*]u8 = null;
     var len: usize = 0;

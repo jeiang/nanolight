@@ -99,8 +99,16 @@ const Unit = struct { family: Family, names: []const u8, scale: f64, offset: f64
 const units = [_]Unit{
     .{ .family = .length, .names = "m,meter,meters,metre,metres", .scale = 1 },
     .{ .family = .length, .names = "km,kilometer,kilometers,kilometre,kilometres", .scale = 1000 },
-    .{ .family = .length, .names = "cm,centimeter,centimeters,centimetre,centimetres", .scale = 0.01 },
-    .{ .family = .length, .names = "mm,millimeter,millimeters,millimetre,millimetres", .scale = 0.001 },
+    .{
+        .family = .length,
+        .names = "cm,centimeter,centimeters,centimetre,centimetres",
+        .scale = 0.01,
+    },
+    .{
+        .family = .length,
+        .names = "mm,millimeter,millimeters,millimetre,millimetres",
+        .scale = 0.001,
+    },
     .{ .family = .length, .names = "um,µm,micron,microns,micrometer,micrometers", .scale = 1e-6 },
     .{ .family = .length, .names = "nm,nanometer,nanometers", .scale = 1e-9 },
     .{ .family = .length, .names = "mi,mile,miles", .scale = 1609.344 },
@@ -116,18 +124,35 @@ const units = [_]Unit{
     .{ .family = .mass, .names = "t,tonne,tonnes", .scale = 1000 },
     .{ .family = .mass, .names = "ton,tons", .scale = 907.18474 },
     .{ .family = .temperature, .names = "°C,c,celsius", .scale = 1 },
-    .{ .family = .temperature, .names = "°F,f,fahrenheit", .scale = 5.0 / 9.0, .offset = -160.0 / 9.0 },
+    .{
+        .family = .temperature,
+        .names = "°F,f,fahrenheit",
+        .scale = 5.0 / 9.0,
+        .offset = -160.0 / 9.0,
+    },
     .{ .family = .temperature, .names = "K,kelvin", .scale = 1, .offset = -273.15 },
     .{ .family = .volume, .names = "L,liter,liters,litre,litres", .scale = 1 },
-    .{ .family = .volume, .names = "mL,milliliter,milliliters,millilitre,millilitres", .scale = 0.001 },
+    .{
+        .family = .volume,
+        .names = "mL,milliliter,milliliters,millilitre,millilitres",
+        .scale = 0.001,
+    },
     .{ .family = .volume, .names = "gal,gallon,gallons", .scale = 3.785411784 },
     .{ .family = .volume, .names = "qt,quart,quarts", .scale = 0.946352946 },
     .{ .family = .volume, .names = "pt,pint,pints", .scale = 0.473176473 },
     .{ .family = .volume, .names = "cup,cups", .scale = 0.2365882365 },
-    .{ .family = .volume, .names = "floz,fl oz,fluid ounce,fluid ounces", .scale = 0.0295735295625 },
+    .{
+        .family = .volume,
+        .names = "floz,fl oz,fluid ounce,fluid ounces",
+        .scale = 0.0295735295625,
+    },
     .{ .family = .volume, .names = "tbsp,tablespoon,tablespoons", .scale = 0.01478676478125 },
     .{ .family = .volume, .names = "tsp,teaspoon,teaspoons", .scale = 0.00492892159375 },
-    .{ .family = .area, .names = "m2,m²,sqm,square meter,square meters,square metre,square metres", .scale = 1 },
+    .{
+        .family = .area,
+        .names = "m2,m²,sqm,square meter,square meters,square metre,square metres",
+        .scale = 1,
+    },
     .{ .family = .area, .names = "km2,km²,sqkm,square kilometer,square kilometers", .scale = 1e6 },
     .{ .family = .area, .names = "cm2,cm²,sqcm", .scale = 1e-4 },
     .{ .family = .area, .names = "ha,hectare,hectares", .scale = 1e4 },
@@ -210,7 +235,8 @@ pub fn parse(query: []const u8) ?Parsed {
     const head = calc.lead(s) orelse return null;
     const rest = std.mem.trim(u8, head.rest, " \t");
     const target = if (from.len > 0) blk: {
-        if (rest.len < 4 or !(std.ascii.startsWithIgnoreCase(rest, "to ") or std.ascii.startsWithIgnoreCase(rest, "in "))) return null;
+        if (rest.len < 4 or !(std.ascii.startsWithIgnoreCase(rest, "to ") or
+            std.ascii.startsWithIgnoreCase(rest, "in "))) return null;
         break :blk rest[3..];
     } else blk: {
         // The first " to " or " in " with something before it ("10 in in cm").
@@ -227,14 +253,18 @@ pub fn parse(query: []const u8) ?Parsed {
     const tail = std.mem.trim(u8, target, " \t");
     const cut = opsStart(tail);
     const to = std.mem.trimEnd(u8, tail[0..cut], " \t");
-    return if (to.len == 0) null else .{ .amount = head.value, .from = from, .to = to, .ops = tail[cut..] };
+    return if (to.len == 0)
+        null
+    else
+        .{ .amount = head.value, .from = from, .to = to, .ops = tail[cut..] };
 }
 
 /// Where the operators after a conversion's target begin ("usd * 12" at the
 /// `*`), or `s.len`. A slash between letters is a unit's own ("km/h").
 fn opsStart(s: []const u8) usize {
     for (s, 0..) |ch, i| {
-        const in_unit = ch == '/' and i > 0 and i + 1 < s.len and std.ascii.isAlphabetic(s[i - 1]) and std.ascii.isAlphabetic(s[i + 1]);
+        const in_unit = ch == '/' and i > 0 and i + 1 < s.len and
+            std.ascii.isAlphabetic(s[i - 1]) and std.ascii.isAlphabetic(s[i + 1]);
         if (std.mem.indexOfScalar(u8, "*/+-%^", ch) != null and !in_unit) return i;
         for ([_][]const u8{ "×", "÷", "−" }) |op| if (std.mem.startsWith(u8, s[i..], op)) return i;
     }
@@ -258,12 +288,18 @@ pub const Rates = struct {
         if (body.len > max_bytes) return null;
         var tmp: std.heap.ArenaAllocator = .init(gpa);
         defer tmp.deinit();
-        const v = std.json.parseFromSliceLeaky(std.json.Value, tmp.allocator(), body, .{}) catch return null;
+        const v = std.json.parseFromSliceLeaky(
+            std.json.Value,
+            tmp.allocator(),
+            body,
+            .{},
+        ) catch return null;
         if (v != .object) return null;
         const day = v.object.get("date") orelse return null;
         const table = v.object.get("usd") orelse return null;
         if (day != .string or day.string.len != 10 or table != .object) return null;
-        for (day.string, 0..) |c, i| if (if (i == 4 or i == 7) c != '-' else !std.ascii.isDigit(c)) return null;
+        for (day.string, 0..) |c, i| if (if (i == 4 or
+            i == 7) c != '-' else !std.ascii.isDigit(c)) return null;
         var r: Rates = .{ .arena = .init(gpa), .date = day.string[0..10].* };
         const a = r.arena.allocator();
         var it = table.object.iterator();
@@ -328,7 +364,8 @@ pub fn answer(query: []const u8, rates: ?*const Rates) ?Answer {
         const x = a orelse return null;
         const y = b orelse return null;
         if (x.family != y.family) return null;
-        const v = calc.carry(((p.amount * x.scale + x.offset) - y.offset) / y.scale, p.ops) orelse return null;
+        const v = calc.carry(((p.amount * x.scale + x.offset) - y.offset) / y.scale, p.ops) orelse
+            return null;
         return .{ .unit = .{ .amount = p.amount, .value = v, .from = first(x), .to = first(y) } };
     }
     var fb: [3]u8 = undefined;
@@ -345,7 +382,14 @@ pub fn answer(query: []const u8, rates: ?*const Rates) ?Answer {
     const rt = table.get(t) orelse return null;
     const rate = rt / rf;
     const v = calc.carry(p.amount * rate, p.ops) orelse return null;
-    var m: Money = .{ .amount = p.amount, .value = v, .rate = rate, .from = undefined, .to = undefined, .date = table.date };
+    var m: Money = .{
+        .amount = p.amount,
+        .value = v,
+        .rate = rate,
+        .from = undefined,
+        .to = undefined,
+        .date = table.date,
+    };
     _ = std.ascii.upperString(&m.from, f);
     _ = std.ascii.upperString(&m.to, t);
     return .{ .money = m };
@@ -385,7 +429,8 @@ fn fixed(buf: []u8, v: f64, decimals: usize, grouped: bool) []const u8 {
 /// A converted amount of money: two places, more for a tiny one.
 pub fn formatMoney(buf: []u8, v: f64, grouped: bool) []const u8 {
     const a = @abs(v);
-    const places: usize = if (a >= 0.01 or a == 0) 2 else @intFromFloat(@min(10, @ceil(-@log10(a)) + 2));
+    const places: usize = if (a >= 0.01 or
+        a == 0) 2 else @intFromFloat(@min(10, @ceil(-@log10(a)) + 2));
     return fixed(buf, v, places, grouped);
 }
 
@@ -400,7 +445,11 @@ pub fn formatRate(buf: []u8, v: f64) []const u8 {
 /// "1 USD = 6.785 TTD · 2026-11-03".
 pub fn rateLine(buf: []u8, m: Money) []const u8 {
     var rb: [40]u8 = undefined;
-    return std.fmt.bufPrint(buf, "1 {s} = {s} {s} · {s}", .{ m.from, formatRate(&rb, m.rate), m.to, m.date }) catch "";
+    return std.fmt.bufPrint(
+        buf,
+        "1 {s} = {s} {s} · {s}",
+        .{ m.from, formatRate(&rb, m.rate), m.to, m.date },
+    ) catch "";
 }
 
 /// Six significant digits, "9.09091e-13": fixed decimals would print 0.
@@ -415,7 +464,11 @@ fn scientific(buf: []u8, v: f64) []const u8 {
 /// The unit answer as the row shows it, and as Return copies it.
 pub fn formatUnit(buf: []u8, a: UnitAnswer, grouped: bool) []const u8 {
     var nb: [64]u8 = undefined;
-    return std.fmt.bufPrint(buf, "{s} {s}", .{ formatUnitValue(&nb, a.value, grouped), a.to }) catch "";
+    return std.fmt.bufPrint(
+        buf,
+        "{s} {s}",
+        .{ formatUnitValue(&nb, a.value, grouped), a.to },
+    ) catch "";
 }
 
 /// The number of a unit answer, without its unit.
@@ -549,7 +602,9 @@ test "the parser splits on the first separator" {
 }
 
 const sample =
-    \\{"date":"2026-11-03","usd":{"1inch":1.2,"usd":1,"ttd":6.785,"eur":0.86,"gbp":0.75,"jpy":150.0,"zzz":0,"bad":"x"}}
+    \\{"date":"2026-11-03","usd":{"1inch":1.2,"usd":1,"ttd":6.785,"eur":0.86,"gbp":0.75,"jpy":150.0,
+++
+    \\"zzz":0,"bad":"x"}}
 ;
 
 test "rates read the fetched table" {
@@ -560,7 +615,15 @@ test "rates read the fetched table" {
     try testing.expectEqual(@as(f64, 1), r.get("usd").?);
     try testing.expect(r.get("1inch") == null);
     try testing.expect(r.get("zzz") == null);
-    for ([_][]const u8{ "", "<html>", "[]", "{\"usd\":{\"eur\":1}}", "{\"date\":\"2026-11-03\"}", "{\"date\":\"tomorrow!!\",\"usd\":{\"eur\":1}}", "{\"date\":\"2026-11-03\",\"usd\":{}}" }) |bad|
+    for ([_][]const u8{
+        "",
+        "<html>",
+        "[]",
+        "{\"usd\":{\"eur\":1}}",
+        "{\"date\":\"2026-11-03\"}",
+        "{\"date\":\"tomorrow!!\",\"usd\":{\"eur\":1}}",
+        "{\"date\":\"2026-11-03\",\"usd\":{}}",
+    }) |bad|
         try testing.expect(Rates.parse(testing.allocator, bad) == null);
 }
 
@@ -581,7 +644,11 @@ test "currencies cross through the dollar" {
     try testing.expectApproxEqRel(@as(f64, 86), answer("$100 to €", &r).?.money.value, 1e-12);
     try testing.expectApproxEqRel(@as(f64, 86), answer("100 $ to €", &r).?.money.value, 1e-12);
     try testing.expectApproxEqRel(@as(f64, 15000), answer("100 $ in ¥", &r).?.money.value, 1e-12);
-    try testing.expectApproxEqRel(@as(f64, 100.0 / 0.75), answer("£100 in usd", &r).?.money.value, 1e-12);
+    try testing.expectApproxEqRel(
+        @as(f64, 100.0 / 0.75),
+        answer("£100 in usd", &r).?.money.value,
+        1e-12,
+    );
     // A code the table lacks is not a conversion; no table is pending.
     try testing.expect(answer("100 usd to xyz", &r) == null);
     try testing.expect(answer("10 foo to bar", &r) == null);
@@ -629,7 +696,11 @@ test "math around a conversion: the amount before it, the answer after it" {
     try expectUnit(18, "10 m/s to km/h / 2");
     try expectUnit(180, "100 c to f - 32");
     try expectUnit(29.5735295625 * 2, "1 fl oz to ml × 2");
-    try testing.expectApproxEqRel(@as(f64, 24.0 / 6.785), answer("12 ttd to usd * (1 + 1)", &r).?.money.value, 1e-12);
+    try testing.expectApproxEqRel(
+        @as(f64, 24.0 / 6.785),
+        answer("12 ttd to usd * (1 + 1)", &r).?.money.value,
+        1e-12,
+    );
     try testing.expectApproxEqRel(@as(f64, 80), answer("$100 to € - 6", &r).?.money.value, 1e-12);
 }
 
@@ -669,10 +740,22 @@ test "math that doesn't compute is not a conversion, pending or not" {
 
 test "tiny unit results keep their digits" {
     var buf: [64]u8 = undefined;
-    try testing.expectEqualStrings("1e-12 km", formatUnit(&buf, answer("1 nm to km", null).?.unit, true));
-    try testing.expectEqualStrings("9.09495e-13 TiB", formatUnit(&buf, answer("1 b to tib", null).?.unit, true));
-    try testing.expectEqualStrings("1e-12", formatUnitValue(&buf, answer("1 nm to km", null).?.unit.value, false));
-    try testing.expectEqualStrings("0.5 km", formatUnit(&buf, answer("500 m to km", null).?.unit, true));
+    try testing.expectEqualStrings(
+        "1e-12 km",
+        formatUnit(&buf, answer("1 nm to km", null).?.unit, true),
+    );
+    try testing.expectEqualStrings(
+        "9.09495e-13 TiB",
+        formatUnit(&buf, answer("1 b to tib", null).?.unit, true),
+    );
+    try testing.expectEqualStrings(
+        "1e-12",
+        formatUnitValue(&buf, answer("1 nm to km", null).?.unit.value, false),
+    );
+    try testing.expectEqualStrings(
+        "0.5 km",
+        formatUnit(&buf, answer("500 m to km", null).?.unit, true),
+    );
 }
 
 test "money and rates read as people write them" {

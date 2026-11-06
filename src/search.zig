@@ -49,7 +49,8 @@ pub fn wordStart(name: []const u8, i: usize) bool {
     if (i == 0) return true;
     const prev = name[i - 1];
     const ch = name[i];
-    if (prev == ' ' or prev == '-' or prev == '_' or prev == '.' or prev == '/' or prev == '(') return ch != ' ';
+    if (prev == ' ' or prev == '-' or prev == '_' or prev == '.' or prev == '/' or
+        prev == '(') return ch != ' ';
     return std.ascii.isUpper(ch) and std.ascii.isLower(prev);
 }
 
@@ -82,10 +83,18 @@ fn scoreAscii(query: []const u8, name: []const u8) ?Match {
     // A word's start: "code" in Visual Studio Code.
     var at: usize = 0;
     while (indexOfFold(name, query, at)) |i| : (at = i + 1) {
-        if (wordStart(name, i)) return .run(800 - slack - @as(i32, @intCast(@min(i, 60))), i, query.len);
+        if (wordStart(name, i)) return .run(
+            800 - slack - @as(i32, @intCast(@min(i, 60))),
+            i,
+            query.len,
+        );
     }
     if (initials(query, name)) |m| return m;
-    if (indexOfFold(name, query, 0)) |i| return .run(600 - slack - @as(i32, @intCast(@min(i, 60))), i, query.len);
+    if (indexOfFold(name, query, 0)) |i| return .run(
+        600 - slack - @as(i32, @intCast(@min(i, 60))),
+        i,
+        query.len,
+    );
     return subsequence(query, name) orelse typo(query, name);
 }
 
@@ -100,8 +109,10 @@ fn cpWordStart(name: []const u8, byte_i: usize) bool {
     }
     const prev = text.decodeAt(name, pi) orelse return true;
     const prev_cp = prev.cp;
-    if (prev_cp == ' ' or prev_cp == '-' or prev_cp == '_' or prev_cp == '.' or prev_cp == '/' or prev_cp == '(') return ch_cp != ' ';
-    if (ch_cp < 0x80 and prev_cp < 0x80) return std.ascii.isUpper(@intCast(ch_cp)) and std.ascii.isLower(@intCast(prev_cp));
+    if (prev_cp == ' ' or prev_cp == '-' or prev_cp == '_' or prev_cp == '.' or prev_cp == '/' or
+        prev_cp == '(') return ch_cp != ' ';
+    if (ch_cp < 0x80 and prev_cp < 0x80) return std.ascii.isUpper(@intCast(ch_cp)) and
+        std.ascii.isLower(@intCast(prev_cp));
     if (ch_cp >= 0x3400 and ch_cp <= 0x9FFF) return true;
     return false;
 }
@@ -214,7 +225,8 @@ fn typo(query: []const u8, name: []const u8) ?Match {
         if (!wordStart(name, s)) continue;
         const word = name[s..@min(name.len, s + max_n)];
         const r = dist(&t, query, word);
-        if (r.errs <= most and (best == null or r.errs < best.?.errs)) best = .{ .errs = r.errs, .start = s, .end = r.end };
+        if (r.errs <= most and (best == null or
+            r.errs < best.?.errs)) best = .{ .errs = r.errs, .start = s, .end = r.end };
     }
     const b = best orelse return null;
     // The bytes that line up with the query's, for the row's highlight.
@@ -246,7 +258,12 @@ fn typo(query: []const u8, name: []const u8) ?Match {
             i -= 1;
         } else j -= 1;
     }
-    var m: Match = .{ .score = 260 - 70 * @as(i32, b.errs) - @as(i32, @intCast(@min(name.len, 60) / 4)) - @as(i32, @intCast(@min(b.start, 20))) };
+    var m: Match = .{
+        .score = 260 - 70 * @as(i32, b.errs) - @as(
+            i32,
+            @intCast(@min(name.len, 60) / 4),
+        ) - @as(i32, @intCast(@min(b.start, 20))),
+    };
     var k = @min(n, back.len);
     while (k > 0) : (k -= 1) m.add(back[k - 1]);
     return m;
@@ -405,9 +422,15 @@ test "the tiers rank as they should" {
     const t = std.testing;
     try t.expect(score("safari", "Safari").?.score > score("saf", "Safari").?.score);
     try t.expect(score("saf", "Safari").?.score > score("code", "Visual Studio Code").?.score);
-    try t.expect(score("code", "Visual Studio Code").?.score > score("vsc", "Visual Studio Code").?.score);
-    try t.expect(score("vsc", "Visual Studio Code").?.score > score("tudi", "Visual Studio Code").?.score);
-    try t.expect(score("tudi", "Visual Studio Code").?.score > score("vsco", "Visual Studio Code").?.score);
+    try t.expect(
+        score("code", "Visual Studio Code").?.score > score("vsc", "Visual Studio Code").?.score,
+    );
+    try t.expect(
+        score("vsc", "Visual Studio Code").?.score > score("tudi", "Visual Studio Code").?.score,
+    );
+    try t.expect(
+        score("tudi", "Visual Studio Code").?.score > score("vsco", "Visual Studio Code").?.score,
+    );
     try t.expect(score("xyz", "Safari") == null);
     try t.expect(score("", "Safari") == null);
 }
@@ -430,7 +453,11 @@ test "typos still find the app, below every exact match" {
     try t.expect(score("calandr", "Calendar") != null);
     try t.expect(score("sistem", "System Settings") != null);
     // The word it misspells is the one lit: "Chrome", not "Google".
-    try t.expectEqualSlices(u8, &.{ 7, 8, 9, 10, 11, 12 }, score("chorme", "Google Chrome").?.matched());
+    try t.expectEqualSlices(
+        u8,
+        &.{ 7, 8, 9, 10, 11, 12 },
+        score("chorme", "Google Chrome").?.matched(),
+    );
     try t.expect(score("notse", "Notes").?.score < score("nts", "Notes").?.score);
     // Too far, or too short to guess at.
     try t.expect(score("zebra", "Safari") == null);
