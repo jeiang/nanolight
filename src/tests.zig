@@ -273,7 +273,7 @@ fn retype(t: *ui.Tester, q: []const u8) void {
     press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = q } });
 }
 
-test "a long paste is cut to the longest query, on a character boundary" {
+test "a long paste is cut to the longest query, on a character boundary, a whole path is not" {
     const gpa = std.testing.allocator;
     var ix: Index = .init(gpa);
     defer ix.deinit();
@@ -288,6 +288,13 @@ test "a long paste is cut to the longest query, on a character boundary" {
     });
     defer t.deinit();
     t.settle(1);
+    // A file path as long as any found one is kept whole.
+    var path: [view.max_query_bytes]u8 = undefined;
+    path[0] = '/';
+    @memset(path[1..], 'a');
+    press(&t, &.{.{ .insert = &path }});
+    try std.testing.expectEqualStrings(&path, s.query.text());
+    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
     var paste: [view.max_query_bytes + 1]u8 = undefined;
     @memset(paste[0 .. view.max_query_bytes - 1], '(');
     @memcpy(paste[view.max_query_bytes - 1 ..], "é");

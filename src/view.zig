@@ -51,10 +51,14 @@ pub const Host = struct {
 pub const width: f32 = 680;
 
 /// The longest query kept: a longer paste is cut here, as math, ranking and
-/// hashing read the whole query each frame. Room for any query Google is asked.
-pub const max_query_bytes = 512;
+/// hashing read the whole query each frame. It is the longest file path the
+/// field must hold (Tab takes a found file's whole path, `files_view.takeFile`),
+/// and room for any query Google is asked.
+pub const max_query_bytes = files.max_path;
 comptime {
     std.debug.assert(max_query_bytes >= suggest.max_len);
+    // A found path is shorter than `files.max_path`; a folder's adds a "/".
+    std.debug.assert(max_query_bytes >= files.max_path);
 }
 
 /// The app's icon (icon.png, made smaller), for the panel.
