@@ -145,6 +145,8 @@ const Rig = struct {
         rows: bool = false,
         /// The script is silent: its screen goes as it starts.
         silent: bool = false,
+        /// Its row's icon.
+        icon: ?[]const u8 = null,
     };
 
     /// In place: the panel, the screen and the host point at each other.
@@ -169,7 +171,8 @@ const Rig = struct {
     }
 
     fn script(r: *Rig) void {
-        r.ext.start(.{ .name = "Greet" }, .{ .ctx = &r.host, .func = Answering.said });
+        const command: rv.Command = .{ .name = "Greet", .icon = r.opts.icon };
+        r.ext.start(command, .{ .ctx = &r.host, .func = Answering.said });
         if (r.opts.silent) return r.ext.stop();
         if (r.opts.first) |first| r.host.show(first);
     }
@@ -401,4 +404,35 @@ test "Settings or Clipboard History opened over a script's screen end the script
     try std.testing.expect(!r.t.containsText("from a script"));
     r.s.openClipboard();
     try std.testing.expect(r.s.clip_ui.open and !r.s.settings_ui.open);
+}
+
+test "a script's icon outlives the index it came from" {
+    const gpa = std.testing.allocator;
+    // The index's icon, in page memory: handed back to the system when the
+    // index is replaced, so a read of it afterwards faults.
+    const png = try std.heap.page_allocator.dupe(u8, view.icon_png);
+    var r: Rig = undefined;
+    r.init(gpa, .{ .first = .output, .icon = png }) catch |err| {
+        std.heap.page_allocator.free(png);
+        return err;
+    };
+    defer r.deinit();
+    // The apps change while the screen is up (script_live.zig `refresh`).
+    std.heap.page_allocator.free(png);
+    r.t.settle(1);
+    // A window whose image cache starts empty, as after an eviction, reads
+    // the icon's bytes again.
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&r.s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = view.max_height,
+        .dark = true,
+    });
+    defer t.deinit();
+    t.settle(1);
+    try std.testing.expect(t.hasText("from a script"));
+    // Escape stops the screen while a frame is drawn: its icon goes after.
+    _ = t.shortcut(.{ .key = ui.Shortcut.escape });
+    try std.testing.expect(!r.ext.open and r.ext.icon == null);
+    t.settle(1);
 }

@@ -31,9 +31,58 @@ pub const Sender = struct {
 };
 
 /// The command's name and its icon (PNG), for the header and the footer.
+/// The screen copies both: they may come from an index that is replaced
+/// while it is up (script_live.zig `refresh`).
 pub const Command = struct {
     name: []const u8,
     icon: ?[]const u8 = null,
+};
+
+/// An arena whose contents frames draw. Replaced after a frame drew from
+/// it, it is kept until the next frame starts (`frame`): that frame's nodes
+/// may still point into it. One slot: a frame draws from the arena it found
+/// at its start, and an arena no frame drew from is freed at once.
+const Held = struct {
+    arena: ?std.heap.ArenaAllocator = null,
+    /// A frame drew from `arena`.
+    drawn: bool = false,
+    /// The arena a frame drew from, replaced since.
+    retired: ?std.heap.ArenaAllocator = null,
+
+    fn set(h: *Held, arena: std.heap.ArenaAllocator) void {
+        h.release();
+        h.arena = arena;
+    }
+
+    /// Lets go of the arena: freed now if no frame drew from it, else
+    /// kept until the next frame.
+    fn release(h: *Held) void {
+        var old = h.arena orelse return;
+        h.arena = null;
+        if (!h.drawn) return old.deinit();
+        h.drawn = false;
+        // Only the arena a frame drew from is kept, and the next frame
+        // frees it before it draws.
+        assert(h.retired == null);
+        h.retired = old;
+    }
+
+    /// A frame starts: the last one's nodes are gone, so what it drew from
+    /// can go, and this one draws from `arena`.
+    fn frame(h: *Held) void {
+        h.freeRetired();
+        h.drawn = h.arena != null;
+    }
+
+    fn freeRetired(h: *Held) void {
+        if (h.retired) |*a| a.deinit();
+        h.retired = null;
+    }
+
+    fn deinit(h: *Held) void {
+        h.release();
+        h.freeRetired();
+    }
 };
 
 pub const Ext = struct {
@@ -41,19 +90,14 @@ pub const Ext = struct {
     open: bool = false,
     name_buf: [96]u8 = undefined,
     name_len: usize = 0,
+    /// The command's icon, in `screen`, which lives as long as the screen.
     icon: ?[]const u8 = null,
-    /// The top view and the arena it lives in (one per render). A frame
-    /// reads `view` once, at the top of `panel`: an event sent while it
-    /// draws can replace it.
-    arena: ?std.heap.ArenaAllocator = null,
+    screen: Held = .{},
+    /// The top view, in `held` (one arena per render). A frame reads
+    /// `view` once, at the top of `panel`: an event sent while it draws can
+    /// replace it.
     view: ?model.View = null,
-    /// The arena a frame drew from, replaced since: the frame's nodes may
-    /// still point into it, so it is freed at the top of the next `panel`
-    /// (or at `deinit`). One slot: a frame draws from one arena, and an
-    /// arena no frame drew from is freed at once.
-    retired: ?std.heap.ArenaAllocator = null,
-    /// A frame drew from `arena`.
-    drawn: bool = false,
+    held: Held = .{},
     /// `panel` is building a frame.
     rendering: bool = false,
     actions_open: bool = false,
@@ -80,7 +124,10 @@ pub const Ext = struct {
         const n = @min(command.name.len, e.name_buf.len);
         @memcpy(e.name_buf[0..n], command.name[0..n]);
         e.name_len = n;
-        e.icon = command.icon;
+        var arena: std.heap.ArenaAllocator = .init(e.gpa);
+        // Out of memory: the screen goes without its icon.
+        e.icon = if (command.icon) |png| arena.allocator().dupe(u8, png) catch null else null;
+        e.screen.set(arena);
         e.to = to;
         e.open = true;
     }
@@ -88,7 +135,9 @@ pub const Ext = struct {
     pub fn stop(e: *Ext) void {
         e.open = false;
         e.view = null;
-        e.release();
+        e.held.release();
+        e.icon = null;
+        e.screen.release();
         e.actions_open = false;
         e.note_len = 0;
         e.form_key = 0;
@@ -105,39 +154,20 @@ pub const Ext = struct {
     pub fn deinit(e: *Ext) void {
         assert(!e.rendering);
         e.stop();
-        e.freeRetired();
+        e.held.deinit();
+        e.screen.deinit();
         for (&e.fields) |*f| f.deinit();
     }
 
     /// The host's new top view; `arena` holds it and is now this one's.
     pub fn show(e: *Ext, arena: std.heap.ArenaAllocator, v: model.View) void {
         assert(e.open);
-        e.release();
-        e.arena = arena;
+        e.held.set(arena);
         e.view = v;
         switch (v) {
             .form => |f| e.loadForm(f),
             .detail => {},
         }
-    }
-
-    /// Lets go of the view's arena: freed now if no frame drew from it,
-    /// else kept until the next frame.
-    fn release(e: *Ext) void {
-        var old = e.arena orelse return;
-        e.arena = null;
-        if (!e.drawn) return old.deinit();
-        e.drawn = false;
-        // Only the arena a frame drew from is kept, and the next frame
-        // frees it before it draws.
-        assert(e.retired == null);
-        e.retired = old;
-    }
-
-    fn freeRetired(e: *Ext) void {
-        assert(!e.rendering);
-        if (e.retired) |*a| a.deinit();
-        e.retired = null;
     }
 
     /// Says `text` in the footer for a while, from the next frame.
@@ -196,8 +226,8 @@ pub const Ext = struct {
     pub fn panel(e: *Ext, c: *ui.Context, n: *pview.Nanolight, p: Palette) void {
         // Nodes of the last frame are gone: what it drew from can go too.
         assert(!e.rendering);
-        e.freeRetired();
-        e.drawn = e.arena != null;
+        e.held.frame();
+        e.screen.frame();
         e.rendering = true;
         defer e.rendering = false;
         const h = n.follow(e.height());
