@@ -677,22 +677,9 @@ const version = @import("build_options").version;
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
 pub fn main(init: std.process.Init) !void {
-    // `nanolight --toggle`: the running copy's panel (Wayland's shortcut);
-    // `--version`: what the updater asks a downloaded copy.
     var arena: std.heap.ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
-    for (try init.minimal.args.toSlice(arena.allocator())) |arg| {
-        if (std.mem.eql(u8, arg, "--version")) {
-            var out: [64]u8 = undefined;
-            var w = std.Io.File.stdout().writer(init.io, &out);
-            try w.interface.print("nanolight {s}\n", .{version});
-            return w.interface.flush();
-        }
-        if (std.mem.eql(u8, arg, "--toggle")) {
-            if (single.send(.toggle)) return;
-            break;
-        }
-    }
+    if (try answeredArgs(init, try init.minimal.args.toSlice(arena.allocator()))) return;
     // Linux: GTK 3, where a window can be put somewhere (GTK 4 lets only
     // the compositor place one), unless the user asked for another.
     if (builtin.os.tag == .linux and std.c.getenv("NANOUI_GTK") == null) _ = setenv("NANOUI_GTK", "3", 0);
@@ -728,16 +715,7 @@ pub fn main(init: std.process.Init) !void {
     s.pop_after = cfg.pop_to_root_seconds;
     if (!app.flags.hidden) _ = live.setQuicklinks(config.loadQuicklinks(cfg_arena.allocator(), kv));
     @import("files_live.zig").load(&live);
-    // Google's completions are on unless turned off in Settings.
-    if (kv.get(init.gpa, suggest_key) catch null) |v| {
-        defer init.gpa.free(v);
-        s.suggest_on = !std.mem.eql(u8, v, "0");
-    }
-    if (kv.get(init.gpa, searches_out_key) catch null) |v| {
-        defer init.gpa.free(v);
-        s.searches_out = std.mem.eql(u8, v, "1");
-    }
-    s.theme = @import("settings_bind.zig").loadTheme(kv, init.gpa);
+    loadPreferences(&s, kv, init.gpa);
     s.reveal();
     // The rows first, so a snapshot is as tall as the panel.
     s.rebuild();
@@ -751,28 +729,69 @@ pub fn main(init: std.process.Init) !void {
     panel.adjust(&options, app.flags.hidden, s.height());
     live.window = try app.newWindow(options);
     if (app.flags.hidden) return app.run();
+    try runShown(init, &live, loaded);
+}
+
+/// `nanolight --toggle`: the running copy's panel (Wayland's shortcut);
+/// `--version`: what the updater asks a downloaded copy. True when the
+/// arguments were the whole job.
+fn answeredArgs(init: std.process.Init, args: []const [:0]const u8) !bool {
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--version")) {
+            var out: [64]u8 = undefined;
+            var w = std.Io.File.stdout().writer(init.io, &out);
+            try w.interface.print("nanolight {s}\n", .{version});
+            try w.interface.flush();
+            return true;
+        }
+        if (std.mem.eql(u8, arg, "--toggle")) return single.send(.toggle);
+    }
+    return false;
+}
+
+/// The settings kept outside the config: Google's completions (on unless
+/// turned off in Settings), searches sent out, and the theme.
+fn loadPreferences(s: *Nanolight, kv: nanoui.kv.Store, gpa: std.mem.Allocator) void {
+    if (kv.get(gpa, suggest_key) catch null) |v| {
+        defer gpa.free(v);
+        s.suggest_on = !std.mem.eql(u8, v, "0");
+    }
+    if (kv.get(gpa, searches_out_key) catch null) |v| {
+        defer gpa.free(v);
+        s.searches_out = std.mem.eql(u8, v, "1");
+    }
+    s.theme = @import("settings_bind.zig").loadTheme(kv, gpa);
+}
+
+/// A run with a person at it: script commands, the clipboard history, the
+/// hotkey, the menu bar, updates and sync, then the app's loop.
+fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
+    const app = live.app;
+    const s = live.s;
+    const o = live.o;
+    const kv = live.kv;
     // Script commands among the apps (never in headless runs: they're this
     // machine's).
-    rc.init(&live, init.environ_map);
-    defer rc.deinit(&live);
+    rc.init(live, init.environ_map);
+    defer rc.deinit(live);
     commands.init(init.io, init.environ_map);
-    live.cmds = .{ .io = app.io, .hooks = .{ .ctx = &live, .footer = Live.commandFooter, .done = Live.commandDone } };
+    live.cmds = .{ .io = app.io, .hooks = .{ .ctx = live, .footer = Live.commandFooter, .done = Live.commandDone } };
     defer live.cmds.deinit();
-    rc.rescan(&live);
+    rc.rescan(live);
     var clip_dir = clipboard_live.openDir(init.gpa, init.io);
     defer if (clip_dir) |*d| d.close(init.io);
     const clip_cfg = config.clipboardConfig(kv, init.gpa, loaded);
     var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, clip_cfg);
     defer clip_store.deinit();
     // No data directory, no history: nothing could be kept.
-    if (clip_dir != null) clipboard_live.init(&live, &clip_store);
-    defer clipboard_live.deinit(&live);
+    if (clip_dir != null) clipboard_live.init(live, &clip_store);
+    defer clipboard_live.deinit(live);
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
-    if (single.claim(.{ .ctx = &live, .func = Live.command }) > 0) std.log.info("nanolight: asked an older copy to quit", .{});
-    panel.setup(app, live.window.?, &s, if (o.active) o.height() else s.height());
+    if (single.claim(.{ .ctx = live, .func = Live.command }) > 0) std.log.info("nanolight: asked an older copy to quit", .{});
+    panel.setup(app, live.window.?, s, if (o.active) o.height() else s.height());
     live.useKey(live.choice);
     live.through = .{ .window = live.window, .height = &s.last_h };
-    live.preview.watch(.{ .ctx = &live, .func = Live.pageKey });
+    live.preview.watch(.{ .ctx = live, .func = Live.pageKey });
     o.hooks = live.hooks();
     // The first run: the welcome, in the panel.
     if (!shortcut.onboarded(kv)) o.start(live.choice);
@@ -782,40 +801,50 @@ pub fn main(init: std.process.Init) !void {
         defer init.gpa.free(v);
         if (std.mem.eql(u8, v, "0")) _ = live.menuBar(false);
     }
-    // A release build checks its GitHub releases; one run from zig-out
-    // can't replace itself, and leaves the item off. A Nix build never
-    // updates itself.
-    const updater = if (nix_managed) null else nanoui.Updater.start(init, .{
+    const updater = startUpdater(init, live);
+    defer if (updater) |u| u.deinit();
+    // `[sync]` names a server: synced now.
+    live.acct = .{ .gpa = init.gpa, .io = init.io, .kv = kv, .hooks = live.accountHooks(), .cfg = live.cfg.sync };
+    live.acct.?.load();
+    live.menu();
+    var note_buf: [64]u8 = undefined;
+    greet(init.gpa, live, &note_buf);
+    try app.run();
+}
+
+/// A release build checks its GitHub releases; one run from zig-out
+/// can't replace itself, and leaves the item off. A Nix build never
+/// updates itself. The caller ends what this returns.
+fn startUpdater(init: std.process.Init, live: *Live) ?*nanoui.Updater {
+    if (nix_managed) return null;
+    const u = nanoui.Updater.start(init, .{
         .repo = "jeiang/nanolight",
         .asset = asset,
         .version = version,
         .name = "Nanolight",
-        .changed = .{ .ctx = &live, .func = Live.updated },
-    }) catch null;
-    defer if (updater) |u| u.deinit();
-    if (updater) |u| if (u.phase.load(.acquire) != .off) {
-        live.updater = u;
-        // A launcher almost never quits, so installing at quit would mean
-        // never: it restarts into an update once the panel has been away
-        // 10 s, unseen, and comes back as it was (update_pc.zig off the Mac).
-        u.autoRestart(app, .{ .idle_ms = 10 * 1000 });
-    };
-    // `[sync]` names a server: synced now.
-    live.acct = .{ .gpa = init.gpa, .io = init.io, .kv = kv, .hooks = live.accountHooks(), .cfg = cfg.sync };
-    live.acct.?.load();
-    live.menu();
-    // Restarted by an automatic update: quietly, the panel saying so the
-    // next time it opens. Otherwise launching stays in the background,
-    // the key or the menu bar icon opening the panel, unless the welcome
-    // is due.
-    var note_buf: [64]u8 = undefined;
-    const old = kv.get(init.gpa, updated_key) catch null;
-    defer if (old) |v| init.gpa.free(v);
+        .changed = .{ .ctx = live, .func = Live.updated },
+    }) catch return null;
+    if (u.phase.load(.acquire) == .off) return u;
+    live.updater = u;
+    // A launcher almost never quits, so installing at quit would mean
+    // never: it restarts into an update once the panel has been away
+    // 10 s, unseen, and comes back as it was (update_pc.zig off the Mac).
+    u.autoRestart(live.app, .{ .idle_ms = 10 * 1000 });
+    return u;
+}
+
+/// Restarted by an automatic update: quietly, the panel saying so the
+/// next time it opens (in `note_buf`). Otherwise launching stays in the
+/// background, the key or the menu bar icon opening the panel, unless the
+/// welcome is due.
+fn greet(gpa: std.mem.Allocator, live: *Live, note_buf: *[64]u8) void {
+    const kv = live.kv;
+    const old = kv.get(gpa, updated_key) catch null;
+    defer if (old) |v| gpa.free(v);
     if (old != null) kv.remove(updated_key);
     const restarted = if (live.updater) |u| u.updatedFrom() != null else false;
     if (restarted or old != null) {
         const now = if (live.updater) |u| u.current else old.?;
-        s.note = std.fmt.bufPrint(&note_buf, "Updated to {s}", .{now}) catch "Updated";
-    } else if (o.active) Live.toggle(&live);
-    try app.run();
+        live.s.note = std.fmt.bufPrint(note_buf, "Updated to {s}", .{now}) catch "Updated";
+    } else if (live.o.active) Live.toggle(live);
 }

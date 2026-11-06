@@ -194,14 +194,7 @@ pub const Results = struct {
     /// each was opened) and in `found`, the quicklinks `ql`, and Google's
     /// completions of it (`web`), or `suggestions` when the query is empty.
     pub fn build(r: *Results, query_in: []const u8, ix: *const Index, suggestions: []const u32, web: []const []const u8, ql: []const Quicklink) void {
-        r.n = 0;
-        r.google = null;
-        r.keyed = null;
-        r.copy = "";
-        r.expr = "";
-        r.note = "";
-        r.need_rates = false;
-        r.pending = false;
+        r.clear();
         const query = std.mem.trim(u8, query_in, " ");
         r.suggested = query.len == 0;
         if (query.len == 0) {
@@ -212,17 +205,7 @@ pub const Results = struct {
         // stays while the next number is typed.
         const math = std.mem.trimEnd(u8, query, " +-*/%^×÷");
         if (calc.eval(math)) |v| {
-            r.answer = calc.format(&r.answer_buf, v, true);
-            r.copy = calc.format(&r.copy_buf, v, false);
-            if (math.len < query.len and math.len <= r.expr_buf.len) {
-                @memcpy(r.expr_buf[0..math.len], math);
-                r.expr = r.expr_buf[0..math.len];
-            }
-            r.hex = if (v >= 0 and v < 1e15 and v == @round(v))
-                std.fmt.bufPrint(&r.hex_buf, "0x{X}", .{@as(u64, @intFromFloat(v))}) catch ""
-            else
-                "";
-            r.push(.{ .kind = .calc });
+            r.calcRow(v, math, query.len);
         } else if (convert.answer(math, r.rates)) |a| {
             r.pending = a == .pending;
             r.convertRow(a);
@@ -272,6 +255,34 @@ pub const Results = struct {
             r.push(.{ .kind = .quicklink, .ql = @intCast(i) });
             if (r.google == @as(u16, @intCast(i))) for (0..@min(web.len, max_web, room)) |j| r.push(.{ .kind = .suggest, .web = @intCast(j) });
         }
+    }
+
+    /// Nothing listed, and nothing left from the last query's cards.
+    fn clear(r: *Results) void {
+        r.n = 0;
+        r.google = null;
+        r.keyed = null;
+        r.copy = "";
+        r.expr = "";
+        r.note = "";
+        r.need_rates = false;
+        r.pending = false;
+    }
+
+    /// The math's card for `v`: shown, copied, in hexadecimal when whole,
+    /// and, when `math` is the start of a longer query, the expression so far.
+    fn calcRow(r: *Results, v: f64, math: []const u8, query_len: usize) void {
+        r.answer = calc.format(&r.answer_buf, v, true);
+        r.copy = calc.format(&r.copy_buf, v, false);
+        if (math.len < query_len and math.len <= r.expr_buf.len) {
+            @memcpy(r.expr_buf[0..math.len], math);
+            r.expr = r.expr_buf[0..math.len];
+        }
+        r.hex = if (v >= 0 and v < 1e15 and v == @round(v))
+            std.fmt.bufPrint(&r.hex_buf, "0x{X}", .{@as(u64, @intFromFloat(v))}) catch ""
+        else
+            "";
+        r.push(.{ .kind = .calc });
     }
 
     /// The row Return acts on when `sel` is chosen: a pending card has no

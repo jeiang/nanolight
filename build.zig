@@ -46,29 +46,13 @@ pub fn build(b: *std.Build) void {
     // A release is shipped without its debug info (15 MB to 2.8 MB on Linux).
     if (optimize != .debug) exe.root_module.strip = true;
     b.installArtifact(exe);
-    // `zig build check`: compiles without linking, so a machine without the
-    // target's SDK still type-checks it. `-Dsdk=<dir>` points at stub
-    // frameworks and libraries (`<dir>/System/Library/Frameworks`, `<dir>/usr/lib`).
-    const chk = b.addObject(.{ .name = "nanolight-check", .root_module = exe.root_module });
-    if (b.option([]const u8, "sdk", "SDK root whose frameworks and libraries satisfy `check` (any target)")) |sdk| {
-        exe.root_module.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sdk}) });
-        exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib", .{sdk}) });
-    }
-    b.step("check", "Type-check without linking").dependOn(&chk.step);
+    addCheck(b, exe);
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     b.step("run", "Run Nanolight (⌘Space)").dependOn(&run.step);
 
     // zig-out/Nanolight.app: the program with its icon, for /Applications.
-    if (os == .macos) {
-        const app = b.addInstallDirectory(.{
-            .source_dir = bundle(b, exe, app_options.version),
-            .install_dir = .prefix,
-            .install_subdir = "Nanolight.app",
-        });
-        b.getInstallStep().dependOn(&app.step);
-        b.step("app", "Build zig-out/Nanolight.app").dependOn(&app.step);
-    }
+    if (os == .macos) addAppBundle(b, exe, app_options.version);
 
     const tests = b.addTest(.{ .root_module = appModule(b, "src/tests.zig", app_options) });
     // zig-out/bin/nanolight-tests: the tests, to run on another machine.
@@ -76,8 +60,53 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Test Nanolight's search, math, suggestions and panel, and the lint");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
-    // `zig build lint`: zig fmt's check, and the TigerStyle rules a machine
-    // can check (tools/lint.zig, docs/TIGER_STYLE.md).
+    addLint(b, test_step);
+    addServer(b, target, optimize);
+    addCheckConfig(b, target, optimize);
+
+    // Runs the Linux clipboard watcher without the panel (src/clipboard_probe.zig).
+    if (os == .linux) {
+        const probe = b.addExecutable(.{
+            .name = "clip-probe",
+            .root_module = appModule(b, "src/clipboard_probe.zig", app_options),
+        });
+        b.step("clip-probe", "Build the Linux clipboard probe (zig-out/bin/clip-probe)").dependOn(&b.addInstallArtifact(probe, .{}).step);
+    }
+
+    addReleaseSteps(b, .{
+        .version = version_option,
+        .test_step = test_step,
+        .nix = app_options.nix_managed,
+    });
+}
+
+/// `zig build check`: compiles without linking, so a machine without the
+/// target's SDK still type-checks it. `-Dsdk=<dir>` points at stub
+/// frameworks and libraries (`<dir>/System/Library/Frameworks`, `<dir>/usr/lib`).
+fn addCheck(b: *std.Build, exe: *std.Build.Step.Compile) void {
+    const chk = b.addObject(.{ .name = "nanolight-check", .root_module = exe.root_module });
+    if (b.option([]const u8, "sdk", "SDK root whose frameworks and libraries satisfy `check` (any target)")) |sdk| {
+        exe.root_module.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sdk}) });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib", .{sdk}) });
+    }
+    b.step("check", "Type-check without linking").dependOn(&chk.step);
+}
+
+/// zig-out/Nanolight.app, installed with the program and as `zig build app`.
+fn addAppBundle(b: *std.Build, exe: *std.Build.Step.Compile, version: []const u8) void {
+    const app = b.addInstallDirectory(.{
+        .source_dir = bundle(b, exe, version),
+        .install_dir = .prefix,
+        .install_subdir = "Nanolight.app",
+    });
+    b.getInstallStep().dependOn(&app.step);
+    b.step("app", "Build zig-out/Nanolight.app").dependOn(&app.step);
+}
+
+/// `zig build lint`: zig fmt's check, and the TigerStyle rules a machine
+/// can check (tools/lint.zig, docs/TIGER_STYLE.md). Its own tests run in
+/// `test_step`.
+fn addLint(b: *std.Build, test_step: *std.Build.Step) void {
     const lint = b.addExecutable(.{ .name = "lint", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/lint.zig"),
         .target = b.graph.host,
@@ -92,8 +121,14 @@ pub fn build(b: *std.Build) void {
     lint_step.dependOn(&b.addFmt(.{ .paths = &fmt_paths, .check = true }).step);
     lint_step.dependOn(&lint_run.step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = lint.root_module })).step);
+}
 
-    // nanolight-server: the sync server (src/server.zig). Plain std, no nanoui.
+/// nanolight-server: the sync server (src/server.zig). Plain std, no nanoui.
+fn addServer(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) void {
     const server = b.addExecutable(.{ .name = "nanolight-server", .root_module = b.createModule(.{
         .root_source_file = b.path("src/server.zig"),
         .target = target,
@@ -101,9 +136,15 @@ pub fn build(b: *std.Build) void {
     }) });
     if (optimize != .debug) server.root_module.strip = true;
     b.step("server", "Build the sync server (zig-out/bin/nanolight-server)").dependOn(&b.addInstallArtifact(server, .{}).step);
+}
 
-    // Reads config.toml files as the app does (src/check_config.zig); the flake's
-    // config-parse check runs it on what the Nix modules write.
+/// Reads config.toml files as the app does (src/check_config.zig); the flake's
+/// config-parse check runs it on what the Nix modules write.
+fn addCheckConfig(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) void {
     const check_config = b.addExecutable(.{
         .name = "nanolight-check-config",
         .root_module = b.createModule(.{
@@ -121,21 +162,6 @@ pub fn build(b: *std.Build) void {
     });
     b.step("check-config", "Build zig-out/bin/nanolight-check-config")
         .dependOn(&b.addInstallArtifact(check_config, .{}).step);
-
-    // Runs the Linux clipboard watcher without the panel (src/clipboard_probe.zig).
-    if (os == .linux) {
-        const probe = b.addExecutable(.{
-            .name = "clip-probe",
-            .root_module = appModule(b, "src/clipboard_probe.zig", app_options),
-        });
-        b.step("clip-probe", "Build the Linux clipboard probe (zig-out/bin/clip-probe)").dependOn(&b.addInstallArtifact(probe, .{}).step);
-    }
-
-    addReleaseSteps(b, .{
-        .version = version_option,
-        .test_step = test_step,
-        .nix = app_options.nix_managed,
-    });
 }
 
 /// One build of the app: its target, and what it is told at compile time.
