@@ -24,7 +24,7 @@ const config = @import("config.zig");
 const prefs = @import("prefs.zig");
 const App = @import("app.zig").App;
 const suggest_live = @import("suggest_live.zig");
-const rates_live = @import("rates_live.zig");
+const rates = @import("rates.zig");
 const files_live = @import("files_live.zig");
 const script_live = @import("script_live.zig");
 const commands_live = @import("commands_live.zig");
@@ -94,9 +94,15 @@ fn run(
 ) !void {
     const shown = !core.app.flags.hidden;
     const s = core.s;
-    var rates: rates_live.Rates = .{ .core = core };
-    defer rates.deinit();
-    s.feed = &rates.feed;
+    var money: rates.Live = .{ .env = .{
+        .gpa = core.app.gpa,
+        .io = core.app.io,
+        .kv = core.kv,
+        .now = account.now,
+        .landed = .{ .ctx = core, .func = ratesLanded },
+    } };
+    defer money.deinit();
+    s.rates = &money;
     var sug: suggest_live.Suggest = .{ .core = core };
     var files: files_live.Files = .{ .core = core };
     var sync: account_live.Sync = .{ .core = core };
@@ -134,7 +140,6 @@ fn run(
         .suggest = sug.entry(),
         .files = if (platform.files) files.entry() else null,
         .settings = &settings,
-        .rates = rates.entry(),
         .command = if (shown) cmds.entry() else null,
         .clipboard = clip.entry(),
     };
@@ -231,6 +236,13 @@ fn runShown(
     var note_buf: [64]u8 = undefined;
     greet(core, update, &note_buf);
     try core.app.run();
+}
+
+/// The rates arrived (or could not be had): the panel redoes its conversion.
+fn ratesLanded(ctx: *anyopaque) void {
+    const core = App.from(ctx);
+    core.s.ratesLanded();
+    core.redraw();
 }
 
 /// Restarted by an automatic update: quietly, the panel saying so the

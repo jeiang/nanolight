@@ -38,7 +38,7 @@ pub const Key = enum {
     /// Where file search looks, and what it leaves out (files.zig).
     files_locations,
     files_exclusions,
-    /// When the currency rates were last fetched (convert.zig).
+    /// When the currency rates were last fetched (rates.zig).
     rates_at,
     /// Left by a restart into an update off the Mac, and by 0.1.6 and before
     /// on the Mac: the version it was.

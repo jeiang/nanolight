@@ -18,6 +18,8 @@ test {
     _ = @import("search.zig");
     _ = @import("calc.zig");
     _ = @import("convert.zig");
+    _ = @import("rates.zig");
+    _ = @import("rates_table.zig");
     _ = @import("results.zig");
     _ = @import("suggest.zig");
     _ = @import("settings.zig");
@@ -158,19 +160,21 @@ test "the panel finds, moves, answers and hands off" {
 
 const suggest = @import("suggest.zig");
 const results = @import("results.zig");
-const convert = @import("convert.zig");
+const rates = @import("rates.zig");
+const rates_table = @import("rates_table.zig");
 
 test "a pending currency card is not the default row, and Return acts on the search under it" {
     const gpa = std.testing.allocator;
     var web: Web = .{};
-    var feed: convert.Feed = .{};
-    defer feed.deinit();
+    var live: rates.Live = .{};
+    defer live.deinit();
+    const feed = &live.feed;
     var rig: Rig = undefined;
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    s.feed = &feed;
+    s.rates = &live;
     try rig.mount(.{ .host = web.host() });
     press(t, &.{.{ .insert = "100 usd to ttd" }});
     try std.testing.expect(s.res.pending);
@@ -192,13 +196,13 @@ test "a pending currency card is not the default row, and Return acts on the sea
     try std.testing.expectEqual(@as(usize, 1), s.sel);
     try std.testing.expect(t.hasText("Rates unavailable"));
     // A retry on its way is not a failure.
-    feed.begin(1 + convert.retry_after);
+    feed.begin(1 + rates.retry_after);
     s.ratesLanded();
     t.settle(1);
     try std.testing.expect(t.hasText("Loading rates…"));
     // The rates land: the card is the answer, and selected.
     const body = "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}";
-    feed.landed(convert.Rates.parse(gpa, body).?, 1 + convert.retry_after);
+    feed.landed(rates_table.Rates.parse(gpa, body).?, 1 + rates.retry_after);
     s.ratesLanded();
     t.settle(1);
     try std.testing.expect(!s.res.pending);
