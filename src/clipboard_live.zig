@@ -33,6 +33,7 @@ pub fn openDir(gpa: std.mem.Allocator, io: std.Io) ?std.Io.Dir {
     const path = std.fs.path.join(gpa, &.{ data, "clipboard" }) catch return null;
     defer gpa.free(path);
     _ = std.Io.Dir.cwd().createDirPathStatus(io, path, clipboard.private_dir) catch return null;
+    // best effort: an existing folder keeps its mode; its files are created private anyway.
     std.Io.Dir.cwd().setFilePermissions(io, path, clipboard.private_dir, .{}) catch {};
     return std.Io.Dir.cwd().openDir(io, path, .{}) catch null;
 }
@@ -64,28 +65,35 @@ fn excluded(ctx: *anyopaque, source: []const u8) bool {
 
 fn pruneTick(ctx: ?*anyopaque) callconv(.c) void {
     const l: *Live = @ptrCast(@alignCast(ctx.?));
-    if (l.clip) |store| _ = store.prune(account.now());
+    if (l.clip) |store| {
+        if (store.prune(account.now())) |_| {} else |e| {
+            std.log.warn("nanolight: clipboard: could not write index.json: {t}", .{e});
+        }
+    }
     nanoui.App.after(prune_every_ms, l, pruneTick);
 }
 
 /// Settings' switch: whether history records; `set` changes it first (kept
-/// in kv, so the app's change outlasts the config file's value). Null on a
-/// system with no history.
+/// in kv, so the app's change outlasts the config file's value; see
+/// `config.switchClipboard`). Null on a system with no history.
 pub fn enabled(ctx: *anyopaque, set: ?bool) ?bool {
     const l = live(ctx);
     const store = l.clip orelse return null;
     if (!clipboard.Watcher.available) return null;
     if (set) |on| {
-        l.kv.set(config.clipboard_key, if (on) "1" else "0") catch {};
-        store.cfg.enabled = on;
-        if (on) startWatching(l) else l.clip_watcher.stop();
+        const next = config.switchClipboard(l.kv, on, store.cfg.enabled);
+        if (next == store.cfg.enabled) return next;
+        store.cfg.enabled = next;
+        if (next) startWatching(l) else l.clip_watcher.stop();
     }
     return store.cfg.enabled;
 }
 
-/// Settings' Clear History.
-pub fn clear(ctx: *anyopaque) void {
-    if (live(ctx).clip) |store| store.clear();
+/// Settings' Clear History: false when something may be left on disk (logged).
+pub fn clear(ctx: *anyopaque) bool {
+    const store = live(ctx).clip orelse return true;
+    store.clear() catch return false;
+    return true;
 }
 
 /// Why the screen has nothing to show now, or null.
