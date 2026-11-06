@@ -53,9 +53,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Zig: build.zig.zon's minimum_zig_version.
       - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
 
       - name: Signing identity
         if: env.MACOS_CERT_P12 != ''
@@ -93,7 +92,7 @@ jobs:
       # archives, each build's debug symbols, and the feed naming them.
       - name: Package
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="$GITHUB_REF_NAME"
           case "$GITHUB_REF" in refs/tags/*) ;; *) version="0.0.0-${GITHUB_SHA::7}" ;; esac
           zig build package -Dversion="$version"
 
@@ -154,6 +153,6 @@ jobs:
               exit 0
             fi
             echo "$GITHUB_REF_NAME isn't the latest yet (try $try); retrying" >&2
-            sleep $((try * ${RETRY_S:-20}))
+            sleep $((try * 20))
           done
           exit 1

@@ -9,27 +9,28 @@
 //! change, it fails in any mode: the keys went elsewhere, and "never went
 //! back" would mean nothing. An odd such cycle doesn't: builds with the bug
 //! have them (5 of 60 on v0.2.7, none of 24 on the fix).
-//! EXPECT=rollback inverts the verdict (a known-bad build must fail);
-//! EXPECT=any only reports (a pull request can't change the published build
-//! it runs on). SHOTS keeps what it saw of a rollback.
+//! TYPING_EXPECT=any only reports (a pull request can't change the published
+//! build it runs on). SHOTS keeps what it saw of a cycle that went back.
 //! tools/verify_update.zig runs this check too, between its own.
 const std = @import("std");
 const assert = std.debug.assert;
 const Io = std.Io;
 const command = @import("command.zig");
+const mac_verify = @import("mac_verify.zig");
+const release = @import("release.zig");
 const screen = @import("screen.zig");
 
-pub const Expect = enum { clean, rollback, any };
+pub const Expect = enum { clean, any };
 
 pub const Options = struct {
     cycles: u32 = 12,
     expect: Expect = .clean,
-    /// Where a rollback's captures are kept.
-    shots: []const u8 = "/tmp/nanolight-shots",
+    /// Where the captures of a cycle that went back are kept.
+    shots: []const u8 = mac_verify.shots_default,
 };
 
-/// The panel is 680 wide, its window a shadow's margin bigger all round.
-const panel_width = 680;
+/// The panel's window is a shadow's margin bigger than it all round.
+const panel_width = mac_verify.panel_width;
 /// The patch watched: inside the word, and clear of the caret at either end.
 const patch_left = 56;
 const patch_top = 14;
@@ -45,13 +46,10 @@ const State = [8]u8;
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const environ = init.environ_map;
-    if (!std.mem.eql(u8, environ.get("CI") orelse "", "true")) {
-        command.complain(io, "verify-typing presses keys: CI runners only", .{});
-        std.process.exit(2);
-    }
+    mac_verify.requireCi(io, environ, "verify-typing presses keys");
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
-    var options: Options = .{ .expect = expectOf(environ.get("EXPECT")) };
+    var options: Options = .{ .expect = expectOf(environ) };
     if (environ.get("SHOTS")) |shots| options.shots = shots;
     if (args.len > 1) {
         options.cycles = std.fmt.parseInt(u32, args[1], 10) catch {
@@ -62,12 +60,10 @@ pub fn main(init: std.process.Init) !void {
     if (!try check(arena, io, options)) std.process.exit(1);
 }
 
-/// EXPECT's value: anything but "rollback" and "any" is a clean build.
-pub fn expectOf(text: ?[]const u8) Expect {
-    const value = text orelse return .clean;
-    if (std.mem.eql(u8, value, "rollback")) return .rollback;
-    if (std.mem.eql(u8, value, "any")) return .any;
-    return .clean;
+/// TYPING_EXPECT: "any" only reports; anything else is a clean build.
+pub fn expectOf(environ: *const std.process.Environ.Map) Expect {
+    const value = environ.get("TYPING_EXPECT") orelse return .clean;
+    return if (std.mem.eql(u8, value, "any")) .any else .clean;
 }
 
 /// Runs the check, saying what it sees: false when it fails.
@@ -85,8 +81,7 @@ pub fn check(arena: std.mem.Allocator, io: Io, options: Options) !bool {
         frame.x + margin + patch_left, frame.y + margin + patch_top, patch_width, patch_height,
     });
     command.say(io, "      watching {s}", .{rect});
-    const version_argv = [_][]const u8{ "sw_vers", "-productVersion" };
-    const macos_version = (try command.capture(arena, io, &version_argv, .{})).line();
+    const macos_version = try mac_verify.macosVersion(arena, io);
 
     var tally: Tally = .{};
     for (1..options.cycles + 1) |cycle| {
@@ -129,14 +124,6 @@ fn verdict(io: Io, tally: Tally, options: Options) bool {
         .any => command.say(io, "ok    typing checked, not judged: {d} of {d} went back", .{
             tally.back, cycles,
         }),
-        .rollback => {
-            if (tally.back == 0) {
-                command.say(io, "FAIL  a build with the bug never went back: " ++
-                    "this check can't see it here", .{});
-                return false;
-            }
-            command.say(io, "ok    the check sees the bug in a build that has it", .{});
-        },
         .clean => {
             if (tally.back != 0) {
                 command.say(io, "FAIL  the query went back to what it showed before a key", .{});
@@ -164,13 +151,13 @@ const Watch = struct {
 
     fn cycle(watch: Watch, number: usize) !Seen {
         const io = watch.io;
-        try keys(io, "keystroke \"calendar\"");
+        try mac_verify.keys(watch.arena, io, "keystroke \"calendar\"");
         // A pause, at a different point of the caret's half-second blink each time.
         try command.sleep(io, 1000 + @as(i64, @intCast(number % 5)) * 100);
         const folder = try std.fmt.allocPrint(watch.arena, "{s}/c{d}", .{ watch.work, number });
         try Io.Dir.cwd().createDir(io, folder, .default_dir);
         try watch.capture(folder, "before");
-        try keys(io, "key code 51 using option down");
+        try mac_verify.keys(watch.arena, io, "key code 51 using option down");
         const end_s = command.nowSeconds(io) + watch_s;
         var frames: usize = 0;
         while (command.nowSeconds(io) <= end_s and frames < captures_max) {
@@ -196,35 +183,10 @@ const Watch = struct {
     }
 };
 
-fn keys(io: Io, script: []const u8) !void {
-    var buffer: [256]u8 = undefined;
-    const prefix = "tell application \"System Events\" to ";
-    const line = try std.fmt.bufPrint(&buffer, prefix ++ "{s}", .{script});
-    const argv = [_][]const u8{ "osascript", "-e", line };
-    var child = try std.process.spawn(io, .{ .argv = &argv, .stdout = .ignore });
-    const term = try child.wait(io);
-    if (!term.success()) return error.KeysFailed;
-}
-
-/// A capture's state, read through a fixed buffer: a cycle takes dozens.
+/// A capture's state.
 fn stateOf(arena: std.mem.Allocator, io: Io, folder: []const u8, name: []const u8) !State {
     const path = try std.fmt.allocPrint(arena, "{s}/{s}.png", .{ folder, name });
-    const file = try Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    var buffer: [16 * 1024]u8 = undefined;
-    var reader = file.reader(io, &buffer);
-    var hasher: std.crypto.hash.Sha1 = .init(.{});
-    while (true) {
-        const chunk = reader.interface.peekGreedy(1) catch |err| switch (err) {
-            error.EndOfStream => break,
-            error.ReadFailed => return reader.err.?,
-        };
-        hasher.update(chunk);
-        reader.interface.toss(chunk.len);
-    }
-    var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
-    hasher.final(&digest);
-    const hex = std.fmt.bytesToHex(digest, .lower);
+    const hex = try release.hashFile(std.crypto.hash.Sha1, io, Io.Dir.cwd(), path);
     return hex[0..8].*;
 }
 
@@ -277,6 +239,9 @@ test "a state seen again after another counts as going back; a long run of one d
     var back = [_]State{ "aaaaaaaa".*, "bbbbbbbb".*, "aaaaaaaa".*, "bbbbbbbb".* };
     const back_runs = collapseRuns(&back);
     try std.testing.expect(back_runs.len > distinctCount(back_runs));
-    try std.testing.expectEqual(Expect.any, expectOf("any"));
-    try std.testing.expectEqual(Expect.clean, expectOf("whatever"));
+    var environ: std.process.Environ.Map = .init(std.testing.allocator);
+    defer environ.deinit();
+    try std.testing.expectEqual(Expect.clean, expectOf(&environ));
+    try environ.put("TYPING_EXPECT", "any");
+    try std.testing.expectEqual(Expect.any, expectOf(&environ));
 }

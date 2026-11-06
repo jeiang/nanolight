@@ -2,7 +2,6 @@
   lib,
   stdenv,
   callPackage,
-  zig_0_17,
 }: let
   source = callPackage ./source.nix {};
 in
@@ -10,7 +9,7 @@ in
     pname = "nanolight-server";
     inherit (source) version src;
 
-    nativeBuildInputs = [zig_0_17.hook];
+    nativeBuildInputs = [source.zig.hook];
 
     # Only the `server` step: the client is not built.
     dontUseZigBuild = true;

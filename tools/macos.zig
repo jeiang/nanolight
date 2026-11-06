@@ -7,12 +7,13 @@ const std = @import("std");
 const assert = std.debug.assert;
 const Io = std.Io;
 const command = @import("command.zig");
+const release = @import("release.zig");
 
 /// The team every release is signed by. The updater refuses any other.
 pub const team = "WWP9DLJ27P";
 /// Apple's CloudKit, which stapling and validating ask for the ticket, drops
 /// the connection now and then (error 68) though notarization succeeded.
-pub const staple_tries_default = 5;
+const staple_tries = 5;
 const staple_pause_step_ms = 10_000;
 
 /// Who signs: a "Developer ID Application" identity in the keychain, or no
@@ -52,7 +53,7 @@ pub fn notarize(io: Io, path: []const u8, notary: Notary) !void {
 
 /// Staples the ticket to `path`, a few tries apart.
 pub fn staple(io: Io, path: []const u8) !void {
-    for (1..staple_tries_default + 1) |attempt| {
+    for (1..staple_tries + 1) |attempt| {
         if (try command.succeeds(io, &.{ "xcrun", "stapler", "staple", path })) return;
         command.complain(io, "stapling {s} failed (try {d}); retrying", .{ path, attempt });
         try command.sleep(io, @as(i64, @intCast(attempt)) * staple_pause_step_ms);
@@ -63,18 +64,27 @@ pub fn staple(io: Io, path: []const u8) !void {
 // ----- the checks: each returns null when it holds, else what it saw -----
 
 /// A ticket is stapled to `path`: `stapler validate`, a few tries apart.
-pub fn stapled(arena: std.mem.Allocator, io: Io, path: []const u8, tries: u32) !?[]const u8 {
-    assert(tries > 0);
+pub fn stapled(arena: std.mem.Allocator, io: Io, path: []const u8) !?[]const u8 {
     var said: Io.Writer.Allocating = .init(arena);
-    for (1..tries + 1) |attempt| {
+    for (1..staple_tries + 1) |attempt| {
         const argv = [_][]const u8{ "xcrun", "stapler", "validate", path };
         const result = try command.capture(arena, io, &argv, .{});
         try said.writer.writeAll(result.text);
         if (result.ok()) return null;
-        if (attempt == tries) break;
+        if (attempt == staple_tries) break;
         try command.sleep(io, @as(i64, @intCast(attempt)) * staple_pause_step_ms);
     }
     return said.written();
+}
+
+/// The program is built for `release.macos_min`, as vtool shows it.
+pub fn forMinimum(arena: std.mem.Allocator, io: Io, program: []const u8) !?[]const u8 {
+    const shown = try command.capture(arena, io, &.{ "vtool", "-show-build", program }, .{});
+    var lines = std.mem.splitScalar(u8, shown.stdout, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.endsWith(u8, line, "minos " ++ release.macos_min_text)) return null;
+    }
+    return shown.text;
 }
 
 /// A strict signature by `team`, hardened (the runtime flag) and timestamped.

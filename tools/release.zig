@@ -1,7 +1,8 @@
-//! A release's files and its update feed, spelled once for build.zig,
-//! tools/package.zig and tools/verify_release.zig. The feed is
-//! `manifest.json`, which the app's updater reads (nanoui's update.zig and
-//! update_portable.zig):
+//! A release, spelled once for build.zig, the app (through build.zig's
+//! build_options), tools/package.zig and the verifiers: where it is
+//! published, the Mac's bundle, each build's files, and its update feed. The
+//! feed is `manifest.json`, which the app's updater reads (nanoui's
+//! update.zig and update_portable.zig):
 //!
 //!     {"version":"0.2.7","files":{"nanolight-macos-arm64.zip":{"sha256":"…"}}}
 //!
@@ -21,11 +22,47 @@ pub const manifest_bytes_max = 64 * 1024;
 pub const sha256_hex_len = sha256.digest_length * 2;
 pub const Sha256Hex = [sha256_hex_len]u8;
 
+/// The GitHub repository whose releases the updater and the verifiers read.
+pub const repo = "jeiang/nanolight";
+pub const releases_url = "https://github.com/" ++ repo ++ "/releases/download";
+
+/// The Mac's app: its bundle, the program in it, and the oldest macOS it runs on.
+pub const app_name = "Nanolight";
+pub const bundle_id = "dev.nanoui.nanolight";
+pub const bundle_name = app_name ++ ".app";
+pub const program_name = "nanolight";
+pub const bundle_program = "Contents/MacOS/" ++ program_name;
+pub const bundle_plist = "Contents/Info.plist";
+pub const macos_min: std.SemanticVersion = .{ .major = 14, .minor = 0, .patch = 0 };
+/// As Info.plist's LSMinimumSystemVersion and vtool's `minos` say it.
+pub const macos_min_text = std.fmt.comptimePrint("{d}.{d}", .{
+    macos_min.major,
+    macos_min.minor,
+});
+
 /// The Mac's disk image, the update its updater fetches, and its debug symbols.
 pub const macos_disk_image = "nanolight-macos-arm64.dmg";
 pub const macos_update = "nanolight-macos-arm64.zip";
 pub const macos_symbols = "nanolight-macos-arm64-symbols.zip";
 pub const manifest_name = "manifest.json";
+
+/// The version a tag names: `v0.2.7` is 0.2.7.
+pub fn versionOfTag(tag: []const u8) []const u8 {
+    return if (std.mem.startsWith(u8, tag, "v")) tag[1..] else tag;
+}
+
+/// The file a build for `os` and `arch` updates itself from. The Mac's
+/// update is the one Apple silicon app; a build no release carries asks
+/// for a file no manifest names, and finds nothing.
+pub fn updateAsset(
+    os: std.Target.Os.Tag,
+    arch: std.Target.Cpu.Arch,
+    buffer: *[name_bytes_max]u8,
+) []const u8 {
+    if (os == .macos) return macos_update;
+    const platform: Platform = .{ .os = os, .arch = arch };
+    return platform.archiveName(buffer);
+}
 
 /// A Windows or Linux build that each release carries.
 pub const Platform = struct {
@@ -76,7 +113,7 @@ pub const Platform = struct {
     }
 
     pub fn programName(platform: Platform) []const u8 {
-        return if (platform.os == .windows) "nanolight.exe" else "nanolight";
+        return if (platform.os == .windows) program_name ++ ".exe" else program_name;
     }
 
     /// What a debugger reads beside the program: Windows' PDB, or the same
@@ -114,13 +151,24 @@ pub fn sha256Hex(bytes: []const u8) Sha256Hex {
     return std.fmt.bytesToHex(digest, .lower);
 }
 
-/// The sha256 of a file, read in pieces (a debug file is tens of megabytes).
+/// The sha256 of a file, in hex.
 pub fn sha256File(io: std.Io, dir: std.Io.Dir, path: []const u8) !Sha256Hex {
+    return hashFile(sha256, io, dir, path);
+}
+
+/// A file's digest by `Hash`, in hex, read in pieces (a debug file is tens
+/// of megabytes; a verifier hashes dozens of screen captures).
+pub fn hashFile(
+    comptime Hash: type,
+    io: std.Io,
+    dir: std.Io.Dir,
+    path: []const u8,
+) ![Hash.digest_length * 2]u8 {
     const file = try dir.openFile(io, path, .{});
     defer file.close(io);
     var buffer: [64 * 1024]u8 = undefined;
     var reader = file.reader(io, &buffer);
-    var hasher: sha256 = .init(.{});
+    var hasher: Hash = .init(.{});
     while (true) {
         const chunk = reader.interface.peekGreedy(1) catch |err| switch (err) {
             error.EndOfStream => break,
@@ -129,7 +177,7 @@ pub fn sha256File(io: std.Io, dir: std.Io.Dir, path: []const u8) !Sha256Hex {
         hasher.update(chunk);
         reader.interface.toss(chunk.len);
     }
-    var digest: [sha256.digest_length]u8 = undefined;
+    var digest: [Hash.digest_length]u8 = undefined;
     hasher.final(&digest);
     return std.fmt.bytesToHex(digest, .lower);
 }
@@ -222,6 +270,15 @@ test "each build's files are named as the updater and the release expect" {
     try testing.expectEqualStrings("nanolight.exe", windows.programName());
     try testing.expectEqual(arm, Platform.parse("linux-aarch64").?);
     try testing.expectEqual(null, Platform.parse("linux-riscv64"));
+}
+
+test "each build updates from its own release file, and a tag names its version" {
+    var buffer: [name_bytes_max]u8 = undefined;
+    try testing.expectEqualStrings(macos_update, updateAsset(.macos, .x86_64, &buffer));
+    const linux = updateAsset(.linux, .aarch64, &buffer);
+    try testing.expectEqualStrings("nanolight-linux-aarch64.tar.gz", linux);
+    try testing.expectEqualStrings("0.2.7", versionOfTag("v0.2.7"));
+    try testing.expectEqualStrings("0.2.7", versionOfTag("0.2.7"));
 }
 
 test "the manifest names every update given, and reads back" {
