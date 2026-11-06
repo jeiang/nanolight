@@ -1,8 +1,9 @@
 //! `zig build lint`: the TigerStyle rules (docs/TIGER_STYLE.md) a machine
 //! can check. Each argument is a `.zig` file or a folder of them (not its
-//! subfolders). A line is at most 100 columns, and an error dropped with an
-//! empty catch says why: `// best effort: <why>` on its line or the line
-//! above. `zig fmt --check` runs beside this, as its own step.
+//! subfolders). A line is at most 100 columns, except in a table laid out by
+//! hand between `// zig fmt: off` and `// zig fmt: on`. An error dropped
+//! with an empty catch says why: `// best effort: <why>` on its line or the
+//! line above. `zig fmt --check` runs beside this, as its own step.
 const std = @import("std");
 const assert = std.debug.assert;
 
@@ -11,8 +12,10 @@ const file_bytes_max = 1 << 20;
 const files_max = 1024;
 const path_bytes_max = 1024;
 const reason_marker = "// best effort:";
-/// Spelled in two pieces, so that this file does not match itself.
+/// These are spelled in pieces, so that this file does not match itself.
 const swallow_marker = "catch " ++ "{}";
+const unformatted_start = "// zig fmt: " ++ "off";
+const unformatted_end = "// zig fmt: " ++ "on";
 
 comptime {
     // A reason must fit on the line above the catch it explains.
@@ -35,6 +38,8 @@ pub const Linter = struct {
     line_previous: []const u8 = "",
     /// A line can break both rules: the second waits here.
     pending: ?Problem = null,
+    /// Inside a `zig fmt: off` table, whose lines may run past the limit.
+    unformatted: bool = false,
 
     pub fn init(source: []const u8) Linter {
         assert(source.len <= file_bytes_max);
@@ -49,7 +54,14 @@ pub const Linter = struct {
         while (linter.lines.next()) |line| {
             linter.line_number += 1;
             defer linter.line_previous = line;
-            const width = widthProblem(line, linter.line_number);
+            if (std.mem.indexOf(u8, line, unformatted_start) != null) linter.unformatted = true;
+            if (std.mem.indexOf(u8, line, unformatted_end) != null) linter.unformatted = false;
+            var width = widthProblem(line, linter.line_number);
+            if (linter.unformatted) {
+                if (width) |problem| {
+                    if (problem.kind == .too_wide) width = null;
+                }
+            }
             const swallow = catchProblem(line, linter.line_previous, linter.line_number);
             if (width) |problem| {
                 linter.pending = swallow;
@@ -174,6 +186,19 @@ test "a line past 100 columns is too wide, and a character counts once however m
     try testing.expectEqual(2, wide[0].line_number);
     try testing.expectEqual(Problem.Kind.too_wide, wide[0].kind);
     try testing.expectEqual(columns_max + 1, wide[0].columns);
+}
+
+test "a zig fmt: off table may run past the limit until zig fmt: on, and still needs reasons" {
+    var buffer: [4]Problem = undefined;
+    const wide = comptime repeated("x", columns_max + 1);
+    const source = unformatted_start ++ "\n" ++ wide ++ "\n" ++ swallow_marker ++ "\n" ++
+        unformatted_end ++ "\n" ++ wide;
+    const problems = problemsOf(source, &buffer);
+    try testing.expectEqual(2, problems.len);
+    try testing.expectEqual(Problem.Kind.unexplained_catch, problems[0].kind);
+    try testing.expectEqual(3, problems[0].line_number);
+    try testing.expectEqual(Problem.Kind.too_wide, problems[1].kind);
+    try testing.expectEqual(5, problems[1].line_number);
 }
 
 test "an empty catch needs a reason on its line or the line above, not further up" {
