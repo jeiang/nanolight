@@ -224,14 +224,13 @@ zig build test      # search, math, suggestions and the panel, through nanoui's 
 zig build run       # build and open it
 zig build app       # zig-out/Nanolight.app, for /Applications
 zig build server    # zig-out/bin/nanolight-server, the sync server
-VERSION=0.1.0 sh macos/package.sh   # the Mac release: signed app, disk image, update zip, manifest.json
-VERSION=0.1.0 sh pc/package.sh      # Windows' zip and Linux's tarballs, added to manifest.json
+zig build package -Dversion=0.1.0   # a release's files in zig-out/package: the Mac's signed app, disk image and update, Windows' zip, Linux's tarballs, each build's debug symbols, manifest.json
 zig build -Dtarget=x86_64-windows-gnu   # any target from any machine
 nix build .#nanolight .#nanolight-server  # the Nix packages (see Nix)
 zig build -Dnix=true                    # a Nix-managed build: no updater, no Open at Login (the Nix modules own startup)
 ```
 
-`macos/package.sh` signs with `$CODESIGN_IDENTITY` and notarizes when notary credentials are set (see the script); otherwise it signs ad hoc. Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds, signs and attaches the release as a prerelease, then checks it end to end before it becomes the latest: `sh macos/verify-release.sh v0.2.7` checks a published release's files, its notarization and that it runs headless (safe on your Mac); `macos/verify-update.sh` launches it for real and updates the release before to it (CI only: it shows windows).
+`zig build package` signs the Mac's app with `$CODESIGN_IDENTITY` and notarizes it when notary credentials are set (`NOTARY_PROFILE`, or `NOTARY_KEY_PATH`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID`; see `tools/package.zig`); otherwise it signs ad hoc. The Mac's part needs a Mac; Windows' and Linux' archives build anywhere. Every program ships stripped, and its debug symbols ride beside it (`nanolight-*-symbols.*`: a dSYM, a PDB, ELF debug files) so that a crash can be read. Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds, signs and attaches the release as a prerelease, then checks it end to end before it becomes the latest: `zig build verify-release -- v0.2.7` checks a published release's files, its notarization and that it runs headless (safe on your Mac); `zig build verify-update -- v0.2.6 v0.2.7` launches it for real and updates the release before to it (CI only: it shows windows and presses keys, as does `zig build verify-typing`).
 
 ## How it's made
 
@@ -259,7 +258,7 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 | `src/onboard.zig`, `src/shortcut.zig`, `src/recorder.zig` | The welcome, which key is free, recording one's own |
 | `flake.nix`, `nix/` | The packages, the NixOS, nix-darwin and home-manager modules, the server module, and the flake's checks |
 
-The icon is drawn by `tools/icon.py`.
+The icon is drawn by `tools/icon.zig` (`zig build icon`, on a Mac). The release tools are Zig too, in `tools/`, run as `zig build` steps.
 
 Zig code follows [TigerStyle](docs/TIGER_STYLE.md), as its first section applies it, and
 `zig build lint` checks the rules a machine can. Code written before TigerStyle was adopted does
