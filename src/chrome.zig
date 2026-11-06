@@ -28,14 +28,14 @@ pub const section: Section = .{ .h = 28, .pb = 6 };
 /// list has no other section.
 pub const actions_section: Section = .{ .h = 26, .pb = 4 };
 
-/// The rows the tallest list holds (results.zig's `max_rows`, which
-/// asserts it).
+/// The rows and section heads the tallest list holds (results.zig's
+/// `max_rows` and `max_heads`, which assert them).
 pub const max_rows = 14;
-/// The tallest the panel gets: every app row, the three web rows and
-/// Google's completions, under three section heads (math lists fewer), or
-/// a search's page. The window is this tall.
+pub const max_heads = 3;
+/// The tallest the panel gets: the tallest list (math lists fewer), or a
+/// search's page. The window is this tall.
 pub const max_height: f32 = header_h + footer_h + 2 + list_pad * 2 +
-    max_rows * row_h + 3 * section.h;
+    max_rows * row_h + max_heads * section.h;
 
 /// Where a search's page goes in a panel `h` tall: from `y` down from its
 /// top, `h` tall, between the header and the footer, the panel's width.

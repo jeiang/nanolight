@@ -19,6 +19,8 @@ const files = @import("files.zig");
 const files_view = @import("files_view.zig");
 const answers = @import("answers.zig");
 const suggest = @import("suggest.zig");
+const Query = @import("query.zig").Query;
+const Anchor = @import("anchor.zig").Anchor;
 const rates = @import("rates.zig");
 const rates_table = @import("rates_table.zig");
 const search = @import("search.zig");
@@ -48,9 +50,12 @@ pub const Host = struct {
     /// Shows a search's page in the panel, over `chrome.webArea`; null takes it
     /// away. Without it, searches open in the browser.
     preview: ?*const fn (ctx: *anyopaque, url: ?[]const u8) void = null,
-    /// Request completions, returned through `Nanolight.answered`.
+    /// Asks Google about the query's words. The last ask is answered once
+    /// through `Nanolight.answered`, with completions or with none; the
+    /// panel keeps its room until it is.
     suggest: ?Ask = null,
-    /// Look for files, returned through `Nanolight.filesAnswered`.
+    /// Looks for files for the query's words; what is found comes back
+    /// through `Nanolight.filesAnswered`, if anything does.
     files: ?Ask = null,
     /// Settings' answers: Settings is drawn only with them.
     settings: ?*const SettingsHost = null,
@@ -91,11 +96,9 @@ pub const Nanolight = struct {
     scripts: ?*script_commands.List = null,
     /// How often each app and script command was opened (launchers.zig).
     counts: launch_counts.Counts = .{},
-    query: ui.TextBuffer = .{},
+    query: Query = .{},
     res: results.Results = .{},
     sel: usize = 0,
-    /// The query the rows were built for.
-    built: u64 = 1,
     host: ?Host = null,
     /// How the window holds the panel (`platform.panel.setup`).
     fit: chrome.Fit = .{},
@@ -110,7 +113,8 @@ pub const Nanolight = struct {
     kv: ?nanoui.kv.Store = null,
     spans: [results.max_rows][16]ui.Span = undefined,
     last_h: f32 = 0,
-    /// The height kept while Google is asked (answers.zig); 0 when it isn't.
+    /// The room the rows had, kept while Google is asked about the words
+    /// typed (`rebuild`), until it answers (`answered`); 0 when it isn't.
     held_h: f32 = 0,
     /// The query as it was shown: selected, so no completion after it yet.
     revealed: u64 = 0,
@@ -172,13 +176,13 @@ pub const Nanolight = struct {
     /// Google's completions on or off: the rows again, with or without them.
     pub fn setSuggest(s: *Nanolight, on: bool) void {
         s.suggest_on = on;
-        s.built = 1;
+        s.query.invalidate();
     }
 
     /// File search on or off: the rows again, with or without files.
     pub fn setFiles(s: *Nanolight, on: bool) void {
         s.files_on = on;
-        s.built = 1;
+        s.query.invalidate();
     }
 
     /// Whether Clipboard History is up: a new copy is drawn at once.
@@ -217,9 +221,9 @@ pub const Nanolight = struct {
         s.settings_ui.hide();
         s.shown +%= 1;
         // Suggestions follow what was opened since.
-        s.built = 1;
-        s.revealed = std.hash.Wyhash.hash(0, s.query.text());
-        s.query.want_selection = .{ 0, s.query.text().len };
+        s.query.invalidate();
+        s.revealed = s.query.hash();
+        s.query.field.want_selection = .{ 0, s.query.text().len };
         s.query.focus();
     }
 
@@ -282,11 +286,14 @@ pub const Nanolight = struct {
         // A script command's output, while it runs (raycast_view.zig).
         if (s.ext) |e| if (e.open) return e.panel(c, s, p);
 
+        // The rows for the query as it is, before anything reads them. A
+        // key or an edit that changes it has the frame built again (nanoui
+        // passes until nothing changes), so the rows follow it at once.
+        s.rebuild();
         s.keys(c);
         const submitted = s.header(c, p);
-        s.rebuild();
         // Typing takes the page away: the rows are for the new words.
-        if (s.previewing and std.hash.Wyhash.hash(0, s.query.text()) != s.preview_q) s.back();
+        if (s.previewing and s.query.hash() != s.preview_q) s.back();
         if (submitted) s.activate(c);
         const h = s.follow(s.height());
         {
@@ -333,10 +340,12 @@ pub const Nanolight = struct {
         if (c.shortcut(.{ .key = ',', .cmd = true })) return s.openSettings();
         // ⌘↩: a search in the browser rather than in the panel.
         if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.activateOut(c);
-        // Tab takes the faint completion, as → does.
-        const more = s.completion();
-        if (!files_view.takeOnTab(s, c) and more.len > 0 and
-            c.shortcut(.{ .key = S.tab })) s.take(more);
+        // Tab takes the selected file's path while a path is typed, else
+        // the faint completion, as → does.
+        if (s.tab()) |what| if (c.shortcut(.{ .key = S.tab })) switch (what) {
+            .file => |i| files_view.takeFile(s, i),
+            .completion => |more| s.take(more),
+        };
         const n = s.res.n;
         if (chrome.moveDown(c)) {
             if (n > 0) s.sel = (s.sel + 1) % n;
@@ -360,8 +369,7 @@ pub const Nanolight = struct {
             "magnifyingglass",
             .{ .size = 19, .weight = .medium, .color = p.sub, .frame = 22 },
         );
-        s.rebuild();
-        const r = ui.textField(c, &s.query, .{
+        const r = ui.textField(c, &s.query.field, .{
             .suggestion = s.completion(),
             .bare = true,
             .size = 21,
@@ -388,10 +396,20 @@ pub const Nanolight = struct {
     /// down the rows. Return never takes it: Return is the selected row.
     fn completion(s: *const Nanolight) []const u8 {
         const q = s.query.text();
-        if (q.len == 0 or s.res.n == 0 or std.hash.Wyhash.hash(0, q) == s.revealed) return "";
-        const r = s.res.rows[0];
+        if (q.len == 0 or s.query.hash() == s.revealed) return "";
+        const r = s.res.first() orelse return "";
         const completes = row_views.get(r.kind).completes orelse return "";
         return completes(s, r, q);
+    }
+
+    /// What Tab puts in the field: a found file's path (its place among
+    /// those found), or what the field completes.
+    const Tab = union(enum) { file: u32, completion: []const u8 };
+
+    fn tab(s: *const Nanolight) ?Tab {
+        if (files_view.tabFile(s)) |i| return .{ .file = i };
+        const more = s.completion();
+        return if (more.len > 0) .{ .completion = more } else null;
     }
 
     fn take(s: *Nanolight, more: []const u8) void {
@@ -402,31 +420,31 @@ pub const Nanolight = struct {
         @memcpy(buf[q.len..][0..more.len], more);
         const len = q.len + more.len;
         s.query.set(buf[0..len]);
-        s.query.want_selection = .{ len, len };
+        s.query.field.want_selection = .{ len, len };
     }
 
-    /// Rebuild changed queries, asking for missing completions.
+    /// The rows for the query, built once each time it changes or is
+    /// invalidated (`Query.changed`); Google is asked for completions not
+    /// in hand. `panel` calls it once a frame, before anything reads them.
     pub fn rebuild(s: *Nanolight) void {
-        const q = s.query.text();
-        const h = std.hash.Wyhash.hash(0, q);
-        if (h == s.built) return;
-        s.built = h;
+        if (!s.query.changed()) return;
         files_view.rebuild(s);
         s.web.n = 0;
         const held = @max(s.held_h, s.rowsHeight());
         s.held_h = 0;
         s.fill();
+        const words = s.query.words();
         // Google is asked only for completions the rows would list: no card,
         // no keyword (`res.google`), and no conversion waiting on rates.
         const listed = s.res.google != null and !s.res.pending;
-        const asks = listed and s.suggest_on and suggest.eligible(q);
+        const asks = listed and s.suggest_on and suggest.eligible(words);
         if (asks) if (s.host) |host| if (host.suggest) |ask| {
             // The answer, or one to fewer letters, stands in meanwhile.
-            const cached = s.cache.lookup(q, &s.web);
+            const cached = s.cache.lookup(words, &s.web);
             if (s.web.n > 0) s.fill();
             if (!cached) {
                 s.held_h = held;
-                ask.func(ask.ctx, q);
+                ask.func(ask.ctx, words);
             }
         };
         // The first row: an app, the answer, or the search for what was
@@ -434,19 +452,51 @@ pub const Nanolight = struct {
         s.sel = s.res.actionable(0);
     }
 
-    pub fn fill(s: *Nanolight) void {
-        s.res.clip_on = if (s.host) |h| h.clipboard != null else false;
-        s.res.found = &s.found;
-        s.res.commands = if (s.host) |h| if (h.command) |run| run.installed else null else null;
+    /// What lands for the query a moment after its rows.
+    pub const Landed = union(enum) {
+        /// Google's completions of the words.
+        completions: *const suggest.List,
+        /// Files found for the words, moved into `found`.
+        files: *files.List,
+        /// The rates (or that they could not be had), in `rates` already.
+        rates,
+    };
+
+    /// The rows again for the same query with what `landed`: the
+    /// selection stays on the row it was on, wherever that row now is
+    /// (anchor.zig), so Return a moment after typing does what the panel
+    /// showed. A card that was waiting on rates and is the answer now is
+    /// first again, and selected.
+    pub fn refill(s: *Nanolight, landed: Landed) void {
+        const was: Anchor = .of(s);
+        const was_pending = s.res.pending;
+        switch (landed) {
+            .completions => |said| s.web = said.*,
+            .files => |found| s.found.replace(found),
+            .rates => {},
+        }
+        s.fill();
+        s.sel = if (was_pending and !s.res.pending) 0 else was.find(s) orelse 0;
+    }
+
+    fn fill(s: *Nanolight) void {
         rates.fill(s.rates, s, buildRows);
     }
 
     /// Lists the query's rows with `status`; true when they list a currency
     /// conversion, which asks for the rates.
     fn buildRows(s: *Nanolight, status: rates_table.Status) bool {
-        var words: [suggest.max_rows][]const u8 = undefined;
-        s.res.rates = status;
-        s.res.build(s.query.text(), s.launchable(), s.web.slices(&words), s.quicklinks);
+        var said: [suggest.max_rows][]const u8 = undefined;
+        s.res.build(.{
+            .words = s.query.words(),
+            .from = s.launchable(),
+            .quicklinks = s.quicklinks,
+            .completions = s.web.slices(&said),
+            .rates = status,
+            .clip_on = if (s.host) |h| h.clipboard != null else false,
+            .found = &s.found,
+            .commands = if (s.host) |h| if (h.command) |run| run.installed else null else null,
+        });
         return s.res.need_rates;
     }
 
@@ -454,19 +504,8 @@ pub const Nanolight = struct {
         return if (s.rates) |r| r.feed.table() else null;
     }
 
-    /// The rates arrived (or could not be had): the conversion listed, if
-    /// any, is redone. The selection stays where it was.
-    pub fn ratesLanded(s: *Nanolight) void {
-        const was_pending = s.res.pending;
-        s.fill();
-        // The card is the answer now, and the first row again; a card
-        // still pending (the fetch failed) keeps the selection off it.
-        if (was_pending and !s.res.pending) s.sel = 0;
-        if (s.sel >= s.res.n) s.sel = s.res.actionable(0);
-    }
-
     pub const answered = answers.answered;
-    pub const unanswered = answers.unanswered;
+    pub const wants = answers.wants;
     pub const filesAnswered = files_view.filesAnswered;
 
     fn list(s: *Nanolight, c: *ui.Context, p: Palette) void {
@@ -486,9 +525,9 @@ pub const Nanolight = struct {
             y += rh;
         }
         // A new list: the highlight is there at once; moving in it, it slides.
-        const fresh = c.print("{d}", .{s.built});
-        const hy = motion.number(c, fresh, sel_y, .{ .spring = slide });
-        const hh = motion.number(c, c.print("{d}h", .{s.built}), sel_h, .{ .spring = slide });
+        const fresh = s.query.built;
+        const hy = motion.number(c, c.print("{d}", .{fresh}), sel_y, .{ .spring = slide });
+        const hh = motion.number(c, c.print("{d}h", .{fresh}), sel_h, .{ .spring = slide });
         const hw = chrome.width - chrome.list_pad * 2;
         ui.div(c).absolute().offset(0, hy).w(hw).h(hh).rounded(10).bg(p.sel).border(p.rim).end();
         for (s.res.slice(), 0..) |r, i| {
@@ -540,7 +579,7 @@ pub const Nanolight = struct {
     /// A completion as a search box shows it: the words typed plain, what
     /// it adds stronger.
     fn added(s: *Nanolight, i: usize, w: []const u8, p: Palette) []const ui.Span {
-        const q = std.mem.trim(u8, s.query.text(), " ");
+        const q = s.query.words();
         if (q.len == 0 or w.len <= q.len or !search.startsWithFold(w, q)) return &.{};
         s.spans[i][0] = .{
             .start = @intCast(q.len),
@@ -616,7 +655,7 @@ pub const Nanolight = struct {
         const show = (if (in_panel) h.preview else null) orelse return s.go(.{ .url = u });
         s.preview_url = u;
         s.previewing = true;
-        s.preview_q = std.hash.Wyhash.hash(0, s.query.text());
+        s.preview_q = s.query.hash();
         show(h.ctx, u);
     }
 
@@ -799,7 +838,7 @@ fn quicklinkBody(s: *Nanolight, c: *ui.Context, p: Palette, _: usize, r: Row) vo
         c,
         .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis },
         "Search {s} for “{s}”",
-        .{ ql.name, s.res.argument(s.query.text()) },
+        .{ ql.name, s.res.argument(s.query.words()) },
     );
     ui.text(c, web.host(ql.url), p.detail());
 }
@@ -854,11 +893,11 @@ fn openClipboardRow(s: *Nanolight, _: *ui.Context, _: Row) void {
 }
 
 fn searchQuicklink(s: *Nanolight, _: *ui.Context, r: Row) void {
-    s.searchWith(@intCast(r.item), s.res.argument(s.query.text()), !s.searches_out);
+    s.searchWith(@intCast(r.item), s.res.argument(s.query.words()), !s.searches_out);
 }
 
 fn searchQuicklinkOut(s: *Nanolight, r: Row) void {
-    s.searchWith(@intCast(r.item), s.res.argument(s.query.text()), s.searches_out);
+    s.searchWith(@intCast(r.item), s.res.argument(s.query.words()), s.searches_out);
 }
 
 /// Its words fill the field, as a search box's would.
@@ -888,7 +927,7 @@ fn scriptCompletes(s: *const Nanolight, r: Row, q: []const u8) []const u8 {
 /// Google's first completion that goes on from the words, under its quicklink.
 fn quicklinkCompletes(s: *const Nanolight, r: Row, q: []const u8) []const u8 {
     const google = s.res.google orelse return "";
-    if (s.res.keyed != null or google != r.item) return "";
+    if (google != r.item) return "";
     for (0..s.web.n) |i| {
         const more = rest(s.web.get(i), q);
         if (more.len > 0) return more;

@@ -21,6 +21,7 @@ test {
     _ = @import("rates.zig");
     _ = @import("rates_table.zig");
     _ = @import("results.zig");
+    _ = @import("query.zig");
     _ = @import("suggest.zig");
     _ = @import("settings.zig");
     _ = @import("sync_protocol.zig");
@@ -193,20 +194,20 @@ test "a pending currency card is not the default row, and Return acts on the sea
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     feed.begin(1);
     feed.fail();
-    s.ratesLanded();
+    s.refill(.rates);
     t.settle(1);
     try std.testing.expect(s.res.pending);
     try std.testing.expectEqual(@as(usize, 1), s.sel);
     try std.testing.expect(t.hasText("Rates unavailable"));
     // A retry on its way is not a failure.
     feed.begin(1 + rates.retry_after);
-    s.ratesLanded();
+    s.refill(.rates);
     t.settle(1);
     try std.testing.expect(t.hasText("Loading rates…"));
     // The rates land: the card is the answer, and selected.
     const body = "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}";
     feed.landed(rates_table.Rates.parse(gpa, body).?, 1 + rates.retry_after);
-    s.ratesLanded();
+    s.refill(.rates);
     t.settle(1);
     try std.testing.expect(!s.res.pending);
     try std.testing.expectEqual(@as(usize, 0), s.sel);

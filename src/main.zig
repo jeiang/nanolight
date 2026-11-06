@@ -245,10 +245,11 @@ fn runShown(
     try core.app.run();
 }
 
-/// The rates arrived (or could not be had): the panel redoes its conversion.
+/// The rates arrived (or could not be had): the panel redoes its conversion,
+/// the selection kept (`Nanolight.refill`).
 fn ratesLanded(ctx: *anyopaque) void {
     const core = App.from(ctx);
-    core.s.ratesLanded();
+    core.s.refill(.rates);
     core.redraw();
 }
 

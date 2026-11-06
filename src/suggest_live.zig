@@ -21,13 +21,14 @@ pub const Suggest = struct {
         return .{ .ctx = sg, .func = ask };
     }
 
-    /// Google is asked once typing pauses (`suggest.pause_ms`).
-    fn ask(ctx: *anyopaque, query: []const u8) void {
+    /// Google is asked once typing pauses (`suggest.pause_ms`); only the
+    /// last ask is sent, and answered (`Nanolight.answered`).
+    fn ask(ctx: *anyopaque, words: []const u8) void {
         const sg = after.cast(*Suggest, ctx);
-        const q = std.mem.trim(u8, query, " ");
-        if (q.len > suggest.max_len) return sg.core.s.unanswered(q);
-        @memcpy(sg.asking[0..q.len], q);
-        sg.asking_len = q.len;
+        // The panel asks only about words `suggest.eligible` lets out.
+        std.debug.assert(words.len <= suggest.max_len);
+        @memcpy(sg.asking[0..words.len], words);
+        sg.asking_len = words.len;
         sg.pause.poke(suggest.pause_ms, Suggest, "pause", send);
     }
 
@@ -35,10 +36,8 @@ pub const Suggest = struct {
         const core = sg.core;
         const q = sg.asking[0..sg.asking_len];
         // Typed on, or turned off, while it waited.
-        if (!core.s.suggest_on or !suggest.same(q, core.s.query.text())) {
-            return core.s.unanswered(q);
-        }
-        const a = core.app.gpa.create(Ask) catch return core.s.unanswered(q);
+        if (!core.s.wants(q)) return core.s.answered(q, null);
+        const a = core.app.gpa.create(Ask) catch return core.s.answered(q, null);
         a.* = .{ .core = core, .len = q.len };
         @memcpy(a.text[0..q.len], q);
         var buf: [suggest.url_max]u8 = undefined;
@@ -56,21 +55,17 @@ const Ask = struct {
     text: [suggest.max_len]u8 = undefined,
     len: usize,
 
+    /// The answer, or none: either way the panel hears of it, once.
     fn done(a: *Ask, r: nanoui.http.Response) void {
         const core = a.core;
         defer core.app.gpa.destroy(a);
         defer core.redraw();
         var arena: std.heap.ArenaAllocator = .init(core.app.gpa);
         defer arena.deinit();
+        const typed = a.text[0..a.len];
         var list: suggest.List = .{};
-        if (r.status != 200 or
-            !suggest.decode(
-                arena.allocator(),
-                r.body,
-                a.text[0..a.len],
-                &list,
-            )) return core.s.unanswered(a.text[0..a.len]);
-        core.s.answered(a.text[0..a.len], &list);
+        const said = r.status == 200 and suggest.decode(arena.allocator(), r.body, typed, &list);
+        core.s.answered(typed, if (said) &list else null);
     }
 };
 

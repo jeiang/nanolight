@@ -263,11 +263,11 @@ test "the panel's height lands at once, and keeps Google's room between keys" {
     try std.testing.expectEqual(@as(usize, 0), s.web.n);
     try std.testing.expectEqual(full, s.last_h);
     // An answer to older words is no answer to these.
-    s.unanswered("liq");
+    s.answered("liq", null);
     t.frame();
     try std.testing.expectEqual(full, s.last_h);
     // No answer is coming: the room goes, at once.
-    s.unanswered("liqx");
+    s.answered("liqx", null);
     t.frame();
     try std.testing.expectEqual(bare, s.last_h);
     // Nothing is asked about an empty field, so nothing is kept for it.
@@ -292,8 +292,7 @@ test "Google's answer landing after suggestions are turned off lists nothing" {
     t.textOps(&.{.{ .insert = "liq" }});
     t.frame();
     // Asked while on; turned off (the menu, Settings or sync) before it lands.
-    s.suggest_on = false;
-    s.built = 1;
+    s.setSuggest(false);
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
     s.answered("liq", &said);

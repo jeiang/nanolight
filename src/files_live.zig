@@ -39,7 +39,7 @@ pub const Files = struct {
         if (f.pause.waiting()) return;
         if (f.sent == f.epoch) return;
         const q = f.query[0..f.len];
-        if (!std.mem.eql(u8, q, std.mem.trim(u8, core.s.query.text(), " \t\r\n"))) return;
+        if (!std.mem.eql(u8, q, core.s.query.words())) return;
         const gpa = core.app.gpa;
         const a = gpa.create(FileAsk) catch return;
         a.* = .{

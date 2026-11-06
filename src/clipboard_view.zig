@@ -73,7 +73,7 @@ pub const Screen = struct {
         s.hide();
         n.query.clear();
         n.query.focus();
-        n.built = 1;
+        n.query.invalidate();
     }
 
     fn host(n: *const panel.Nanolight) ?*const Host {
@@ -82,7 +82,7 @@ pub const Screen = struct {
     }
 
     fn refresh(s: *Screen, n: *panel.Nanolight, h: *const Host) void {
-        const q = std.hash.Wyhash.hash(0, n.query.text());
+        const q = n.query.hash();
         if (!s.stale and q == s.built and h.store.gen == s.gen) return;
         const same_query = !s.stale and q == s.built;
         if (!same_query) s.sel = 0;
@@ -172,8 +172,8 @@ pub const Screen = struct {
         if (chevron.clicked()) s.back(n);
         ui.icon(c, "chevron.left", .{ .size = 13, .weight = .semibold, .color = p.sub });
         chevron.end();
-        const before = std.hash.Wyhash.hash(0, n.query.text());
-        const r = ui.textField(c, &n.query, .{
+        const before = n.query.hash();
+        const r = ui.textField(c, &n.query.field, .{
             .bare = true,
             .size = 19,
             .width = .fill,
@@ -181,7 +181,7 @@ pub const Screen = struct {
             .placeholder_color = p.placeholder(),
             .color = p.text,
         });
-        if (std.hash.Wyhash.hash(0, n.query.text()) != before) s.note = "";
+        if (n.query.hash() != before) s.note = "";
         return r.submitted;
     }
 

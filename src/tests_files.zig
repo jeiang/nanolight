@@ -410,3 +410,29 @@ test "a query the answer card takes is not searched for as a file" {
     try t.expectEqual(@as(usize, 1), asks.count);
     try t.expectEqualStrings("10 km report", asks.last[0..asks.last_len]);
 }
+
+test "a tab or line break pasted round the words reads as the words, to rows and files alike" {
+    if (!@import("platform.zig").files) return error.SkipZigTest;
+    const t = std.testing;
+    var rig: Rig = undefined;
+    rig.init(t.allocator);
+    defer rig.deinit();
+    var asks: FileAsks = .{};
+    const s = &rig.s;
+    s.host = asks.host();
+    s.files_on = true;
+    // Math: the card shows, and no file is looked for.
+    s.query.set("2 + 3\t");
+    s.rebuild();
+    try t.expectEqual(results.Kind.calc, s.res.rows[0].kind);
+    try t.expectEqual(@as(usize, 0), asks.count);
+    // Words: searched for without the blanks, and what is found lands.
+    s.query.set("\treport\r\n");
+    s.rebuild();
+    try t.expectEqualStrings("report", asks.last[0..asks.last_len]);
+    var found: @import("files.zig").List = .{ .allocator = t.allocator };
+    defer found.deinit();
+    found.add("/tmp/report-a", false, .{ .score = 100 });
+    s.filesAnswered("report", &found);
+    try t.expect(rowOf(s, .file, "/tmp/report-a") != null);
+}

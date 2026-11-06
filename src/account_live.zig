@@ -85,7 +85,7 @@ pub const Sync = struct {
         sy.quicklinks = keep;
         const s = sy.core.s;
         s.quicklinks = if (keep.len > 0) keep else &web.default_quicklinks;
-        s.built = 1;
+        s.query.invalidate();
         return true;
     }
 };
@@ -152,7 +152,7 @@ fn applySynced(ctx: *anyopaque, st: Settings) void {
     var take: Take = .{ .sy = sy };
     settings.apply(st, &take);
     launchers.save(&core.s.counts, core.s.index.gpa, core.kv);
-    core.s.built = 1;
+    core.s.query.invalidate();
     core.menuChanged();
     core.redraw();
 }

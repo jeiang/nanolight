@@ -1,9 +1,10 @@
-//! The selected row, held across a refill of the list (completions or files
-//! landing): the selection stays on the same row wherever that row now is,
-//! so Return a moment after typing does what the panel showed. A row is the
-//! same row by what its provider says (`results.Identity`): apps, panes,
-//! commands and quicklinks by their place in their lists; a file by its path
-//! and a completion by its words, since their places move with each answer.
+//! The selected row, held across a refill of the list (`Nanolight.refill`:
+//! completions, files or the rates landing): the selection stays on the
+//! same row wherever that row now is, so Return a moment after typing does
+//! what the panel showed. A row is the same row by what its provider says
+//! (`results.Identity`): apps, panes, commands and quicklinks by their
+//! place in their lists; a file by its path and a completion by its words,
+//! since their places move with each answer.
 const std = @import("std");
 const files = @import("files.zig");
 const suggest = @import("suggest.zig");

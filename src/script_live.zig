@@ -35,7 +35,7 @@ pub const Scripts = struct {
         sx.core = core;
         sx.env = env;
         sx.cfg = cfg;
-        sx.screen = .{ .gpa = gpa, .back = &core.s.query };
+        sx.screen = .{ .gpa = gpa, .back = &core.s.query.field };
         sx.runner = .{
             .gpa = gpa,
             .io = core.app.io,
@@ -113,7 +113,7 @@ pub const Scripts = struct {
     fn changed(sx: *Scripts) void {
         const s = sx.core.s;
         launchers.adopt(&s.counts, s.index.gpa, s.launchable());
-        s.built = 1;
+        s.query.invalidate();
         s.rebuild();
         sx.core.redraw();
     }

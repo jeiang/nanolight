@@ -162,7 +162,7 @@ const Rig = struct {
         r.t = &r.panel.t;
         r.opts = opts;
         r.hidden = false;
-        r.ext = .{ .gpa = gpa, .back = &r.s.query };
+        r.ext = .{ .gpa = gpa, .back = &r.s.query.field };
         r.s.ext = &r.ext;
         r.host = .{ .ext = &r.ext, .backing = opts.backing };
         r.prefs = .{};

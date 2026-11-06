@@ -11,7 +11,8 @@
 const std = @import("std");
 const search = @import("search.zig");
 
-/// At most this many completions are listed.
+/// At most this many completions are kept and listed: the one cap
+/// (results.zig's `max_rows` leaves room for all but one beside every app).
 pub const max_rows = 4;
 /// A query or a completion longer than this is left out.
 pub const max_len = 120;
@@ -21,13 +22,12 @@ pub const max_bytes = 32 * 1024;
 /// to pass, short enough to land while the words are still being read.
 pub const pause_ms = 90;
 
-/// Whether `typed` may be sent to Google at all.
-pub fn eligible(typed: []const u8) bool {
-    const t = std.mem.trim(u8, typed, " \t\r\n");
-    if (t.len < 2 or t.len > max_len) return false;
-    if (std.ascii.startsWithIgnoreCase(t, "www.") or
-        std.ascii.startsWithIgnoreCase(t, "localhost")) return false;
-    for (t) |ch| switch (ch) {
+/// Whether the query's `words` (`Query.words`) may be sent to Google at all.
+pub fn eligible(words: []const u8) bool {
+    if (words.len < 2 or words.len > max_len) return false;
+    if (std.ascii.startsWithIgnoreCase(words, "www.") or
+        std.ascii.startsWithIgnoreCase(words, "localhost")) return false;
+    for (words) |ch| switch (ch) {
         0...0x1f, 0x7f, ':', '@', '\\', '/', '.' => return false,
         else => {},
     };
@@ -38,12 +38,13 @@ const url_base = "https://suggestqueries.google.com/complete/search?client=firef
 /// The longest address `url` writes: every byte of the longest query escaped.
 pub const url_max = url_base.len + 3 * max_len;
 
-/// The address that asks for `typed`'s completions (at most `max_len` bytes).
-pub fn url(buf: *[url_max]u8, typed: []const u8) []const u8 {
-    std.debug.assert(typed.len <= max_len);
+/// The address that asks for the completions of `words` (at most `max_len`
+/// bytes, as `eligible` lets out).
+pub fn url(buf: *[url_max]u8, words: []const u8) []const u8 {
+    std.debug.assert(words.len <= max_len);
     var w: std.Io.Writer = .fixed(buf);
     w.writeAll(url_base) catch unreachable;
-    search.percentEncode(&w, std.mem.trim(u8, typed, " "), .{ .plus = true }) catch unreachable;
+    search.percentEncode(&w, words, .{ .plus = true }) catch unreachable;
     return w.buffered();
 }
 
@@ -187,7 +188,7 @@ pub const Cache = struct {
 test "addresses, emails and paths never go out" {
     const t = std.testing;
     try t.expect(eligible("liquid glass"));
-    try t.expect(eligible("  zig  "));
+    try t.expect(eligible("zig"));
     try t.expect(!eligible("z"));
     for ([_][]const u8{
         "github.com",
@@ -208,7 +209,7 @@ test "the address is escaped" {
     var buf: [url_max]u8 = undefined;
     try std.testing.expectEqualStrings(
         "https://suggestqueries.google.com/complete/search?client=firefox&q=liquid+gl+%26+co",
-        url(&buf, " liquid gl & co "),
+        url(&buf, "liquid gl & co"),
     );
 }
 

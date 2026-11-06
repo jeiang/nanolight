@@ -488,7 +488,7 @@ pub const Onboard = struct {
     pub fn finish(o: *Onboard, s: *panel.Nanolight, query: []const u8) void {
         o.end(.take_choice);
         if (query.len > 0) s.query.set(query) else s.query.clear();
-        s.built = 1;
+        s.query.invalidate();
         s.revealed = 0;
         s.query.focus();
     }

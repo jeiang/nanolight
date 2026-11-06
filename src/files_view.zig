@@ -1,4 +1,5 @@
-//! File rows and the answer transferred from the lookup worker.
+//! File rows, the answer transferred from the lookup worker, and Tab
+//! taking a found path.
 const std = @import("std");
 const ui = @import("nanoui").ui;
 const files = @import("files.zig");
@@ -8,7 +9,6 @@ const Nanolight = @import("view.zig").Nanolight;
 const Palette = @import("palette.zig").Palette;
 const results = @import("results.zig");
 const Row = results.Row;
-const Anchor = @import("anchor.zig").Anchor;
 const platform = @import("platform.zig");
 const chrome = @import("chrome.zig");
 
@@ -22,16 +22,13 @@ pub fn takeFile(s: *Nanolight, i: usize) void {
         .{ path, if (e.folder and !std.mem.endsWith(u8, path, "/")) "/" else "" },
     ) catch return;
     s.query.set(text);
-    s.query.want_selection = .{ text.len, text.len };
+    s.query.field.want_selection = .{ text.len, text.len };
 }
 
-/// A Spotlight answer lands only for the query still in the field.
+/// A Spotlight answer lands only for the words still in the field.
 pub fn filesAnswered(s: *Nanolight, typed: []const u8, found: *files.List) void {
-    if (!s.files_on or !std.mem.eql(u8, typed, std.mem.trim(u8, s.query.text(), " \t\r\n"))) return;
-    const was: Anchor = .of(s);
-    s.found.replace(found);
-    s.fill();
-    s.sel = was.find(s) orelse 0;
+    if (!s.files_on or !std.mem.eql(u8, typed, s.query.words())) return;
+    s.refill(.{ .files = found });
 }
 
 pub fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
@@ -51,7 +48,7 @@ pub fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
 /// Retain matching rows while the worker answers the new query. A query
 /// the answer card takes is not searched for.
 pub fn rebuild(s: *Nanolight) void {
-    const q = std.mem.trim(u8, s.query.text(), " \t\r\n");
+    const q = s.query.words();
     if (platform.files and s.files_on and
         (paths.isPath(q) or (spotlight.eligible(q) and !results.isMath(q, s.ratesTable()))))
     {
@@ -60,9 +57,11 @@ pub fn rebuild(s: *Nanolight) void {
     } else s.found.deinit();
 }
 
-pub fn takeOnTab(s: *Nanolight, c: *ui.Context) bool {
-    if (s.sel >= s.res.n or s.res.rows[s.sel].kind != .file or
-        !paths.isPath(s.query.text())) return false;
-    if (c.shortcut(.{ .key = ui.Shortcut.tab })) takeFile(s, s.res.rows[s.sel].item);
-    return true;
+/// The file selected while a path is typed, its place among those found:
+/// Tab takes its path (`takeFile`) rather than the faint completion.
+pub fn tabFile(s: *const Nanolight) ?u32 {
+    if (s.sel >= s.res.n) return null;
+    const r = s.res.rows[s.sel];
+    if (r.kind != .file or !paths.isPath(s.query.words())) return null;
+    return r.item;
 }
