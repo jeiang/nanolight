@@ -85,6 +85,7 @@ test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" 
     var s: view.Nanolight = .{ .index = &ix };
     defer s.query.deinit();
     s.host = prefs.host();
+    prefs.nl = &s;
     s.openSettings();
     var t: ui.Tester = undefined;
     try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
@@ -105,6 +106,87 @@ test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" 
     const quit = t.findText("Quit Nanolight").?;
     try std.testing.expect(quit.y + quit.h <= settings_view.height);
     try std.testing.expect(settings_view.height <= view.max_height);
+}
+
+test "Settings' Open at Login flips what the system says, not a copy" {
+    if (@import("build_options").nix_managed) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var prefs: tests.Prefs = .{};
+    prefs.init();
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = prefs.host();
+    s.openSettings();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = view.max_height,
+        .dark = true,
+    });
+    defer t.deinit();
+    t.settle(1);
+    try t.clickText("Open at Login");
+    t.settle(1);
+    try std.testing.expect(prefs.login_on);
+    // Turned off elsewhere (System Settings) while Settings is open: the
+    // next click turns it on again, from what the system says.
+    prefs.login_on = false;
+    t.settle(1);
+    try t.clickText("Open at Login");
+    t.settle(1);
+    try std.testing.expect(prefs.login_on);
+}
+
+test "recording a key: idle, recording, refused, and never without a recorder" {
+    if (!mac) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var prefs: tests.Prefs = .{};
+    prefs.init();
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = prefs.host();
+    s.openSettings();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = view.max_height,
+        .dark = true,
+    });
+    defer t.deinit();
+    t.settle(1);
+    const ui_s = &s.settings_ui;
+    const shortcut = @import("shortcut.zig");
+    // Return on the shortcut row: recording, the recorder with it.
+    ui_s.activateSelected(&s);
+    try std.testing.expectEqual(settings_view.KeyInput.recording, ui_s.key_input);
+    try std.testing.expect(prefs.recording);
+    // A letter alone is refused; it still waits.
+    ui_s.took(&s, shortcut.recorded(7, 0, 'x'));
+    try std.testing.expectEqual(settings_view.KeyInput.refused, ui_s.key_input);
+    try std.testing.expect(prefs.recording);
+    // ⌥X is taken: idle, the recorder stopped, the key applied.
+    ui_s.took(&s, shortcut.recorded(7, 1 << 19, 'x'));
+    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    try std.testing.expect(!prefs.recording);
+    try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = 1 << 11 }));
+    // Esc while recording: idle, nothing applied.
+    prefs.applied = null;
+    ui_s.activateSelected(&s);
+    ui_s.took(&s, shortcut.recorded(53, 0, 0));
+    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    try std.testing.expect(prefs.applied == null and !prefs.recording);
+    // A key pressed while idle is no one's.
+    ui_s.took(&s, shortcut.recorded(7, 1 << 19, 'x'));
+    try std.testing.expect(prefs.applied == null);
+    // The recorder could not start: not recording.
+    prefs.can_record = false;
+    ui_s.activateSelected(&s);
+    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    try std.testing.expect(!prefs.recording);
 }
 
 test "Settings' header picks the panel's theme, and keeps it" {
@@ -225,4 +307,37 @@ test "the panel's height lands at once, and keeps Google's room between keys" {
     t.frame();
     try std.testing.expectEqual(s.height(), s.last_h);
     try std.testing.expectEqual(@as(f32, 0), s.held_h);
+}
+
+test "Google's answer landing after suggestions are turned off lists nothing" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var web: tests.Web = .{};
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = web.host();
+    s.reveal();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = view.max_height,
+    });
+    defer t.deinit();
+    t.frame();
+    t.textOps(&.{.{ .insert = "liq" }});
+    t.frame();
+    // Asked while on; turned off (the menu, Settings or sync) before it lands.
+    s.suggest_on = false;
+    s.built = 1;
+    var said: suggest.List = .{};
+    for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
+    s.answered("liq", &said);
+    t.settle(1);
+    try std.testing.expectEqual(@as(usize, 0), s.web.n);
+    try std.testing.expect(!t.hasText("liquid glass"));
+    try std.testing.expectEqual(@as(f32, 0), s.held_h);
+    // Nor is it kept for when they come back on.
+    var cached: suggest.List = .{};
+    try std.testing.expect(!s.cache.lookup("liq", &cached));
 }

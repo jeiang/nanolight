@@ -6,6 +6,7 @@
 //!   zig build app            zig-out/Nanolight.app, for /Applications
 //!   zig build test           its search, math, suggestions and panel
 //!   zig build server         the sync server, zig-out/bin/nanolight-server
+//!   zig build check-config   a tool that reads config.toml files as the app does
 //!   zig build clip-probe     the Linux clipboard watcher, run without the panel
 //!   zig build lint           zig fmt's check and TigerStyle's line and catch rules
 //!   -Dnix=true               a Nix build: Nix owns updates and startup, so
@@ -100,6 +101,20 @@ pub fn build(b: *std.Build) void {
     }) });
     if (optimize != .debug) server.root_module.strip = true;
     b.step("server", "Build the sync server (zig-out/bin/nanolight-server)").dependOn(&b.addInstallArtifact(server, .{}).step);
+
+    // Reads config.toml files as the app does (src/check_config.zig); the flake's
+    // config-parse check runs it on what the Nix modules write.
+    const check_config = b.addExecutable(.{
+        .name = "nanolight-check-config",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/check_config.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+        }),
+    });
+    b.step("check-config", "Build zig-out/bin/nanolight-check-config")
+        .dependOn(&b.addInstallArtifact(check_config, .{}).step);
 
     // Runs the Linux clipboard watcher without the panel (src/clipboard_probe.zig).
     if (os == .linux) {

@@ -106,6 +106,11 @@ pub const max_rows = max_apps + max_quicklink_rows + 3;
 /// Every local candidate, and a card, fit before ranking keeps the best of
 /// them and trims the list to `max_rows`.
 const max_candidates = 1 + max_apps + files.max_rows + max_panes + max_commands;
+comptime {
+    // The Settings and Clipboard History rows, two at most, are listed only
+    // in place of the panes and commands.
+    std.debug.assert(max_panes + max_commands >= 2);
+}
 
 /// The quicklink a query addresses by keyword, and where its words start.
 pub const Keyed = struct { ql: u16, arg: usize };
@@ -185,11 +190,10 @@ pub const Results = struct {
         return r.rows[0..r.n];
     }
 
-    /// Lists what `query` finds among `names` (with how often each was
-    /// opened, `boost`) and in `found`, the quicklinks `ql`, and Google's
+    /// Lists what `query` finds among the apps of `ix` (lifted by how often
+    /// each was opened) and in `found`, the quicklinks `ql`, and Google's
     /// completions of it (`web`), or `suggestions` when the query is empty.
     pub fn build(r: *Results, query_in: []const u8, ix: *const Index, suggestions: []const u32, web: []const []const u8, ql: []const Quicklink) void {
-        const boost = ix.launches.items;
         r.n = 0;
         r.google = null;
         r.keyed = null;
@@ -226,7 +230,7 @@ pub const Results = struct {
         }
         const local_start = r.n;
         var ranked: [max_apps]search.Ranked = undefined;
-        const n = search.rankApps(query, ix, boost, &ranked);
+        const n = search.rankApps(query, ix, &ranked);
         for (ranked[0..n]) |x| r.push(.{ .kind = .app, .app = x.index, .match = x.match });
         if (isSettings(query)) r.push(.{
             .kind = .settings,
@@ -336,9 +340,10 @@ pub const Results = struct {
         std.sort.insertion(Row, r.rows[start..r.n], preferred, Order.before);
     }
 
-    /// Local candidates may pass `max_rows` until `build` trims them.
+    /// Local candidates may pass `max_rows` until `build` trims them, but
+    /// never `max_candidates`.
     fn push(r: *Results, row: Row) void {
-        if (r.n == r.rows.len) return;
+        std.debug.assert(r.n < r.rows.len);
         r.rows[r.n] = row;
         r.n += 1;
     }
@@ -736,7 +741,7 @@ test "Clipboard History competes with apps by its name's match" {
     try t.expect(r.section(1) == null);
     // Explicit shortcuts win even over a frequently opened app.
     try ix.add("Clip", "/Clip.app");
-    ix.launches.items[2] = 100;
+    ix.apps.items[2].launches = 100;
     r.build("clip", &ix, &.{}, &.{}, defaults);
     try t.expectEqual(Kind.clipboard, r.rows[0].kind);
     r.clip_on = false;

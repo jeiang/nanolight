@@ -33,10 +33,15 @@ pub fn eligible(typed: []const u8) bool {
     return true;
 }
 
-/// The address that asks for `typed`'s completions.
-pub fn url(buf: []u8, typed: []const u8) []const u8 {
+const url_base = "https://suggestqueries.google.com/complete/search?client=firefox&q=";
+/// The longest address `url` writes: every byte of the longest query escaped.
+pub const url_max = url_base.len + 3 * max_len;
+
+/// The address that asks for `typed`'s completions (at most `max_len` bytes).
+pub fn url(buf: *[url_max]u8, typed: []const u8) []const u8 {
+    std.debug.assert(typed.len <= max_len);
     var w: std.Io.Writer = .fixed(buf);
-    w.writeAll("https://suggestqueries.google.com/complete/search?client=firefox&q=") catch return "";
+    w.writeAll(url_base) catch unreachable;
     results.escape(&w, typed, true);
     return w.buffered();
 }
@@ -190,7 +195,7 @@ test "addresses, emails and paths never go out" {
 }
 
 test "the address is escaped" {
-    var buf: [256]u8 = undefined;
+    var buf: [url_max]u8 = undefined;
     try std.testing.expectEqualStrings("https://suggestqueries.google.com/complete/search?client=firefox&q=liquid+gl+%26+co", url(&buf, " liquid gl & co "));
 }
 

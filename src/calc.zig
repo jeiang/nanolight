@@ -4,9 +4,44 @@
 //! "e" alone stay searches. Conversions (convert.zig) work out the math
 //! around them here too: `lead` before the units, `carry` after them.
 const std = @import("std");
+const assert = std.debug.assert;
 
-pub const Error = error{ Syntax, Domain };
+pub const Error = error{ Syntax, Domain, Depth };
 
+/// The most values, and the most pending operators and open parentheses,
+/// one expression holds: about 40 levels of nesting. Deeper is not math.
+const stack_max = 128;
+
+const Op = enum {
+    add,
+    sub,
+    mul,
+    div,
+    rem,
+    pow,
+
+    fn precedence(o: Op) u8 {
+        return switch (o) {
+            .add, .sub => 1,
+            .mul, .div, .rem => 2,
+            .pow => 3,
+        };
+    }
+};
+
+const Func = enum { sqrt, sin, cos, tan, ln, log, abs };
+
+/// An opening parenthesis, plain or a function's, and its operand's sign.
+const Open = struct { func: ?Func, negate: bool };
+
+const Entry = union(enum) { op: Op, open: Open };
+
+const Word = union(enum) { value: f64, func: Func };
+
+/// Operator precedence with explicit stacks (shunting-yard), evaluated as
+/// it reads. The grammar, loosest first: sums, products (* / %), powers
+/// (right-associative: 2^3^2 is 2^9), and operands, each a run of signs
+/// then a number, a constant, or a parenthesis, plain or a function's.
 const Parser = struct {
     s: []const u8,
     i: usize = 0,
@@ -17,6 +52,12 @@ const Parser = struct {
     commas: bool = false,
     /// The first operand, already worked out: `carry` goes on from it.
     seed: ?f64 = null,
+    values: [stack_max]f64 = undefined,
+    values_len: usize = 0,
+    entries: [stack_max]Entry = undefined,
+    entries_len: usize = 0,
+    /// Open parentheses among `entries`.
+    opens: usize = 0,
 
     fn skip(p: *Parser) void {
         while (p.i < p.s.len and p.s[p.i] == ' ') p.i += 1;
@@ -41,81 +82,158 @@ const Parser = struct {
         return false;
     }
 
+    /// The whole expression from `i`, ending before the first thing that
+    /// can't continue it.
     fn expr(p: *Parser) Error!f64 {
-        var v = try p.term();
+        assert(p.values_len == 0 and p.entries_len == 0);
+        if (p.seed) |v| {
+            p.seed = null;
+            try p.pushValue(v);
+        } else try p.operand();
+        while (try p.operator()) try p.operand();
+        assert(p.opens == 0);
+        while (p.entries_len > 0) {
+            p.entries_len -= 1;
+            try p.apply(p.entries[p.entries_len].op);
+        }
+        assert(p.values_len == 1);
+        return p.values[0];
+    }
+
+    /// Reads one operand onto `values`, opening any parentheses before it.
+    fn operand(p: *Parser) Error!void {
         while (true) {
-            if (p.op('+', "")) {
-                p.math = true;
-                v += try p.term();
-            } else if (p.op('-', "−")) {
-                p.math = true;
-                v -= try p.term();
-            } else return v;
+            var negate = false;
+            while (true) {
+                if (p.op('-', "−")) {
+                    negate = !negate;
+                } else if (!p.op('+', "")) break;
+            }
+            const ch = p.peek();
+            if (ch == '(') {
+                p.i += 1;
+                try p.open(.{ .func = null, .negate = negate });
+                continue;
+            }
+            const v = if (std.ascii.isDigit(ch) or ch == '.')
+                try p.number()
+            else if (std.ascii.isAlphabetic(ch)) switch (try p.word()) {
+                .value => |constant| constant,
+                .func => |f| {
+                    try p.open(.{ .func = f, .negate = negate });
+                    continue;
+                },
+            } else return error.Syntax;
+            return p.pushValue(if (negate) -v else v);
         }
     }
 
-    fn term(p: *Parser) Error!f64 {
-        var v = try p.power();
+    /// After an operand, closes parentheses until a binary operator (true:
+    /// an operand follows) or the end of the expression (false).
+    fn operator(p: *Parser) Error!bool {
         while (true) {
-            if (p.op('*', "×")) {
-                p.math = true;
-                v *= try p.power();
-            } else if (p.op('/', "÷")) {
-                p.math = true;
-                const d = try p.power();
-                if (d == 0) return error.Domain;
-                v /= d;
-            } else if (p.op('%', "")) {
-                p.math = true;
-                const d = try p.power();
-                if (d == 0) return error.Domain;
-                v = @rem(v, d);
-            } else return v;
-        }
-    }
-
-    /// Right-associative: 2^3^2 is 2^9.
-    fn power(p: *Parser) Error!f64 {
-        const base = p.seed orelse try p.unary();
-        p.seed = null;
-        if (p.op('^', "")) {
+            const o = p.binary() orelse {
+                if (p.opens == 0) return false;
+                if (!p.op(')', "")) return error.Syntax;
+                try p.close();
+                continue;
+            };
             p.math = true;
-            return std.math.pow(f64, base, try p.power());
+            // Apply what binds at least as tightly; powers wait for the right.
+            while (p.entries_len > 0) {
+                const top = switch (p.entries[p.entries_len - 1]) {
+                    .op => |t| t,
+                    .open => break,
+                };
+                if (top.precedence() < o.precedence()) break;
+                if (top == .pow and o == .pow) break;
+                p.entries_len -= 1;
+                try p.apply(top);
+            }
+            try p.pushEntry(.{ .op = o });
+            return true;
         }
-        return base;
     }
 
-    fn unary(p: *Parser) Error!f64 {
-        if (p.op('-', "−")) return -(try p.unary());
-        if (p.op('+', "")) return p.unary();
-        return p.primary();
+    fn binary(p: *Parser) ?Op {
+        if (p.op('^', "")) return .pow;
+        if (p.op('*', "×")) return .mul;
+        if (p.op('/', "÷")) return .div;
+        if (p.op('%', "")) return .rem;
+        if (p.op('+', "")) return .add;
+        if (p.op('-', "−")) return .sub;
+        return null;
     }
 
-    fn primary(p: *Parser) Error!f64 {
-        const ch = p.peek();
-        if (ch == '(') {
-            p.i += 1;
-            const v = try p.expr();
-            if (!p.op(')', "")) return error.Syntax;
-            return v;
+    fn open(p: *Parser, o: Open) Error!void {
+        try p.pushEntry(.{ .open = o });
+        p.opens += 1;
+    }
+
+    /// Applies the operators back to the innermost open parenthesis, then
+    /// its function and sign.
+    fn close(p: *Parser) Error!void {
+        assert(p.opens > 0);
+        while (true) {
+            assert(p.entries_len > 0);
+            p.entries_len -= 1;
+            switch (p.entries[p.entries_len]) {
+                .op => |o| try p.apply(o),
+                .open => |o| {
+                    p.opens -= 1;
+                    assert(p.values_len > 0);
+                    const v = try call(o.func, p.values[p.values_len - 1]);
+                    p.values[p.values_len - 1] = if (o.negate) -v else v;
+                    return;
+                },
+            }
         }
-        if (std.ascii.isDigit(ch) or ch == '.') return p.number();
-        if (std.ascii.isAlphabetic(ch)) return p.word();
-        return error.Syntax;
+    }
+
+    fn apply(p: *Parser, o: Op) Error!void {
+        assert(p.values_len >= 2);
+        const a = p.values[p.values_len - 2];
+        const b = p.values[p.values_len - 1];
+        p.values_len -= 1;
+        p.values[p.values_len - 1] = switch (o) {
+            .add => a + b,
+            .sub => a - b,
+            .mul => a * b,
+            .div => if (b == 0) return error.Domain else a / b,
+            .rem => if (b == 0) return error.Domain else @rem(a, b),
+            .pow => std.math.pow(f64, a, b),
+        };
+    }
+
+    fn pushValue(p: *Parser, v: f64) Error!void {
+        if (p.values_len == stack_max) return error.Depth;
+        p.values[p.values_len] = v;
+        p.values_len += 1;
+    }
+
+    fn pushEntry(p: *Parser, e: Entry) Error!void {
+        if (p.entries_len == stack_max) return error.Depth;
+        p.entries[p.entries_len] = e;
+        p.entries_len += 1;
     }
 
     fn number(p: *Parser) Error!f64 {
         const start = p.i;
-        while (p.i < p.s.len and (std.ascii.isDigit(p.s[p.i]) or p.s[p.i] == '.' or p.s[p.i] == '_' or (p.commas and p.s[p.i] == ','))) p.i += 1;
+        while (p.i < p.s.len and numeric(p.s[p.i], p.commas)) p.i += 1;
         // 1e3, 2.5E-4
-        if (p.i < p.s.len and (p.s[p.i] == 'e' or p.s[p.i] == 'E') and p.i + 1 < p.s.len and
-            (std.ascii.isDigit(p.s[p.i + 1]) or ((p.s[p.i + 1] == '-' or p.s[p.i + 1] == '+') and p.i + 2 < p.s.len and std.ascii.isDigit(p.s[p.i + 2]))))
-        {
-            p.i += 2;
-            while (p.i < p.s.len and std.ascii.isDigit(p.s[p.i])) p.i += 1;
+        if (p.i + 1 < p.s.len and (p.s[p.i] == 'e' or p.s[p.i] == 'E')) {
+            const next = p.s[p.i + 1];
+            const signed = (next == '-' or next == '+') and p.i + 2 < p.s.len and
+                std.ascii.isDigit(p.s[p.i + 2]);
+            if (std.ascii.isDigit(next) or signed) {
+                p.i += 2;
+                while (p.i < p.s.len and std.ascii.isDigit(p.s[p.i])) p.i += 1;
+            }
         }
         const text = p.s[start..p.i];
-        if (std.mem.indexOfScalar(u8, text, ',') == null) return std.fmt.parseFloat(f64, text) catch error.Syntax;
+        if (std.mem.indexOfScalar(u8, text, ',') == null) {
+            return std.fmt.parseFloat(f64, text) catch error.Syntax;
+        }
         // "1,500": the commas only group the digits.
         var buf: [64]u8 = undefined;
         var n: usize = 0;
@@ -128,31 +246,38 @@ const Parser = struct {
         return std.fmt.parseFloat(f64, buf[0..n]) catch error.Syntax;
     }
 
-    fn word(p: *Parser) Error!f64 {
+    /// A constant, or a function name and its opening parenthesis.
+    fn word(p: *Parser) Error!Word {
         const start = p.i;
         while (p.i < p.s.len and std.ascii.isAlphabetic(p.s[p.i])) p.i += 1;
         const w = p.s[start..p.i];
         const eq = std.ascii.eqlIgnoreCase;
-        if (eq(w, "pi")) return std.math.pi;
-        if (eq(w, "e")) return std.math.e;
+        if (eq(w, "pi")) return .{ .value = std.math.pi };
+        if (eq(w, "e")) return .{ .value = std.math.e };
         const f = std.meta.stringToEnum(Func, w) orelse return error.Syntax;
         p.math = true;
         if (!p.op('(', "")) return error.Syntax;
-        const x = try p.expr();
-        if (!p.op(')', "")) return error.Syntax;
-        return switch (f) {
-            .sqrt => if (x < 0) error.Domain else @sqrt(x),
-            .sin => @sin(x),
-            .cos => @cos(x),
-            .tan => @tan(x),
-            .ln => if (x <= 0) error.Domain else @log(x),
-            .log => if (x <= 0) error.Domain else @log10(x),
-            .abs => @abs(x),
-        };
+        return .{ .func = f };
     }
 };
 
-const Func = enum { sqrt, sin, cos, tan, ln, log, abs };
+fn numeric(ch: u8, commas: bool) bool {
+    return std.ascii.isDigit(ch) or ch == '.' or ch == '_' or (commas and ch == ',');
+}
+
+/// `x` through a parenthesis' function, if it has one.
+fn call(func: ?Func, x: f64) Error!f64 {
+    const f = func orelse return x;
+    return switch (f) {
+        .sqrt => if (x < 0) error.Domain else @sqrt(x),
+        .sin => @sin(x),
+        .cos => @cos(x),
+        .tan => @tan(x),
+        .ln => if (x <= 0) error.Domain else @log(x),
+        .log => if (x <= 0) error.Domain else @log10(x),
+        .abs => @abs(x),
+    };
+}
 
 /// The value of `query` if it is math, or null if it isn't math at all.
 /// Math that can't be computed (1/0, a dangling operator) is null too.
@@ -280,4 +405,53 @@ test "values read as people write them" {
     try t.expectEqualStrings("-1,000", format(&buf, -1000, true));
     try t.expectEqualStrings("2.5", format(&buf, 2.5, true));
     try t.expectEqualStrings("0.3333333333", format(&buf, 1.0 / 3.0, true));
+}
+
+test "long or deeply nested input fails cleanly, without deep recursion" {
+    const t = std.testing;
+    const long = 100_000;
+    var buf: [long + 2]u8 = undefined;
+    @memset(buf[0..long], '(');
+    buf[long] = '1';
+    try t.expectEqual(@as(?f64, null), eval(buf[0 .. long + 1]));
+    try t.expect(lead(buf[0 .. long + 1]) == null);
+    try t.expectEqual(@as(?f64, null), carry(1, buf[0 .. long + 1]));
+    // Signs need no stack: a long run of them still reads.
+    @memset(buf[0..long], '-');
+    buf[long] = '2';
+    try t.expectEqual(@as(?f64, 2), lead(buf[0 .. long + 1]).?.value);
+    try t.expectEqual(@as(?f64, null), eval(buf[0 .. long + 1]));
+    buf[long] = '*';
+    buf[long + 1] = '2';
+    try t.expectEqual(@as(?f64, null), eval(buf[0 .. long + 2]));
+    // A long chain of right-associative powers runs out of stack.
+    var pow: [2 * long]u8 = undefined;
+    for (0..long) |i| {
+        pow[2 * i] = '1';
+        pow[2 * i + 1] = '^';
+    }
+    try t.expectEqual(@as(?f64, null), eval(pow[0 .. 2 * long - 1]));
+}
+
+test "nesting within the stack is math as usual" {
+    const t = std.testing;
+    const depth = 40;
+    var buf: [4 * depth + 1]u8 = undefined;
+    var n: usize = 0;
+    for (0..depth) |_| {
+        @memcpy(buf[n..][0..3], "1+(");
+        n += 3;
+    }
+    buf[n] = '1';
+    n += 1;
+    @memset(buf[n..][0..depth], ')');
+    n += depth;
+    try t.expectEqual(@as(?f64, depth + 1), eval(buf[0..n]));
+    try t.expectEqual(@as(?f64, -4), eval("-(-(1+1))*-2"));
+    try t.expectEqual(@as(?f64, 4), eval("-2^2"));
+    try t.expectEqual(@as(?f64, 0.25), eval("2^-2"));
+    try t.expectEqual(@as(?f64, 2), eval("abs(-sqrt(4))"));
+    try t.expectEqual(@as(?f64, -2), eval("-sqrt (4) + 0"));
+    try t.expectEqual(@as(?f64, 3), eval("10 - 4 - 3"));
+    try t.expectEqual(@as(?f64, 5), eval("40 / 4 / 2"));
 }

@@ -10,8 +10,9 @@ pub const SettingsHost = struct {
     choice: *const fn (ctx: *anyopaque) shortcut.Choice,
     apply: *const fn (ctx: *anyopaque, c: shortcut.Choice) void,
     /// Starts or stops recording a key of one's own: the keys pressed go
-    /// to `Settings.took`, not the panel (recorder.zig).
-    record: *const fn (ctx: *anyopaque, on: bool) void,
+    /// to `Settings.took`, not the panel (recorder.zig). Whether it is
+    /// recording now (false when the recorder could not start).
+    record: *const fn (ctx: *anyopaque, on: bool) bool,
     /// Whether it opens at login; `set` changes it first.
     login: *const fn (ctx: *anyopaque, set: ?bool) bool,
     /// Google's suggestions turned on or off in Settings.
@@ -25,8 +26,8 @@ pub const SettingsHost = struct {
     /// Whether clipboard history records; `set` changes it first. Null where
     /// this system has no clipboard history (its rows are not shown).
     clipboard_enabled: *const fn (ctx: *anyopaque, set: ?bool) ?bool,
-    /// Deletes every clipboard entry.
-    clipboard_clear: *const fn (ctx: *anyopaque) void,
+    /// Deletes every clipboard entry; false when something may be left on disk.
+    clipboard_clear: *const fn (ctx: *anyopaque) bool,
     /// The sync line ("Sync: host, last synced 3 min ago"); valid until the next call.
     sync_status: *const fn (ctx: *anyopaque) []const u8,
     /// The version running, and a newer one waiting (else null).

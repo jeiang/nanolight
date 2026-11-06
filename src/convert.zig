@@ -4,9 +4,10 @@
 //! the parser are pure; calc.zig works out the math. Currency rates are a
 //! table fetched elsewhere (`Rates`, the JSON of
 //! github.com/fawazahmed0/exchange-api: lowercase codes, each worth of one
-//! USD) that `answer` is handed; `due` says when to fetch it again.
+//! USD) that `answer` is handed; `Feed` holds it and says when to fetch it.
 const std = @import("std");
 const calc = @import("calc.zig");
+const assert = std.debug.assert;
 
 pub const urls = [_][]const u8{
     "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.min.json",
@@ -19,12 +20,75 @@ pub const max_age = 24 * 3600;
 /// A failed fetch is tried again after this long (seconds).
 pub const retry_after = 600;
 
-/// Whether rates should be fetched now. `fetched` and `tried` are Unix
-/// seconds of the last success and the last attempt, 0 for never.
-pub fn due(have: bool, fetched: i64, tried: i64, now: i64) bool {
-    if (now - tried < retry_after and tried != 0) return false;
-    return !have or now - fetched >= max_age;
-}
+/// The rates in hand and their fetching: when they were fetched and when a
+/// fetch last began (Unix seconds, 0 for never), and whether one is out.
+pub const Feed = struct {
+    rates: ?Rates = null,
+    fetched_s: i64 = 0,
+    tried_s: i64 = 0,
+    state: State = .idle,
+    /// The cached table was looked for (`cached`), once.
+    cache_read: bool = false,
+
+    pub const State = enum { idle, busy, missed };
+
+    pub fn deinit(f: *Feed) void {
+        if (f.rates) |*r| r.deinit();
+        f.rates = null;
+    }
+
+    pub fn table(f: *const Feed) ?*const Rates {
+        return if (f.rates) |*r| r else null;
+    }
+
+    /// Rates could not be had: the last fetch failed and none are in hand.
+    /// A retry on its way is not a failure.
+    pub fn failed(f: *const Feed) bool {
+        return f.state == .missed and f.rates == null;
+    }
+
+    /// Whether a fetch should begin now: none is out, and the rates are
+    /// missing or a day old; after a failure, not for `retry_after`.
+    pub fn due(f: *const Feed, now_s: i64) bool {
+        if (f.state == .busy) return false;
+        if (f.tried_s != 0 and now_s - f.tried_s < retry_after) return false;
+        return f.rates == null or now_s - f.fetched_s >= max_age;
+    }
+
+    /// What the cache held: the table, if any, and when it was fetched.
+    pub fn cached(f: *Feed, r: ?Rates, fetched_s: i64) void {
+        assert(!f.cache_read);
+        assert(f.state == .idle);
+        f.cache_read = true;
+        f.fetched_s = fetched_s;
+        if (r) |t| f.use(t);
+    }
+
+    pub fn begin(f: *Feed, now_s: i64) void {
+        assert(f.state != .busy);
+        f.state = .busy;
+        f.tried_s = now_s;
+    }
+
+    /// The fetch brought `r`, now the table in use.
+    pub fn landed(f: *Feed, r: Rates, now_s: i64) void {
+        assert(f.state == .busy);
+        f.use(r);
+        f.fetched_s = now_s;
+        f.state = .idle;
+    }
+
+    /// The fetch brought nothing, from any address.
+    pub fn fail(f: *Feed) void {
+        assert(f.state == .busy);
+        f.state = .missed;
+    }
+
+    fn use(f: *Feed, r: Rates) void {
+        f.deinit();
+        f.rates = r;
+    }
+};
 
 const Family = enum { length, mass, temperature, volume, area, speed, data, time };
 
@@ -629,12 +693,45 @@ test "money and rates read as people write them" {
     try testing.expectEqualStrings("2000000 mm", formatUnit(&buf, w, false));
 }
 
-test "rates are fetched when missing or a day old, and not in a loop" {
-    try testing.expect(due(false, 0, 0, 1000));
-    try testing.expect(!due(true, 1000, 1000, 1000 + max_age - 1));
-    try testing.expect(due(true, 1000, 1000, 1000 + max_age));
-    try testing.expect(!due(false, 0, 1000, 1000 + retry_after - 1));
-    try testing.expect(due(false, 0, 1000, 1000 + retry_after));
-    // Stale and the refresh failed: wait before asking again.
-    try testing.expect(!due(true, 0, max_age + 5, max_age + 6));
+test "rates are fetched when missing or a day old, one at a time, not in a loop" {
+    var f: Feed = .{};
+    defer f.deinit();
+    try testing.expect(f.due(1000));
+    f.begin(1000);
+    // One out: no second, and no failure yet.
+    try testing.expect(!f.due(1000 + retry_after));
+    try testing.expect(!f.failed());
+    f.fail();
+    try testing.expect(f.failed());
+    try testing.expect(!f.due(1000 + retry_after - 1));
+    try testing.expect(f.due(1000 + retry_after));
+    // A retry on its way is not a failure.
+    const t0 = 1000 + retry_after;
+    f.begin(t0);
+    try testing.expect(!f.failed());
+    f.landed(Rates.parse(testing.allocator, sample).?, t0);
+    try testing.expect(!f.failed());
+    try testing.expect(f.table() != null);
+    try testing.expect(!f.due(t0 + max_age - 1));
+    try testing.expect(f.due(t0 + max_age));
+    // Stale and the refresh failed: the old table still answers, and the
+    // next try waits.
+    f.begin(t0 + max_age);
+    f.fail();
+    try testing.expect(!f.failed());
+    try testing.expect(f.table() != null);
+    try testing.expect(!f.due(t0 + max_age + 1));
+}
+
+test "the cache's table and day count as fetched" {
+    var f: Feed = .{};
+    defer f.deinit();
+    f.cached(Rates.parse(testing.allocator, sample).?, 5000);
+    try testing.expect(f.cache_read);
+    try testing.expect(!f.due(5000 + max_age - 1));
+    try testing.expect(f.due(5000 + max_age));
+    var none: Feed = .{};
+    none.cached(null, 0);
+    try testing.expect(none.due(1));
+    try testing.expect(!none.failed());
 }

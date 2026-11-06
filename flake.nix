@@ -30,6 +30,7 @@
       nanolight-server = self.packages.${pkgs.stdenv.hostPlatform.system}.nanolight-server;
       server-vm = import ./nix/tests/server-vm.nix {inherit self pkgs;};
       modules-eval = import ./nix/tests/modules-eval.nix {inherit self nixpkgs pkgs;};
+      config-parse = import ./nix/tests/config-parse.nix {inherit self nixpkgs pkgs;};
     });
 
     formatter = forSystems systems (pkgs: pkgs.alejandra);

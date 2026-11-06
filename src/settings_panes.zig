@@ -117,42 +117,18 @@ fn strip(query: []const u8) []const u8 {
 /// pane, which would list under nearly every query.
 const min_score = 500;
 
-/// The panes `query` asks for, best first, into `out`; how many.
+/// The panes `query` asks for, best first (table order among equals),
+/// into `out`; how many.
 pub fn rank(query: []const u8, out: []search.Ranked) usize {
     const q = strip(query);
     if (q.len < 2) return 0;
-    var n: usize = 0;
+    var top: search.Top = .init(out);
     for (all, 0..) |p, i| {
-        var best = search.score(q, p.name);
-        if (best != null and best.?.score < min_score) best = null;
-        for (p.keywords) |k| if (search.score(q, k)) |m| {
-            // A word for it matches a little lower than its name, and lights
-            // nothing in the name shown.
-            var via = m;
-            via.score -= 40;
-            via.n = 0;
-            if (m.score >= min_score and (best == null or via.score > best.?.score)) best = via;
-        };
-        const m = best orelse continue;
+        const m = search.scoreNamed(q, p.name, p.keywords, min_score) orelse continue;
         if (!present(i)) continue;
-        const r: search.Ranked = .{ .index = @intCast(i), .match = m };
-        if (n < out.len) {
-            out[n] = r;
-            n += 1;
-        } else {
-            var worst: usize = 0;
-            for (out[1..n], 1..) |o, j| if (o.match.score < out[worst].match.score) {
-                worst = j;
-            };
-            if (m.score > out[worst].match.score) out[worst] = r;
-        }
+        top.offer(.{ .index = @intCast(i), .match = m });
     }
-    std.sort.pdq(search.Ranked, out[0..n], {}, struct {
-        fn f(_: void, a: search.Ranked, b: search.Ranked) bool {
-            return a.match.score > b.match.score;
-        }
-    }.f);
-    return n;
+    return top.n;
 }
 
 test "panes are found by name and by the words people use (#12)" {

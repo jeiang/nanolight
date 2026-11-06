@@ -1,12 +1,11 @@
 self: {
   config,
   lib,
-  pkgs,
   ...
 }: let
   cfg = config.programs.nanolight;
   user = config.system.primaryUser;
-  configFile = "/etc/nanolight/config.toml";
+  configPath = "/etc/nanolight/config.toml";
   storeApp = "${cfg.package}/Applications/Nanolight.app";
   installedApp = "/Applications/Nanolight.app";
   stamp = "/var/db/nanolight/app-source";
@@ -48,15 +47,9 @@ in {
     ];
 
     environment.systemPackages = [cfg.package];
-    environment.etc."nanolight/config.toml".source = (pkgs.formats.toml {}).generate "nanolight-config.toml" cfg.settings;
+    environment.etc."nanolight/config.toml".source = cfg.configFile;
 
-    launchd.user.agents.nanolight.serviceConfig = {
-      ProgramArguments = [exe];
-      RunAtLoad = true;
-      KeepAlive.SuccessfulExit = false;
-      EnvironmentVariables.NANOLIGHT_CONFIG = configFile;
-      ProcessType = "Interactive";
-    };
+    launchd.user.agents.nanolight.serviceConfig = import ./launch-agent.nix {inherit exe configPath;};
 
     system.activationScripts.postActivation.text = lib.concatStrings [
       (lib.optionalString signed ''

@@ -36,9 +36,7 @@ fn choice(ctx: *anyopaque) shortcut.Choice {
 }
 
 fn suggest(ctx: *anyopaque, on: bool) void {
-    var item: nanoui.menu.Item = undefined;
-    item.checked = on;
-    l(ctx).toggleSuggest(&item);
+    l(ctx).setSuggest(on, .here);
 }
 
 fn searchesOut(ctx: *anyopaque, on: bool) void {
@@ -51,7 +49,7 @@ const theme_key = "nanolight.theme";
 fn theme(ctx: *anyopaque, t: Theme) void {
     const live = l(ctx);
     live.s.theme = t;
-    live.kv.set(theme_key, @tagName(t)) catch {};
+    _ = @import("config.zig").kvSet(live.kv, theme_key, @tagName(t));
     if (live.window) |w| w.redraw();
 }
 
@@ -85,9 +83,7 @@ fn check(ctx: *anyopaque) void {
 }
 
 fn restart(ctx: *anyopaque) void {
-    const live = l(ctx);
-    const u = live.updater orelse return;
-    if (u.ready() != null and u.restart()) live.app.quit();
+    l(ctx).restartForUpdate();
 }
 
 fn welcome(ctx: *anyopaque) void {

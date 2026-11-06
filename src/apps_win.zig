@@ -5,7 +5,8 @@
 //! Its icon is the shell's own, 64 pixels (IShellItemImageFactory).
 const std = @import("std");
 const nanoui = @import("nanoui");
-const Index = @import("apps.zig").Index;
+const apps = @import("apps.zig");
+const Index = apps.Index;
 
 pub fn scan(ix: *Index, io: std.Io, env: *const std.process.Environ.Map) void {
     for ([_][]const u8{ "ProgramData", "APPDATA" }) |v| {
@@ -23,24 +24,19 @@ pub fn scan(ix: *Index, io: std.Io, env: *const std.process.Environ.Map) void {
 }
 
 pub fn scanDir(ix: *Index, io: std.Io, path: []const u8, depth: u8) void {
-    var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return;
-    defer dir.close(io);
-    var it = dir.iterate();
-    var buf: [1024]u8 = undefined;
-    while (it.next(io) catch null) |e| {
-        const full = std.fmt.bufPrint(&buf, "{s}\\{s}", .{ path, e.name }) catch continue;
-        const ext = std.fs.path.extension(e.name);
-        if (std.ascii.eqlIgnoreCase(ext, ".lnk") or std.ascii.eqlIgnoreCase(ext, ".url")) {
-            const name = e.name[0 .. e.name.len - ext.len];
-            if (skipped(name)) continue;
-            const parent = std.fs.path.basename(path);
-            ix.addIn(name, full, if (std.ascii.eqlIgnoreCase(parent, "Programs")) "Start" else parent) catch return;
-        } else if (depth > 0 and e.kind == .directory) {
-            var sub: [1024]u8 = undefined;
-            @memcpy(sub[0..full.len], full);
-            scanDir(ix, io, sub[0..full.len], depth - 1);
-        }
-    }
+    apps.walk(io, path, depth, ix, visit);
+}
+
+fn visit(ix: *Index, f: apps.Found) apps.Step {
+    const ext = std.fs.path.extension(f.entry.name);
+    const link = std.ascii.eqlIgnoreCase(ext, ".lnk") or std.ascii.eqlIgnoreCase(ext, ".url");
+    if (!link) return .descend;
+    const name = f.entry.name[0 .. f.entry.name.len - ext.len];
+    if (skipped(name)) return .next;
+    const parent = std.fs.path.basename(f.folder);
+    const folder = if (std.ascii.eqlIgnoreCase(parent, "Programs")) "Start" else parent;
+    ix.addIn(name, f.full, folder) catch return .stop;
+    return .next;
 }
 
 /// Shortcuts nobody launches from a launcher.
