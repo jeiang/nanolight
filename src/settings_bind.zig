@@ -1,99 +1,127 @@
-//! Live's answers to Settings. The box is one, its context set to the
-//! Live that is showing the panel (one Nanolight runs).
+//! Settings' answers (settings_host.zig), each from what owns it: the
+//! app's key and welcome, file search, suggestions, the menu bar icon, the
+//! clipboard history, sync and updates. Where searches open and the tint
+//! are Settings' own.
 const Choice = @import("keys.zig").Choice;
 const prefs = @import("prefs.zig");
+const platform = @import("platform.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Theme = @import("palette.zig").Theme;
-pub var box: SettingsHost = .{
-    .ctx = undefined,
-    .choice = choice,
-    .apply = @import("main.zig").applyChoice,
-    .record = @import("main.zig").recordKey,
-    .login = @import("main.zig").loginItem,
-    .suggest = suggest,
-    .files = files,
-    .searches_out = searchesOut,
-    .theme = theme,
-    .menu_bar = menuBar,
-    .clipboard_enabled = @import("clipboard_live.zig").enabled,
-    .clipboard_clear = @import("clipboard_live.zig").clear,
-    .sync_status = syncStatus,
-    .version = version,
-    .ready = ready,
-    .check = check,
-    .restart = restart,
-    .welcome = welcome,
-    .quit = quit,
+const App = @import("app.zig").App;
+const suggest_live = @import("suggest_live.zig");
+const files_live = @import("files_live.zig");
+const menu_live = @import("menu_live.zig");
+const clipboard_live = @import("clipboard_live.zig");
+const account_live = @import("account_live.zig");
+const update_live = @import("update_live.zig");
+
+pub const Bind = struct {
+    core: *App,
+    menu: *menu_live.Menu,
+    clip: *clipboard_live.Clip,
+    sync: *account_live.Sync,
+    update: *update_live.Update,
+
+    /// Settings' host, answering from `b`.
+    pub fn host(b: *Bind) SettingsHost {
+        return .{
+            .ctx = b,
+            .choice = choice,
+            .apply = apply,
+            .record = record,
+            .login = platform.Login.enabled,
+            .suggest = suggest,
+            .files = files,
+            .searches_out = searchesOut,
+            .theme = theme,
+            .menu_bar = menuBar,
+            .clipboard_enabled = clipboardEnabled,
+            .clipboard_clear = clipboardClear,
+            .sync_status = syncStatus,
+            .version = version,
+            .ready = ready,
+            .check = check,
+            .restart = restart,
+            .welcome = welcome,
+            .quit = quit,
+        };
+    }
 };
 
-const Live = @import("main.zig").Live;
-
-fn l(ctx: *anyopaque) *Live {
+fn from(ctx: *anyopaque) *Bind {
     return @ptrCast(@alignCast(ctx));
 }
 
 fn choice(ctx: *anyopaque) Choice {
-    return l(ctx).choice;
+    return from(ctx).core.choice;
+}
+
+fn apply(ctx: *anyopaque, c: Choice) void {
+    App.apply(from(ctx).core, c);
+}
+
+fn record(ctx: *anyopaque, on: bool) bool {
+    return App.record(from(ctx).core, on);
 }
 
 fn suggest(ctx: *anyopaque, on: bool) void {
-    l(ctx).setSuggest(on, .here);
+    suggest_live.set(from(ctx).core, on, .here);
 }
 
 fn files(ctx: *anyopaque, on: bool) void {
-    const live = l(ctx);
-    live.s.files_on = on;
-    live.s.built = 1;
-    // A failure is logged; file search follows the switch this run either way.
-    _ = prefs.setFlag(live.kv, .files, on);
+    files_live.set(from(ctx).core, on);
 }
 
 fn searchesOut(ctx: *anyopaque, on: bool) void {
-    l(ctx).setSearchesOut(on);
+    const core = from(ctx).core;
+    core.s.searches_out = on;
+    _ = prefs.setFlag(core.kv, .searches_out, on);
 }
 
 fn theme(ctx: *anyopaque, t: Theme) void {
-    const live = l(ctx);
-    live.s.theme = t;
+    const core = from(ctx).core;
+    core.s.theme = t;
     // A failure is logged; the next launch then has the old tint.
-    _ = prefs.setTheme(live.kv, t);
-    if (live.window) |w| w.redraw();
+    _ = prefs.setTheme(core.kv, t);
+    core.redraw();
 }
 
 fn menuBar(ctx: *anyopaque, set: ?bool) bool {
-    return l(ctx).menuBar(set);
+    return from(ctx).menu.bar(set);
+}
+
+fn clipboardEnabled(ctx: *anyopaque, set: ?bool) ?bool {
+    return from(ctx).clip.enabled(set);
+}
+
+fn clipboardClear(ctx: *anyopaque) bool {
+    return from(ctx).clip.clear();
 }
 
 fn syncStatus(ctx: *anyopaque) []const u8 {
-    return l(ctx).syncStatus();
+    return from(ctx).sync.status();
 }
 
-/// The updater's version, else the build's.
 fn version(ctx: *anyopaque) []const u8 {
-    const built = @import("build_options").version;
-    const u = l(ctx).updater orelse return built;
-    return if (u.current.len > 0) u.current else built;
+    return from(ctx).update.version();
 }
 
 fn ready(ctx: *anyopaque) ?[]const u8 {
-    const u = l(ctx).updater orelse return null;
-    return u.ready();
+    return from(ctx).update.ready();
 }
 
 fn check(ctx: *anyopaque) void {
-    if (l(ctx).updater) |u| u.checkNow();
+    from(ctx).update.check();
 }
 
 fn restart(ctx: *anyopaque) void {
-    l(ctx).restartForUpdate();
+    from(ctx).update.restart();
 }
 
 fn welcome(ctx: *anyopaque) void {
-    const live = l(ctx);
-    live.o.start(live.choice);
-    if (live.window) |w| if (w.isVisible()) w.redraw();
+    from(ctx).core.welcome(.settings);
 }
 
 fn quit(ctx: *anyopaque) void {
-    l(ctx).app.quit();
+    from(ctx).core.app.quit();
 }

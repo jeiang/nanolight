@@ -237,7 +237,10 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 
 | File | What |
 | --- | --- |
-| `src/main.zig` | The app: the window, the hot key, the menu bar icon, updates |
+| `src/main.zig` | Startup: the arguments, the features wired to the panel, the app's loop |
+| `src/app.zig` | The app around the panel: its window, shown and hidden, its key and its welcome |
+| `src/suggest_live.zig`, `src/rates_live.zig`, `src/files_live.zig`, `src/commands_live.zig` | The app's side of Google's completions, currency rates, file search and system commands |
+| `src/menu_live.zig`, `src/update_live.zig`, `src/settings_bind.zig` | The menu bar icon and its menu, updates, and Settings' answers |
 | `src/view.zig` | The panel: query, rows, footer, keys |
 | `src/results.zig` | What a query lists, in order |
 | `src/search.zig` | Text: fuzzy matching and ranking (allocation-free), UTF-8 cutting, URL escaping |
@@ -248,7 +251,7 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/platform.zig` | Each OS's parts, picked once, and what it can do; `src/pc_stubs.zig` stands in for the Mac's, checked against them |
 | `src/panel_mac.zig`, `src/panel_pc.zig` | The panel's window on the Mac, and on Windows and Linux (with X11's focus) |
 | `src/hotkey*.zig`, `src/apps_*.zig`, `src/single*.zig`, `src/login.zig` | Each platform's key, apps, single copy and login item |
-| `src/account.zig`, `src/account_menu.zig` | The sync client: `[sync]`, the PUT and merge, the status line |
+| `src/account.zig`, `src/account_live.zig` | The sync client: `[sync]`, the PUT and merge, the status line; the app's side (snapshot, merge, quicklinks) |
 | `src/server.zig`, `src/settings.zig` | `nanolight-server`: the protocol as a pure function, tokens, atomic records; and the record both sides merge |
 | `src/raycast_model.zig`, `src/raycast_view.zig` | The panel's command screen (a script's output, arguments) |
 | `src/script_commands.zig`, `src/script_run.zig` | Raycast script commands, run in Zig |

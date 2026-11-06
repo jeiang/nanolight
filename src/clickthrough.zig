@@ -1,6 +1,6 @@
 //! Clicks outside the panel reach what is under it. The window is as tall
 //! as the panel can be, and a shadow's margin wider (it never resizes: see
-//! main.zig's `Live`), so below a short panel it is clear but still there:
+//! app.zig's `App.resize`), so below a short panel it is clear but still there:
 //! a click there landed on Nanolight's own window, which kept the keys, so
 //! the panel stayed and the app beneath got nothing. While the panel shows,
 //! the window ignores the mouse wherever the pointer is not over the panel:
@@ -19,7 +19,7 @@ const mask = mouse_moved | left_dragged;
 
 pub const ClickThrough = struct {
     window: ?*nanoui.Window = null,
-    /// The panel's height as drawn now (main.zig's `Live.resize`).
+    /// The panel's height as drawn now (app.zig's `App.resize`).
     height: f32 = 0,
     global: ?objc.Object = null,
     local: ?objc.Object = null,

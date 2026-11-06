@@ -30,8 +30,9 @@ pub const Hooks = struct {
     apply: *const fn (ctx: *anyopaque, choice: Choice) void,
     /// Frees the shortcut: Keyboard Shortcuts opened, a launcher quit.
     fix: *const fn (ctx: *anyopaque, clash: shortcut_clash.Clash) void,
-    /// Whether it opens at login; `set` changes it first.
-    login: ?*const fn (ctx: *anyopaque, set: ?bool) bool = null,
+    /// Whether it opens at login; `set` changes it first. The system keeps
+    /// it, so no context.
+    login: ?*const fn (set: ?bool) bool = null,
     /// The welcome is over: keep that.
     done: *const fn (ctx: *anyopaque) void,
 };
@@ -83,7 +84,7 @@ pub const Onboard = struct {
         // Without hooks (tests) what the caller set is kept.
         const h = o.hooks orelse return;
         o.holders = shortcut_clash.look(&o.system_buf);
-        if (h.login) |f| o.login = f(h.ctx, null);
+        if (h.login) |f| o.login = f(null);
     }
 
     pub fn clash(o: *const Onboard) shortcut_clash.Clash {
@@ -425,7 +426,7 @@ pub const Onboard = struct {
         }
         const h = o.hooks orelse return;
         const f = h.login orelse return;
-        if (ui.toggle(c, "Open Nanolight when you log in", &o.login)) o.login = f(h.ctx, o.login);
+        if (ui.toggle(c, "Open Nanolight when you log in", &o.login)) o.login = f(o.login);
     }
 
     fn footer(o: *Onboard, c: *ui.Context, p: Palette) void {

@@ -27,7 +27,8 @@ const Palette = palette_mod.Palette;
 const palette = palette_mod.palette;
 const Theme = palette_mod.Theme;
 
-/// What the panel asks of whatever shows it (the window, or a test).
+/// What the panel asks of whatever shows it (the window, or a test). The
+/// window's answers share `ctx`; each feature's carries its own.
 pub const Host = struct {
     ctx: *anyopaque,
     /// Opens an app's path or a URL.
@@ -35,23 +36,31 @@ pub const Host = struct {
     hide: *const fn (ctx: *anyopaque) void,
     /// The panel's height changed: a window follows it.
     resize: ?*const fn (ctx: *anyopaque, h: f32) void = null,
-    /// Request completions, returned through `Nanolight.answered`.
-    suggest: ?*const fn (ctx: *anyopaque, query: []const u8) void = null,
-    files: ?*const fn (ctx: *anyopaque, query: []const u8) void = null,
     /// Shows a search's page in the panel, over `chrome.webArea`; null takes it
     /// away. Without it, searches open in the browser.
     preview: ?*const fn (ctx: *anyopaque, url: ?[]const u8) void = null,
-    /// Settings callbacks; without them, changes are not persisted.
+    /// Request completions, returned through `Nanolight.answered`.
+    suggest: ?Ask = null,
+    /// Look for files, returned through `Nanolight.filesAnswered`.
+    files: ?Ask = null,
+    /// Settings' answers: Settings is drawn only with them.
     settings: ?*const SettingsHost = null,
     /// A currency conversion is listed: fetch the rates unless they are
     /// fresh, and answer with `Nanolight.ratesLanded`. Without it, none are
     /// fetched.
-    rates: ?*const fn (ctx: *anyopaque) void = null,
+    rates: ?Call = null,
     /// Runs system command `i` (commands.zig). Without it, nothing runs.
-    command: ?*const fn (ctx: *anyopaque, i: usize) void = null,
+    command: ?Run = null,
     /// Clipboard history (clipboard_view.zig). Without it the "Clipboard
     /// History" row is not listed.
     clipboard: ?*const clipboard_view.Host = null,
+
+    pub const Ask = struct {
+        ctx: *anyopaque,
+        func: *const fn (ctx: *anyopaque, query: []const u8) void,
+    };
+    pub const Call = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque) void };
+    pub const Run = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque, i: usize) void };
 };
 
 /// The longest query kept: a longer paste is cut here, as math, ranking and
@@ -121,6 +130,29 @@ pub const Nanolight = struct {
     /// before it reopens at the root; 0 is never.
     away_at: ?i64 = null,
     pop_after: u32 = (@import("config.zig").Config{}).pop_to_root_seconds,
+
+    /// Frees what the panel holds: the files found and the field's text.
+    pub fn deinit(s: *Nanolight) void {
+        s.found.deinit();
+        s.query.deinit();
+    }
+
+    /// Google's completions on or off: the rows again, with or without them.
+    pub fn setSuggest(s: *Nanolight, on: bool) void {
+        s.suggest_on = on;
+        s.built = 1;
+    }
+
+    /// File search on or off: the rows again, with or without files.
+    pub fn setFiles(s: *Nanolight, on: bool) void {
+        s.files_on = on;
+        s.built = 1;
+    }
+
+    /// Whether Clipboard History is up: a new copy is drawn at once.
+    pub fn showsClipboard(s: *const Nanolight) bool {
+        return s.clip_ui.open;
+    }
 
     /// The panel went away at `now`.
     pub fn hid(s: *Nanolight, now: i64) void {
@@ -371,10 +403,10 @@ pub const Nanolight = struct {
             if (s.web.n > 0) s.fill();
             if (!cached) {
                 s.held_h = held;
-                ask(host.ctx, q);
+                ask.func(ask.ctx, q);
             }
         };
-        if (s.res.need_rates) if (s.host) |host| if (host.rates) |get| get(host.ctx);
+        if (s.res.need_rates) if (s.host) |host| if (host.rates) |get| get.func(get.ctx);
         // The first row: an app, the answer, or the search for what was
         // typed; never a completion nobody picked (they come after it).
         s.sel = s.res.actionable(0);
@@ -639,7 +671,7 @@ pub const Nanolight = struct {
             .settings => s.openSettings(),
             .clipboard => s.openClipboard(),
             .pane => s.go(@import("settings_panes.zig").urls[r.app]),
-            .command => if (s.host) |h| if (h.command) |run| run(h.ctx, r.app),
+            .command => if (s.host) |h| if (h.command) |run| run.func(run.ctx, r.app),
             .suggest => {
                 // Its words fill the field, as a search box's would.
                 s.query.set(s.web.get(r.web));

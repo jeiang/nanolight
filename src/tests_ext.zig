@@ -132,6 +132,8 @@ const Rig = struct {
     t: *ui.Tester,
     ext: Ext,
     host: Answering,
+    /// Settings' answers, for the tests that open it.
+    prefs: support.Prefs,
     opts: Options,
     hidden: bool,
 
@@ -161,9 +163,11 @@ const Rig = struct {
         r.ext = .{ .gpa = gpa, .back = &r.s.query };
         r.s.ext = &r.ext;
         r.host = .{ .ext = &r.ext, .backing = opts.backing };
+        r.prefs = .{};
+        r.prefs.init();
         errdefer r.deinit();
         try r.panel.ix.add("Greet", row);
-        r.s.host = .{ .ctx = r, .open = open, .hide = hide };
+        r.s.host = .{ .ctx = r, .open = open, .hide = hide, .settings = &r.prefs.box };
         r.s.reveal();
         if (!opts.rows) r.script();
         try r.panel.mount(.{ .screen = .none });

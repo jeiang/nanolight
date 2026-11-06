@@ -54,7 +54,7 @@ pub fn rebuild(s: *Nanolight) void {
         (paths.isPath(q) or (spotlight.eligible(q) and @import("calc.zig").eval(q) == null)))
     {
         s.found.filter(q);
-        if (s.host) |host| if (host.files) |ask| ask(host.ctx, q);
+        if (s.host) |host| if (host.files) |ask| ask.func(ask.ctx, q);
     } else s.found.deinit();
 }
 

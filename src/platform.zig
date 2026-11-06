@@ -18,7 +18,7 @@ pub const tray = mac;
 /// A key of one's own, recorded in Settings (`keys.any_key`).
 pub const record = keys.any_key;
 /// nanoui's updater restarts into an update itself (`autoRestart`) and says
-/// so after (`updatedFrom`); elsewhere update_pc.zig and prefs' `.updated` do.
+/// so after (`updatedFrom`); elsewhere update_live.zig and prefs' `.updated` do.
 pub const native_autorestart = mac;
 
 /// The panel's window: adjust, setup, place, resize, shown, showing,

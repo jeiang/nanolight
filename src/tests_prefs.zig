@@ -118,14 +118,14 @@ test "Settings' Open at Login flips what the system says, not a copy" {
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try t.clickText("Open at Login");
     t.settle(1);
-    try std.testing.expect(prefs.login_on);
+    try std.testing.expect(support.Prefs.login_on);
     // Turned off elsewhere (System Settings) while Settings is open: the
     // next click turns it on again, from what the system says.
-    prefs.login_on = false;
+    support.Prefs.login_on = false;
     t.settle(1);
     try t.clickText("Open at Login");
     t.settle(1);
-    try std.testing.expect(prefs.login_on);
+    try std.testing.expect(support.Prefs.login_on);
 }
 
 test "recording a key: idle, recording, refused, and never without a recorder" {

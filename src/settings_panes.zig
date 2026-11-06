@@ -293,6 +293,14 @@ pub const urls = blk: {
     break :blk u;
 };
 
+/// The pane called `name`; one `all` doesn't have fails the build.
+pub fn named(comptime name: []const u8) Pane {
+    inline for (all) |p| {
+        if (comptime std.mem.eql(u8, p.name, name)) return p;
+    }
+    @compileError("no System Settings pane named " ++ name);
+}
+
 /// Whether this Mac has each pane, looked at once.
 var have: [all.len]bool = undefined;
 var looked = false;

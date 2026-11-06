@@ -1,7 +1,7 @@
 //! What the Settings screen (settings_view.zig) asks of the app: the
-//! shortcut, opening at login, the sync status, updates. Optional,
-//! like the panel's other host callbacks: tests draw Settings with
-//! defaults and call nothing.
+//! shortcut, opening at login, the sync status, updates. Settings is drawn
+//! only with one: the app's (settings_bind.zig), or a test's
+//! (test_support.zig).
 const Choice = @import("keys.zig").Choice;
 const Theme = @import("palette.zig").Theme;
 
@@ -13,8 +13,9 @@ pub const SettingsHost = struct {
     /// to `Settings.took`, not the panel (recorder.zig). Whether it is
     /// recording now (false when the recorder could not start).
     record: *const fn (ctx: *anyopaque, on: bool) bool,
-    /// Whether it opens at login; `set` changes it first.
-    login: *const fn (ctx: *anyopaque, set: ?bool) bool,
+    /// Whether it opens at login; `set` changes it first. The system keeps
+    /// it, so no context.
+    login: *const fn (set: ?bool) bool,
     /// Google's suggestions turned on or off in Settings.
     suggest: *const fn (ctx: *anyopaque, on: bool) void,
     /// File search turned on or off in Settings (this Mac only).

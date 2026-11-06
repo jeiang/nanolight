@@ -86,8 +86,7 @@ pub const Rig = struct {
 
     pub fn deinit(r: *Rig) void {
         r.unmount();
-        r.s.found.deinit();
-        r.s.query.deinit();
+        r.s.deinit();
         r.ix.deinit();
         r.* = undefined;
     }
@@ -138,7 +137,13 @@ pub const Web = struct {
     page_len: ?usize = null,
 
     pub fn host(w: *Web) view.Host {
-        return .{ .ctx = w, .open = open, .hide = hide, .suggest = ask, .preview = show };
+        return .{
+            .ctx = w,
+            .open = open,
+            .hide = hide,
+            .suggest = .{ .ctx = w, .func = ask },
+            .preview = show,
+        };
     }
     fn open(ctx: *anyopaque, target: []const u8) void {
         const w: *Web = @ptrCast(@alignCast(ctx));
@@ -172,7 +177,6 @@ pub const Prefs = struct {
     recording: bool = false,
     /// Whether the recorder can start (an event monitor the system refused).
     can_record: bool = true,
-    login_on: bool = false,
     suggest_sets: u8 = 0,
     searches_out: ?bool = null,
     files: ?bool = null,
@@ -185,8 +189,12 @@ pub const Prefs = struct {
     box: SettingsHost = undefined,
     /// The panel whose suggestions and searches the app's host would set.
     nl: ?*view.Nanolight = null,
+    /// Opening at login, as the system keeps it: one for the process,
+    /// as `Login.enabled` has. `init` turns it off.
+    pub var login_on: bool = false;
 
     pub fn init(p: *Prefs) void {
+        login_on = false;
         p.box = .{
             .ctx = p,
             .choice = choice,
@@ -231,20 +239,19 @@ pub const Prefs = struct {
         p.recording = on and p.can_record;
         return p.recording;
     }
-    fn login(ctx: *anyopaque, set: ?bool) bool {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        if (set) |on| p.login_on = on;
-        return p.login_on;
+    fn login(set: ?bool) bool {
+        if (set) |on| login_on = on;
+        return login_on;
     }
     fn suggestSet(ctx: *anyopaque, on: bool) void {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
         p.suggest_sets += 1;
-        if (p.nl) |s| s.suggest_on = on;
+        if (p.nl) |s| s.setSuggest(on);
     }
     fn filesSet(ctx: *anyopaque, on: bool) void {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
         p.files = on;
-        if (p.nl) |s| s.files_on = on;
+        if (p.nl) |s| s.setFiles(on);
     }
     fn searchesOut(ctx: *anyopaque, on: bool) void {
         const p: *Prefs = @ptrCast(@alignCast(ctx));

@@ -4,57 +4,75 @@ const nanoui = @import("nanoui");
 const files = @import("files.zig");
 const prefs = @import("prefs.zig");
 const suggest = @import("suggest.zig");
-const Live = @import("main.zig").Live;
+const view = @import("view.zig");
 const platform = @import("platform.zig");
+const App = @import("app.zig").App;
 
-/// File lookups share the suggestions' pause and keep at most one worker.
-pub fn askFiles(ctx: *anyopaque, q: []const u8) void {
-    if (q.len >= files.max_path) return;
-    const l: *Live = @ptrCast(@alignCast(ctx));
-    @memcpy(l.files.query[0..q.len], q);
-    l.files.len = q.len;
-    l.files.epoch +%= 1;
-    l.files.waiting += 1;
-    nanoui.App.after(suggest.pause_ms, l, struct {
-        fn f(c: ?*anyopaque) callconv(.c) void {
-            const live: *Live = @ptrCast(@alignCast(c.?));
-            live.files.waiting -= 1;
-            if (live.files.waiting == 0) sendFiles(live);
-        }
-    }.f);
-}
+pub const Files = struct {
+    core: *App,
+    query: [files.max_path]u8 = undefined,
+    len: usize = 0,
+    waiting: u32 = 0,
+    epoch: u64 = 0,
+    sent: u64 = 0,
+    busy: bool = false,
 
-fn sendFiles(l: *Live) void {
-    if (!l.s.files_on) return;
-    // One search at a time, sent once the typing pauses, and once per query.
-    if (l.files.busy) return;
-    if (l.files.waiting > 0) return;
-    if (l.files.sent == l.files.epoch) return;
-    const q = l.files.query[0..l.files.len];
-    if (!std.mem.eql(u8, q, std.mem.trim(u8, l.s.query.text(), " \t\r\n"))) return;
-    const a = l.app.gpa.create(FileAsk) catch return;
-    a.* = .{
-        .live = l,
-        .len = q.len,
-        .epoch = l.files.epoch,
-        .found = .{ .allocator = l.app.gpa },
-    };
-    @memcpy(a.text[0..q.len], q);
-    a.locations = prefs.text(l.kv, l.app.gpa, .files_locations);
-    a.exclusions = prefs.text(l.kv, l.app.gpa, .files_exclusions);
-    l.files.busy = true;
-    l.files.sent = l.files.epoch;
-    const thread = std.Thread.spawn(.{}, FileAsk.run, .{a}) catch {
-        l.files.busy = false;
-        a.destroy();
-        return;
-    };
-    thread.detach();
-}
+    /// What the panel asks for files with.
+    pub fn entry(f: *Files) view.Host.Ask {
+        return .{ .ctx = f, .func = ask };
+    }
+
+    /// File lookups share the suggestions' pause and keep at most one worker.
+    fn ask(ctx: *anyopaque, q: []const u8) void {
+        if (q.len >= files.max_path) return;
+        const f: *Files = @ptrCast(@alignCast(ctx));
+        @memcpy(f.query[0..q.len], q);
+        f.len = q.len;
+        f.epoch +%= 1;
+        f.waiting += 1;
+        nanoui.App.after(suggest.pause_ms, f, struct {
+            fn tick(c: ?*anyopaque) callconv(.c) void {
+                const it: *Files = @ptrCast(@alignCast(c.?));
+                it.waiting -= 1;
+                if (it.waiting == 0) it.send();
+            }
+        }.tick);
+    }
+
+    fn send(f: *Files) void {
+        const core = f.core;
+        if (!core.s.files_on) return;
+        // One search at a time, sent once the typing pauses, and once per query.
+        if (f.busy) return;
+        if (f.waiting > 0) return;
+        if (f.sent == f.epoch) return;
+        const q = f.query[0..f.len];
+        if (!std.mem.eql(u8, q, std.mem.trim(u8, core.s.query.text(), " \t\r\n"))) return;
+        const gpa = core.app.gpa;
+        const a = gpa.create(FileAsk) catch return;
+        a.* = .{
+            .owner = f,
+            .len = q.len,
+            .epoch = f.epoch,
+            .found = .{ .allocator = gpa },
+        };
+        @memcpy(a.text[0..q.len], q);
+        a.locations = prefs.text(core.kv, gpa, .files_locations);
+        a.exclusions = prefs.text(core.kv, gpa, .files_exclusions);
+        f.busy = true;
+        f.sent = f.epoch;
+        const thread = std.Thread.spawn(.{}, FileAsk.run, .{a}) catch {
+            f.busy = false;
+            a.destroy();
+            return;
+        };
+        thread.detach();
+    }
+};
 
 /// One file query, with all filesystem, process and icon work off the UI thread.
 const FileAsk = struct {
-    live: *Live,
+    owner: *Files,
     text: [files.max_path]u8 = undefined,
     len: usize,
     epoch: u64,
@@ -65,11 +83,12 @@ const FileAsk = struct {
 
     fn run(a: *FileAsk) void {
         const q = a.text[0..a.len];
+        const io = a.owner.core.app.io;
         if (@import("paths.zig").isPath(q)) {
-            files.complete(a.live.app.io, q, &a.found);
+            files.complete(io, q, &a.found);
             a.ok = true;
         } else a.ok = @import("spotlight.zig").find(
-            a.live.app.io,
+            io,
             q,
             a.locations orelse "",
             a.exclusions orelse "",
@@ -81,18 +100,18 @@ const FileAsk = struct {
 
     fn done(ctx: ?*anyopaque) callconv(.c) void {
         const a: *FileAsk = @ptrCast(@alignCast(ctx.?));
-        const l = a.live;
+        const f = a.owner;
         defer a.destroy();
-        l.files.busy = false;
-        if (a.ok and a.epoch == l.files.epoch) {
-            l.s.filesAnswered(a.text[0..a.len], &a.found);
-            if (l.window) |w| w.redraw();
+        f.busy = false;
+        if (a.ok and a.epoch == f.epoch) {
+            f.core.s.filesAnswered(a.text[0..a.len], &a.found);
+            f.core.redraw();
         }
-        sendFiles(l);
+        f.send();
     }
 
     fn destroy(a: *FileAsk) void {
-        const gpa = a.live.app.gpa;
+        const gpa = a.owner.core.app.gpa;
         if (a.locations) |v| gpa.free(v);
         if (a.exclusions) |v| gpa.free(v);
         a.found.deinit();
@@ -100,16 +119,14 @@ const FileAsk = struct {
     }
 };
 
-pub const State = struct {
-    query: [files.max_path]u8 = undefined,
-    len: usize = 0,
-    waiting: u32 = 0,
-    epoch: u64 = 0,
-    sent: u64 = 0,
-    busy: bool = false,
-};
+/// File search is local to this Mac and off unless explicitly enabled.
+pub fn load(core: *App) void {
+    if (platform.files) core.s.files_on = prefs.flag(core.kv, core.app.gpa, .files);
+}
 
-pub fn load(l: *Live) void {
-    // File search is local to this Mac and off unless explicitly enabled.
-    if (platform.files) l.s.files_on = prefs.flag(l.kv, l.app.gpa, .files);
+/// Settings' switch: file search on or off, kept for the next launch.
+pub fn set(core: *App, on: bool) void {
+    core.s.setFiles(on);
+    // A failure is logged; file search follows the switch this run either way.
+    _ = prefs.setFlag(core.kv, .files, on);
 }

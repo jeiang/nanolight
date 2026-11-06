@@ -1,0 +1,337 @@
+//! The app around the panel: its window, shown and hidden (panel_mac.zig,
+//! panel_pc.zig), its key and its welcome. The features (`*_live.zig`)
+//! keep the rest, and join in where the panel comes and goes through
+//! `Hooks`; main.zig wires them.
+const std = @import("std");
+const nanoui = @import("nanoui");
+const Nanolight = @import("view.zig").Nanolight;
+const onboard = @import("onboard.zig");
+const keys = @import("keys.zig");
+const shortcut = @import("shortcut.zig");
+const shortcut_clash = @import("shortcut_clash.zig");
+const settings_panes = @import("settings_panes.zig");
+const hotkey = @import("hotkey.zig");
+const platform = @import("platform.zig");
+const panel = platform.panel;
+const single = @import("single.zig");
+const account = @import("account.zig");
+const apps = @import("apps.zig");
+const prefs = @import("prefs.zig");
+
+/// A menu's item waits for the menu: it closes first, then the panel
+/// takes the keys.
+const menu_closes_ms = 50;
+/// Nanolight's own row: the panel hides as the row opens, and comes back
+/// after this.
+const reopen_ms = 60;
+/// A launcher takes a moment to quit: then the welcome looks again.
+const launcher_quits_ms = 900;
+/// Where a key the system holds is freed (the welcome's fix).
+const keyboard_pane = settings_panes.named("Keyboard").url();
+
+/// A feature's part in an event, with its own context.
+pub const Hook = struct {
+    ctx: *anyopaque,
+    func: *const fn (ctx: *anyopaque) void,
+
+    fn run(hook: ?Hook) void {
+        const h = hook orelse return;
+        h.func(h.ctx);
+    }
+};
+
+/// A feature that opens some rows' targets itself: true when `target` was one.
+pub const Opens = struct {
+    ctx: *anyopaque,
+    func: *const fn (ctx: *anyopaque, target: []const u8) bool,
+};
+
+/// Where the features join the panel's comings and goings.
+pub const Hooks = struct {
+    /// Before the panel takes the keys: where a paste from the clipboard
+    /// history goes (clipboard_live.zig).
+    showing: ?Hook = null,
+    /// As it opens: apps and script commands added or removed since are
+    /// found (script_live.zig).
+    rescan: ?Hook = null,
+    /// It reopens at the root: a script command running in it ends.
+    popped: ?Hook = null,
+    /// A row's target that is a script command.
+    opens: ?Opens = null,
+    /// It went away unfocused: an update that is ready may go in
+    /// (update_live.zig).
+    away: ?Hook = null,
+    /// What the menu bar icon's menu shows changed (menu_live.zig).
+    menu: ?Hook = null,
+};
+
+pub const App = struct {
+    app: *nanoui.App,
+    s: *Nanolight,
+    o: *onboard.Onboard,
+    kv: nanoui.kv.Store,
+    /// The key that shows the panel.
+    choice: keys.Choice,
+    window: ?*nanoui.Window = null,
+    preview: platform.Preview = .{},
+    /// Clicks outside the panel go to what is under it (clickthrough.zig).
+    through: platform.ClickThrough = .{},
+    /// A key of one's own, being recorded in Settings (recorder.zig).
+    recorder: platform.Recorder = .{},
+    /// The account settings sync through (account_live.zig); null without one.
+    acct: ?*account.Account = null,
+    hooks: Hooks = .{},
+
+    pub fn from(ctx: *anyopaque) *App {
+        return @ptrCast(@alignCast(ctx));
+    }
+
+    pub fn redraw(a: *App) void {
+        if (a.window) |w| w.redraw();
+    }
+
+    /// Says `text` in the footer (a command's, a script's).
+    pub fn footer(ctx: *anyopaque, text: []const u8) void {
+        const a = from(ctx);
+        a.s.note = text;
+        a.redraw();
+    }
+
+    /// Once the window is up, in a run with a person at it: the room round
+    /// the panel, its key, click-through, the page's keys, the welcome's.
+    pub fn start(a: *App) void {
+        const w = a.window.?;
+        a.s.fit = panel.setup(w);
+        panel.resize(w, if (a.o.active) a.o.height() else a.s.height());
+        a.useKey(a.choice);
+        a.through = .{ .window = w, .height = a.s.last_h };
+        a.preview.watch(.{ .ctx = a, .func = pageKey });
+        a.o.hooks = .{
+            .ctx = a,
+            .apply = apply,
+            .fix = fix,
+            .login = if (a.o.skip_key) null else platform.Login.enabled,
+            .done = done,
+        };
+    }
+
+    /// A row's target: an address, a script command, Nanolight itself, or an app.
+    pub fn open(ctx: *anyopaque, target: []const u8) void {
+        const a = from(ctx);
+        if (apps.isUrl(target)) {
+            _ = nanoui.shell.openUrl(target);
+            return;
+        }
+        if (a.hooks.opens) |h| if (h.func(h.ctx, target)) return;
+        if (platform.Single.isSelf(target)) {
+            // Nanolight is already open: the panel comes back, empty,
+            // rather than macOS starting a second copy.
+            a.s.query.clear();
+            nanoui.App.after(reopen_ms, a, struct {
+                fn f(c: ?*anyopaque) callconv(.c) void {
+                    toggle(c.?);
+                }
+            }.f);
+            return;
+        }
+        _ = apps.launch(a.app.io, target);
+        // Its count went up: the other Macs suggest it too.
+        if (a.acct) |x| x.changed();
+    }
+
+    pub fn hide(ctx: *anyopaque) void {
+        const a = from(ctx);
+        a.s.hid(account.now());
+        if (a.window) |w| w.hide();
+    }
+
+    /// The window (or the Mac's glass under the panel) to its height.
+    pub fn resize(ctx: *anyopaque, h: f32) void {
+        const a = from(ctx);
+        a.preview.fit(h);
+        // The panel grew or shrank under a still pointer.
+        a.through.height = h;
+        a.through.update();
+        if (a.window) |w| panel.resize(w, h);
+    }
+
+    pub fn toggle(ctx: *anyopaque) void {
+        const a = from(ctx);
+        const w = a.window orelse return;
+        const showing = panel.showing(w);
+        a.o.pressed(showing);
+        if (showing) {
+            a.s.hid(account.now());
+            return w.hide();
+        }
+        Hook.run(a.hooks.showing);
+        // Freed a key in System Settings, quit a launcher: look again.
+        if (a.o.active) a.o.refresh();
+        panel.place(w);
+        Hook.run(a.hooks.rescan);
+        if (a.s.popDue(account.now())) {
+            Hook.run(a.hooks.popped);
+            a.s.toRoot();
+        }
+        a.s.reveal();
+        w.show();
+        panel.shown(w);
+        a.through.start();
+        if (a.acct) |x| x.maybePull();
+        w.redraw();
+    }
+
+    /// A search's page in the panel, or (null) not.
+    pub fn showPage(ctx: *anyopaque, url: ?[]const u8) void {
+        const a = from(ctx);
+        const w = a.window orelse return;
+        if (url) |u| a.preview.show(w, u, a.s.last_h) else a.preview.hide();
+    }
+
+    /// Escape (the page gone, the panel with it) or ⌘↩ while the page has the keys.
+    fn pageKey(ctx: *anyopaque, key: @import("preview.zig").Key) void {
+        const a = from(ctx);
+        switch (key) {
+            .escape => {
+                a.s.back();
+                hide(a);
+            },
+            .open_out => {
+                var buf: [2048]u8 = undefined;
+                open(a, a.preview.current(&buf) orelse a.s.preview_url);
+                hide(a);
+            },
+        }
+        a.redraw();
+    }
+
+    /// The panel became, or stopped being, the key window (it hides as it
+    /// stops): an "Updated" note is done. (An update waiting goes in once
+    /// the panel has been away a while: nanoui's `autoRestart`.)
+    pub fn keyChanged(ctx: *anyopaque, w: *nanoui.Window) void {
+        const a = from(ctx);
+        if (w.isFocused()) return;
+        // Recording ends through Settings, which shows it: the key is back.
+        if (a.recorder.active()) a.s.settings_ui.record(a.s, false);
+        a.s.hid(account.now());
+        a.through.stop();
+        a.s.note = "";
+        panel.lostKeys(w);
+        Hook.run(a.hooks.away);
+    }
+
+    /// `nanolight --toggle`, or a newer copy starting (single.zig).
+    pub fn command(ctx: *anyopaque, cmd: single.Command) void {
+        const a = from(ctx);
+        switch (cmd) {
+            .toggle => toggle(a),
+            .quit => a.app.quit(),
+        }
+    }
+
+    pub fn menuChanged(a: *App) void {
+        Hook.run(a.hooks.menu);
+    }
+
+    /// This machine chose its key or turned suggestions on or off, just now.
+    pub fn touched(a: *App) void {
+        // A failure is logged; this change then syncs as an older one.
+        _ = prefs.setInt(a.kv, .sync_at, account.now());
+        if (a.acct) |x| x.changed();
+    }
+
+    pub fn useKey(a: *App, choice: keys.Choice) void {
+        a.choice = choice;
+        hotkey.register(choice, .{ .ctx = a, .func = toggle }) catch |e|
+            std.log.warn(
+                "nanolight: {f} can't be registered ({s}); open it from the menu bar",
+                .{ shortcut.text(choice), @errorName(e) },
+            );
+    }
+
+    /// Settings records a key: until it has one, keys pressed go to it,
+    /// and the current key is let go (pressed, it is recorded too) once
+    /// the recorder runs. Whether it is recording now.
+    pub fn record(ctx: *anyopaque, on: bool) bool {
+        const a = from(ctx);
+        if (on) {
+            // No recorder, no recording: the key stays registered.
+            if (!a.recorder.start(.{ .ctx = a, .func = recorded })) return false;
+            hotkey.unregister();
+            return true;
+        }
+        a.recorder.stop();
+        a.useKey(a.choice);
+        return false;
+    }
+
+    fn recorded(ctx: *anyopaque, r: keys.Recorded) void {
+        const a = from(ctx);
+        a.s.settings_ui.took(a.s, r);
+        a.redraw();
+    }
+
+    pub fn apply(ctx: *anyopaque, choice: keys.Choice) void {
+        const a = from(ctx);
+        _ = prefs.setHotkey(a.kv, choice);
+        a.useKey(choice);
+        a.touched();
+    }
+
+    fn fix(ctx: *anyopaque, clash: shortcut_clash.Clash) void {
+        const a = from(ctx);
+        if (clash.system != null) {
+            _ = nanoui.shell.openUrl(keyboard_pane);
+        } else for (clash.launchers.slice()) |name| shortcut_clash.quit(name);
+        nanoui.App.after(launcher_quits_ms, a, struct {
+            fn f(c: ?*anyopaque) callconv(.c) void {
+                const it = from(c.?);
+                it.o.refresh();
+                it.redraw();
+            }
+        }.f);
+    }
+
+    fn done(ctx: *anyopaque) void {
+        const a = from(ctx);
+        // A failure is logged; the welcome then shows again at the next start.
+        _ = prefs.setFlag(a.kv, .onboarded, true);
+    }
+
+    /// The welcome again. Asked in Settings, it takes the panel's place at
+    /// once; from the menu, the panel comes up anew with it.
+    pub fn welcome(a: *App, asked: enum { settings, menu }) void {
+        a.o.start(a.choice);
+        switch (asked) {
+            .settings => if (a.window) |w| if (w.isVisible()) w.redraw(),
+            .menu => {
+                if (a.window) |w| if (w.isVisible()) w.hide();
+                a.showAfterMenu();
+            },
+        }
+    }
+
+    /// The menu's Open Nanolight: the panel takes the keys.
+    pub fn showAfterMenu(a: *App) void {
+        nanoui.App.after(menu_closes_ms, a, struct {
+            fn f(c: ?*anyopaque) callconv(.c) void {
+                toggle(c.?);
+            }
+        }.f);
+    }
+
+    /// The menu's Settings…: the panel opens straight into Settings.
+    pub fn settingsAfterMenu(a: *App) void {
+        nanoui.App.after(menu_closes_ms, a, struct {
+            fn f(c: ?*anyopaque) callconv(.c) void {
+                const it = from(c.?);
+                const w = it.window orelse return;
+                if (!(w.isVisible() and w.isFocused())) toggle(it);
+                // Over the welcome: skipped, kept as done, its key not taken.
+                it.o.end(.drop_choice);
+                it.s.openSettings();
+                w.redraw();
+            }
+        }.f);
+    }
+};

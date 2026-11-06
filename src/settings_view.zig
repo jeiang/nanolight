@@ -3,8 +3,7 @@
 //! status, updates. The same glass, the
 //! same rows. Esc closes it and the panel; ↑/↓ move, Return and Space do the
 //! row. The shortcut is one of four, or any key recorded with ⌘, ⌥ or ⌃
-//! (the last chip). Without a host (tests) it still draws, and changes
-//! nothing the app keeps.
+//! (the last chip). Its host (settings_host.zig) answers and keeps it all.
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const motion = ui.motion;
@@ -56,42 +55,30 @@ const Toggle = enum {
         };
     }
 
-    fn get(t: Toggle, n: *const panel.Nanolight, h: ?*const SettingsHost) bool {
+    fn get(t: Toggle, n: *const panel.Nanolight, h: *const SettingsHost) bool {
         return switch (t) {
             .suggest => n.suggest_on,
             .files => n.files_on,
             .browser => n.searches_out,
-            // Without a host (tests): as a fresh install has them.
-            .login => if (h) |host| host.login(host.ctx, null) else false,
-            .menu_bar => if (h) |host| host.menu_bar(host.ctx, null) else true,
-            .clipboard => blk: {
-                const host = h orelse break :blk false;
-                break :blk host.clipboard_enabled(host.ctx, null) orelse false;
-            },
+            .login => h.login(null),
+            .menu_bar => h.menu_bar(h.ctx, null),
+            .clipboard => h.clipboard_enabled(h.ctx, null) orelse false,
         };
     }
 
-    fn set(t: Toggle, n: *panel.Nanolight, h: ?*const SettingsHost, on: bool) void {
+    fn set(t: Toggle, h: *const SettingsHost, on: bool) void {
         switch (t) {
-            .suggest => if (h) |host| host.suggest(host.ctx, on) else {
-                n.suggest_on = on;
-                n.built = 1;
+            .suggest => h.suggest(h.ctx, on),
+            .files => h.files(h.ctx, on),
+            .browser => h.searches_out(h.ctx, on),
+            .login => {
+                _ = h.login(on);
             },
-            .files => if (h) |host| host.files(host.ctx, on) else {
-                n.files_on = on;
-                n.built = 1;
+            .menu_bar => {
+                _ = h.menu_bar(h.ctx, on);
             },
-            .browser => if (h) |host| host.searches_out(host.ctx, on) else {
-                n.searches_out = on;
-            },
-            .login => if (h) |host| {
-                _ = host.login(host.ctx, on);
-            },
-            .menu_bar => if (h) |host| {
-                _ = host.menu_bar(host.ctx, on);
-            },
-            .clipboard => if (h) |host| {
-                _ = host.clipboard_enabled(host.ctx, on);
+            .clipboard => {
+                _ = h.clipboard_enabled(h.ctx, on);
             },
         }
     }
@@ -161,14 +148,8 @@ pub const Settings = struct {
         return if (s.clip_here) visible(true) else visible(false);
     }
 
-    fn hooks(s: *Settings, n: *panel.Nanolight) ?*const SettingsHost {
-        _ = s;
-        const h = n.host orelse return null;
-        return h.settings;
-    }
-
     fn pull(s: *Settings, n: *panel.Nanolight) void {
-        const h = s.hooks(n) orelse return;
+        const h = hooks(n);
         s.choice = h.choice(h.ctx);
         if (s.choice.preset() == null) s.custom = s.choice;
         s.clip_here = h.clipboard_enabled(h.ctx, null) != null;
@@ -240,14 +221,14 @@ pub const Settings = struct {
             const ring = ui.div(c).size(20, 20).roundedFull().center().control()
                 .border(if (t == n.theme) p.text.alpha(0.7) else p.fill.alpha(0));
             defer ring.end();
-            if (ring.clicked()) s.setTheme(n, t);
+            if (ring.clicked()) setTheme(n, t);
             ui.div(c).size(12, 12).roundedFull().bg(t.hue(c.theme.dark) orelse p.sub).end();
         }
     }
 
-    fn setTheme(s: *Settings, n: *panel.Nanolight, t: Theme) void {
+    fn setTheme(n: *panel.Nanolight, t: Theme) void {
         n.theme = t;
-        const h = s.hooks(n) orelse return;
+        const h = hooks(n);
         h.theme(h.ctx, t);
     }
 
@@ -325,12 +306,9 @@ pub const Settings = struct {
     }
 
     /// Starts or stops waiting for a key of one's own. Recording only once
-    /// the host's recorder has started (none in tests: as asked).
-    fn record(s: *Settings, n: *panel.Nanolight, on: bool) void {
-        const h = s.hooks(n) orelse {
-            s.key_input = if (on) .recording else .idle;
-            return;
-        };
+    /// the host's recorder has started.
+    pub fn record(s: *Settings, n: *panel.Nanolight, on: bool) void {
+        const h = hooks(n);
         s.key_input = if (h.record(h.ctx, on)) .recording else .idle;
     }
 
@@ -351,7 +329,7 @@ pub const Settings = struct {
     fn pick(s: *Settings, n: *panel.Nanolight, ch: Choice) void {
         if (s.key_input != .idle) s.record(n, false);
         s.choice = ch;
-        const h = s.hooks(n) orelse return;
+        const h = hooks(n);
         h.apply(h.ctx, ch);
     }
 
@@ -368,10 +346,10 @@ pub const Settings = struct {
         const d = ui.div(c).row().wFull().h(36).px(4).gap(10).itemsCenter().rounded(10).control()
             .bg(if (on) p.sel else p.fill.alpha(0));
         defer d.end();
-        if (d.clicked()) s.flip(n, t);
+        if (d.clicked()) flip(n, t);
         ui.text(c, title, .{ .size = 13.5, .weight = .medium, .color = p.text });
         ui.spacer(c);
-        mark(c, p, t.get(n, s.hooks(n)));
+        mark(c, p, t.get(n, hooks(n)));
     }
 
     /// A quiet on/off mark. Not `ui.toggle`: that flips on its own click,
@@ -387,9 +365,9 @@ pub const Settings = struct {
         if (!on) ui.spacer(c);
     }
 
-    fn flip(s: *Settings, n: *panel.Nanolight, t: Toggle) void {
-        const h = s.hooks(n);
-        t.set(n, h, !t.get(n, h));
+    fn flip(n: *panel.Nanolight, t: Toggle) void {
+        const h = hooks(n);
+        t.set(h, !t.get(n, h));
     }
 
     fn updates(
@@ -470,13 +448,13 @@ pub const Settings = struct {
     fn nudge(s: *Settings, n: *panel.Nanolight, rows: []const RowKind, dir: i8) void {
         switch (rows[s.sel]) {
             .choice => s.pick(n, s.choice.step(dir)),
-            .theme => s.setTheme(n, n.theme.step(dir)),
+            .theme => setTheme(n, n.theme.step(dir)),
             else => {},
         }
     }
 
     fn activate(s: *Settings, n: *panel.Nanolight, kind: RowKind) void {
-        const h = s.hooks(n);
+        const h = hooks(n);
         switch (kind) {
             // ←/→ step through the four; Return records one's own.
             .choice => if (key_choice.any_key)
@@ -484,24 +462,26 @@ pub const Settings = struct {
             else
                 s.nudge(n, s.shown(), 1),
             inline .suggest, .files, .browser, .login, .menu_bar, .clipboard => |k| {
-                s.flip(n, @field(Toggle, @tagName(k)));
+                flip(n, @field(Toggle, @tagName(k)));
             },
             .clear_clipboard => {
-                const ok = if (h) |host| host.clipboard_clear(host.ctx) else true;
-                s.cleared = if (ok) .done else .failed;
+                s.cleared = if (h.clipboard_clear(h.ctx)) .done else .failed;
             },
-            .updates => if (h) |host| {
-                if (s.ready != null) host.restart(host.ctx) else host.check(host.ctx);
-            },
-            .welcome => if (h) |host| {
+            .updates => if (s.ready != null) h.restart(h.ctx) else h.check(h.ctx),
+            .welcome => {
                 s.hide();
-                host.welcome(host.ctx);
+                h.welcome(h.ctx);
             },
-            .quit => if (h) |host| host.quit(host.ctx),
-            .theme => s.setTheme(n, n.theme.step(1)),
+            .quit => h.quit(h.ctx),
+            .theme => setTheme(n, n.theme.step(1)),
         }
     }
 };
+
+/// The app's answers. Settings is never drawn, nor driven, without them.
+fn hooks(n: *const panel.Nanolight) *const SettingsHost {
+    return n.host.?.settings.?;
+}
 
 /// The rows this build shows, in order, with or without the clipboard's.
 /// The theme's swatches, in the header, are the last for ↑/↓.
