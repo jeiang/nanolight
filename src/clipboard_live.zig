@@ -49,19 +49,15 @@ fn live(ctx: *anyopaque) *Live {
 }
 
 fn startWatching(l: *Live) void {
-    if (!clipboard.Watcher.available) return;
     if (!(l.clip orelse return).config_ok) return;
     l.clip_watcher.start(.{ .ctx = l, .observe = observe, .excluded = excluded }) catch |e|
-        std.log.warn("nanolight: clipboard history could not start: {t}", .{e});
+        clipboard.log(.warn, "nanolight: clipboard history could not start: {t}", .{e});
 }
 
 fn observe(ctx: *anyopaque, item: clipboard.Item) void {
     const l = live(ctx);
     const store = l.clip orelse return;
-    switch (store.add(item, account.now())) {
-        .added, .bumped => if (l.s.clip_ui.open) if (l.window) |w| w.redraw(),
-        else => {},
-    }
+    if (store.add(item, account.now())) if (l.s.clip_ui.open) if (l.window) |w| w.redraw();
 }
 
 fn excluded(ctx: *anyopaque, source: []const u8) bool {
@@ -71,11 +67,7 @@ fn excluded(ctx: *anyopaque, source: []const u8) bool {
 
 fn pruneTick(ctx: ?*anyopaque) callconv(.c) void {
     const l: *Live = @ptrCast(@alignCast(ctx.?));
-    if (l.clip) |store| {
-        if (store.prune(account.now())) |_| {} else |e| {
-            std.log.warn("nanolight: clipboard: could not write index.json: {t}", .{e});
-        }
-    }
+    if (l.clip) |store| store.pruneOrWarn(account.now());
     nanoui.App.after(prune_every_ms, l, pruneTick);
 }
 
@@ -85,7 +77,6 @@ fn pruneTick(ctx: ?*anyopaque) callconv(.c) void {
 pub fn enabled(ctx: *anyopaque, set: ?bool) ?bool {
     const l = live(ctx);
     const store = l.clip orelse return null;
-    if (!clipboard.Watcher.available) return null;
     if (set) |on| {
         const was = store.on;
         store.turn(on, prefs.setFlag(l.kv, .clipboard, on));
@@ -104,44 +95,32 @@ pub fn clear(ctx: *anyopaque) bool {
 
 /// Why the screen has nothing to show now, or null.
 fn status(ctx: *anyopaque) ?[]const u8 {
-    if (!clipboard.Watcher.available) return clipboard.Watcher.unavailable_reason;
     const l = live(ctx);
-    if (@hasField(clipboard.Watcher, "why")) if (l.clip_watcher.why) |why| return why;
+    if (l.clip_watcher.status()) |why| return why;
     const store = l.clip orelse return null;
     if (!store.config_ok) return "Clipboard history is paused until the config file loads.";
     return if (store.on) null else "Clipboard history is off. Turn it on in Settings.";
 }
 
-/// An entry's content as the OS writes it; `owned` is freed by `release`.
-const Loaded = struct { content: clipboard.Content, owned: ?[]u8 = null };
-
-fn load(l: *Live, hash: u64) ?Loaded {
+fn load(l: *Live, hash: u64) ?clipboard.Loaded {
     const store = l.clip orelse return null;
     const e = store.get(hash) orelse return null;
-    const gpa = l.app.gpa;
-    switch (e.kind) {
-        .file => return .{ .content = .{ .kind = .file, .text = e.text } },
-        .text => {
-            const full = store.fullText(gpa, e.*) catch return null;
-            return .{ .content = .{ .kind = .text, .text = full }, .owned = full };
-        },
-        .image => {
-            const bytes = store.png(gpa, e.*) orelse return null;
-            return .{ .content = .{ .kind = .image, .png = bytes }, .owned = bytes };
-        },
-    }
+    return store.read(l.app.gpa, e.*) catch |err| {
+        clipboard.log(.warn, "nanolight: clipboard: could not read an entry: {t}", .{err});
+        return null;
+    };
 }
 
 fn paste(ctx: *anyopaque, hash: u64) clipboard.PasteResult {
     const l = live(ctx);
-    const loaded = load(l, hash) orelse return .failed;
+    const loaded = load(l, hash) orelse return .unreadable;
     defer if (loaded.owned) |b| l.app.gpa.free(b);
     return l.clip_watcher.paste(loaded.content, .{ .ctx = l, .func = Live.hide });
 }
 
-fn copy(ctx: *anyopaque, hash: u64) bool {
+fn copy(ctx: *anyopaque, hash: u64) clipboard.PasteResult {
     const l = live(ctx);
-    const loaded = load(l, hash) orelse return false;
+    const loaded = load(l, hash) orelse return .unreadable;
     defer if (loaded.owned) |b| l.app.gpa.free(b);
-    return l.clip_watcher.copy(loaded.content);
+    return if (l.clip_watcher.copy(loaded.content)) .copied else .failed;
 }

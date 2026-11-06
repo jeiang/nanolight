@@ -1,7 +1,7 @@
-//! Clipboard history on the Mac: NSPasteboard's change count polled every
-//! 500 ms on the main run loop, and a paste that writes the entry, wakes
-//! the app that had the keys and sends it ⌘V (CGEvent; the Accessibility
-//! grant is needed for that, and asked for once).
+//! Clipboard history on the Mac: NSPasteboard's change count polled
+//! (clipboard_poll.zig), and a paste that writes the entry, wakes the app
+//! that had the keys and sends it ⌘V (CGEvent; the Accessibility grant is
+//! needed for that, and asked for once).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -18,9 +18,9 @@ extern "c" fn CFRelease(object: ?*anyopaque) void;
 const key_v: u16 = 9;
 const flag_command: u64 = 0x100000;
 const hid_event_tap: u32 = 0;
-const poll_ms = 500;
-/// Time for the app to take the keys before ⌘V reaches it.
-const paste_delay_ms = 120;
+/// NSUTF8StringEncoding, NSBitmapImageFileTypePNG.
+const utf8_encoding: objc.NSUInteger = 4;
+const png_file_type: objc.NSUInteger = 4;
 
 /// Types that password managers and the system put on what must not be kept
 /// (nspasteboard.org).
@@ -46,78 +46,105 @@ fn bundleId(app: objc.Object, buf: []u8) []const u8 {
     return buf[0..n];
 }
 
-pub const Watcher = struct {
-    pub const available = true;
-    pub const unavailable_reason = "";
+// ----- reading, within the caps -----
 
-    sink: ?clipboard.Sink = null,
-    running: bool = false,
-    /// A tick is waiting on the run loop: `start` after `stop` reuses it.
-    armed: bool = false,
-    /// The pasteboard's change count as last seen or last written here, so
-    /// what Nanolight writes itself is not recorded.
-    last: isize = 0,
+/// The file URLs' paths, one a line; null when there are none.
+fn readFiles(gpa: std.mem.Allocator, pb: objc.Object) !?[]u8 {
+    const classes = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObject:", .{
+        objc.class("NSURL"),
+    });
+    const urls = objc.msg(?objc.Object, pb, "readObjectsForClasses:options:", .{
+        classes,
+        @as(?objc.Object, null),
+    }) orelse return null;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    for (0..objc.msg(objc.NSUInteger, urls, "count", .{})) |i| {
+        const url = objc.msg(objc.Object, urls, "objectAtIndex:", .{i});
+        if (!objc.msg(objc.BOOL, url, "isFileURL", .{})) continue;
+        const path = objc.fromNSString(objc.msg(?objc.Object, url, "path", .{}));
+        const sep: usize = @intFromBool(out.items.len > 0);
+        if (out.items.len + sep + path.len > clipboard.Kind.file.cap()) return error.TooLarge;
+        if (sep > 0) try out.append(gpa, '\n');
+        try out.appendSlice(gpa, path);
+    }
+    if (out.items.len == 0) {
+        out.deinit(gpa);
+        return null;
+    }
+    return try out.toOwnedSlice(gpa);
+}
+
+fn readText(gpa: std.mem.Allocator, pb: objc.Object) !?[]u8 {
+    const s = objc.msg(?objc.Object, pb, "stringForType:", .{
+        objc.nsString("public.utf8-plain-text"),
+    }) orelse return null;
+    const len = objc.msg(objc.NSUInteger, s, "lengthOfBytesUsingEncoding:", .{utf8_encoding});
+    if (len > clipboard.Kind.text.cap()) return error.TooLarge;
+    return try gpa.dupe(u8, objc.fromNSString(s));
+}
+
+/// The image as PNG: a PNG as it is, else a TIFF converted (its PNG's size
+/// is known only once converted).
+fn readImage(gpa: std.mem.Allocator, pb: objc.Object) !?[]u8 {
+    if (objc.msg(?objc.Object, pb, "dataForType:", .{objc.nsString("public.png")})) |png|
+        return try dupeImage(gpa, png);
+    const tiff = objc.msg(?objc.Object, pb, "dataForType:", .{
+        objc.nsString("public.tiff"),
+    }) orelse return null;
+    const rep = objc.msg(?objc.Object, objc.class("NSBitmapImageRep"), "imageRepWithData:", .{
+        tiff,
+    }) orelse return null;
+    const props = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{});
+    const png = objc.msg(?objc.Object, rep, "representationUsingType:properties:", .{
+        png_file_type,
+        props,
+    }) orelse return null;
+    return try dupeImage(gpa, png);
+}
+
+fn dupeImage(gpa: std.mem.Allocator, data: objc.Object) ![]u8 {
+    const len = objc.msg(objc.NSUInteger, data, "length", .{});
+    if (len > clipboard.Kind.image.cap()) return error.TooLarge;
+    const bytes = objc.msg([*]const u8, data, "bytes", .{});
+    return try gpa.dupe(u8, bytes[0..len]);
+}
+
+/// The OS's side of the poll watcher (clipboard_poll.zig).
+const Mac = struct {
     /// The app that had the keys before the panel opened (retained).
     previous: ?objc.Object = null,
     prompted: bool = false,
 
-    pub fn start(w: *Watcher, sink: clipboard.Sink) !void {
-        w.sink = sink;
-        w.last = nanoui.clipboard.changeCount();
-        w.running = true;
-        if (!w.armed) {
-            w.armed = true;
-            nanoui.App.after(poll_ms, w, tick);
-        }
+    pub fn changeCount() isize {
+        return objc.msg(objc.NSInteger, generalPasteboard(), "changeCount", .{});
     }
 
-    pub fn stop(w: *Watcher) void {
-        w.running = false;
-    }
-
-    fn tick(ctx: ?*anyopaque) callconv(.c) void {
-        const w: *Watcher = @ptrCast(@alignCast(ctx.?));
-        if (!w.running) {
-            w.armed = false;
-            return;
-        }
-        w.poll();
-        nanoui.App.after(poll_ms, w, tick);
-    }
-
-    fn poll(w: *Watcher) void {
-        const count = nanoui.clipboard.changeCount();
-        if (count == w.last) return;
-        w.last = count;
-        const sink = w.sink orelse return;
+    pub fn read(_: *Mac, sink: clipboard.Sink) void {
         const pool = objc.Pool.push();
         defer pool.pop();
-        const types = objc.msg(?objc.Object, generalPasteboard(), "types", .{}) orelse return;
+        const pb = generalPasteboard();
+        const types = objc.msg(?objc.Object, pb, "types", .{}) orelse return;
+        var id_buf: [256]u8 = undefined;
+        const source = if (frontmost()) |app| bundleId(app, &id_buf) else "";
         for (private_types) |t| if (objc.msg(
             objc.BOOL,
             types,
             "containsObject:",
             .{objc.nsString(t)},
-        )) return;
-        var id_buf: [256]u8 = undefined;
-        const source = if (frontmost()) |app| bundleId(app, &id_buf) else "";
+        )) return sink.observe(sink.ctx, .{ .kind = .text, .concealed = true, .source = source });
         // Before the content is read at all.
         if (sink.excluded(sink.ctx, source)) return;
         const gpa = std.heap.c_allocator;
-        if (nanoui.clipboard.readFiles(gpa) catch null) |paths| {
-            defer {
-                for (paths) |p| gpa.free(p);
-                gpa.free(paths);
-            }
-            const joined = std.mem.join(gpa, "\n", paths) catch return;
-            defer gpa.free(joined);
-            return sink.observe(sink.ctx, .{ .kind = .file, .text = joined, .source = source });
+        if (readFiles(gpa, pb) catch |e| return notRead(.file, e)) |paths| {
+            defer gpa.free(paths);
+            return sink.observe(sink.ctx, .{ .kind = .file, .text = paths, .source = source });
         }
-        if (nanoui.clipboard.readText(gpa) catch null) |t| {
+        if (readText(gpa, pb) catch |e| return notRead(.text, e)) |t| {
             defer gpa.free(t);
             return sink.observe(sink.ctx, .{ .kind = .text, .text = t, .source = source });
         }
-        if (nanoui.clipboard.readImage(gpa) catch null) |png| {
+        if (readImage(gpa, pb) catch |e| return notRead(.image, e)) |png| {
             defer gpa.free(png);
             const size = clipboard.pngSize(png) orelse .{ 0, 0 };
             sink.observe(
@@ -133,45 +160,48 @@ pub const Watcher = struct {
         }
     }
 
+    fn notRead(kind: clipboard.Kind, e: anyerror) void {
+        clipboard.log(.info, "nanolight: clipboard: a copied {t} was not kept: {t}", .{ kind, e });
+    }
+
     /// The app in front now, unless it is this one: where a paste goes.
-    pub fn noteFrontmost(w: *Watcher) void {
+    pub fn noteFrontmost(m: *Mac) void {
         const app = frontmost() orelse return;
         if (objc.msg(i32, app, "processIdentifier", .{}) == std.c.getpid()) return;
         const kept = objc.retain(app);
-        if (w.previous) |old| objc.release(old);
-        w.previous = kept;
+        if (m.previous) |old| objc.release(old);
+        m.previous = kept;
     }
 
-    pub fn paste(w: *Watcher, c: clipboard.Content, hide: clipboard.Hide) clipboard.PasteResult {
-        if (!w.copy(c)) return .failed;
-        if (!AXIsProcessTrusted()) {
-            // Once: the system's own prompt, which opens the Accessibility list.
-            if (!w.prompted) {
-                w.prompted = true;
-                const pool = objc.Pool.push();
-                defer pool.pop();
-                const options = objc.msg(objc.Object, objc.class(
-                    "NSDictionary",
-                ), "dictionaryWithObject:forKey:", .{
-                    objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{objc.YES}),
-                    objc.nsString("AXTrustedCheckOptionPrompt"),
-                });
-                _ = AXIsProcessTrustedWithOptions(options);
-            }
-            return .copied_no_permission;
+    /// Whether the Accessibility grant is there; the first time it is not,
+    /// the system's own prompt, which opens the Accessibility list.
+    pub fn keysAllowed(m: *Mac) bool {
+        if (AXIsProcessTrusted()) return true;
+        if (!m.prompted) {
+            m.prompted = true;
+            const pool = objc.Pool.push();
+            defer pool.pop();
+            const options = objc.msg(objc.Object, objc.class(
+                "NSDictionary",
+            ), "dictionaryWithObject:forKey:", .{
+                objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{objc.YES}),
+                objc.nsString("AXTrustedCheckOptionPrompt"),
+            });
+            _ = AXIsProcessTrustedWithOptions(options);
         }
-        hide.func(hide.ctx);
-        if (w.previous) |app| _ = objc.msg(
+        return false;
+    }
+
+    pub fn wake(m: *Mac) void {
+        if (m.previous) |app| _ = objc.msg(
             objc.BOOL,
             app,
             "activateWithOptions:",
             .{@as(objc.NSUInteger, 3)},
         );
-        nanoui.App.after(paste_delay_ms, null, sendPaste);
-        return .pasted;
     }
 
-    fn sendPaste(_: ?*anyopaque) callconv(.c) void {
+    pub fn sendPaste(_: ?*anyopaque) callconv(.c) void {
         if (!AXIsProcessTrusted()) return;
         for ([_]bool{ true, false }) |down| {
             const ev = CGEventCreateKeyboardEvent(null, key_v, down) orelse return;
@@ -183,12 +213,12 @@ pub const Watcher = struct {
 
     /// Writes `c` as the pasteboard's one item: text as plain text only,
     /// an image as PNG, files as file URLs.
-    pub fn copy(w: *Watcher, c: clipboard.Content) bool {
+    pub fn write(c: clipboard.Content) bool {
         const pool = objc.Pool.push();
         defer pool.pop();
         const pb = generalPasteboard();
         _ = objc.msg(objc.NSInteger, pb, "clearContents", .{});
-        const ok = switch (c.kind) {
+        return switch (c.kind) {
             .text => objc.msg(
                 objc.BOOL,
                 pb,
@@ -225,7 +255,7 @@ pub const Watcher = struct {
                 break :blk objc.msg(objc.BOOL, pb, "writeObjects:", .{urls});
             },
         };
-        w.last = nanoui.clipboard.changeCount();
-        return ok;
     }
 };
+
+pub const Watcher = @import("clipboard_poll.zig").PollWatcher(Mac);

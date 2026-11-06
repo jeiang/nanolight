@@ -57,9 +57,9 @@ const Fake = struct {
         return f.result;
     }
 
-    fn copy(ctx: *anyopaque, hash: u64) bool {
+    fn copy(ctx: *anyopaque, hash: u64) clipboard.PasteResult {
         @as(*Fake, @ptrCast(@alignCast(ctx))).copied = hash;
-        return true;
+        return .copied;
     }
 
     fn fill(f: *Fake) void {
@@ -212,8 +212,8 @@ test "Return pastes the selection, ⌘↩ copies it, ⌘⌫ deletes it" {
     const t = &rig.t;
     try rig.mount(.{ .host = f.host() });
     opened(t, s);
-    const newest = f.store.entries.items[0].hash;
-    const second = f.store.entries.items[1].hash;
+    const newest = f.store.at(0).hash;
+    const second = f.store.at(1).hash;
     // ⌘↩: written, not pasted, the panel stays.
     try testing.expect(t.shortcut(.{ .key = S.enter, .cmd = true }));
     try testing.expectEqual(newest, f.copied.?);
@@ -225,9 +225,9 @@ test "Return pastes the selection, ⌘↩ copies it, ⌘⌫ deletes it" {
     try testing.expectEqual(second, f.pasted.?);
     try testing.expect(f.hidden);
     // ⌘⌫ deletes the selected entry.
-    try testing.expectEqual(@as(usize, 4), f.store.entries.items.len);
+    try testing.expectEqual(@as(usize, 4), f.store.len());
     try testing.expect(t.shortcut(.{ .key = 0x7f, .cmd = true }));
-    try testing.expectEqual(@as(usize, 3), f.store.entries.items.len);
+    try testing.expectEqual(@as(usize, 3), f.store.len());
     try testing.expect(f.store.get(second) == null);
     try testing.expectEqual(@as(usize, 3), s.clip_ui.n);
     t.settle(1);
@@ -253,9 +253,9 @@ test "a paste that could only copy says why in the footer, and the panel stays" 
         f.hidden = false;
         support.press(t, &.{.{ .command = .insert_newline }});
         try testing.expect(!f.hidden and s.clip_ui.open);
-        try testing.expectEqualStrings(clipboard.pasteNote(r).?, s.clip_ui.note);
+        try testing.expectEqualStrings(clipboard_view.note(r), s.clip_ui.note);
     }
-    try testing.expect(t.hasText(clipboard.pasteNote(.failed).?));
+    try testing.expect(t.hasText(clipboard_view.note(.failed)));
     // With paste_plain_text off, Return is a copy.
     f.store.cfg.paste_plain_text = false;
     f.copied = null;
@@ -311,12 +311,12 @@ test "the screen survives a hide inside pop_to_root_seconds, search text include
     s.reveal();
     try testing.expect(s.clip_ui.open);
     // Other keys delete too: Ctrl+Backspace on GTK, Ctrl+D on Windows.
-    const before = f.store.entries.items.len;
+    const before = f.store.len();
     s.query.clear();
     t.settle(1);
     try testing.expect(t.shortcut(.{ .key = 0x08, .cmd = true }));
     try testing.expect(t.shortcut(.{ .key = 'd', .cmd = true }));
-    try testing.expectEqual(before - 2, f.store.entries.items.len);
+    try testing.expectEqual(before - 2, f.store.len());
 }
 
 test "an entry added while the screen is open appears at once" {
@@ -333,7 +333,7 @@ test "an entry added while the screen is open appears at once" {
     try rig.mount(.{ .host = f.host() });
     opened(t, s);
     _ = t.shortcut(.{ .key = S.down });
-    const image = f.store.entries.items[1].hash;
+    const image = f.store.at(1).hash;
     _ = f.store.add(
         .{ .kind = .text, .text = "fresh copy", .source = "org.mozilla.firefox" },
         account.now(),
@@ -345,7 +345,7 @@ test "an entry added while the screen is open appears at once" {
     try testing.expectEqual(@as(usize, 2), s.clip_ui.sel);
     try testing.expectEqual(
         image,
-        f.store.entries.items[s.clip_ui.found[s.clip_ui.sel].index].hash,
+        f.store.at(s.clip_ui.found[s.clip_ui.sel].index).hash,
     );
 }
 

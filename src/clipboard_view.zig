@@ -25,8 +25,9 @@ pub const Host = struct {
     status: *const fn (ctx: *anyopaque) ?[]const u8,
     /// Return: writes the entry and pastes it where it can.
     paste: *const fn (ctx: *anyopaque, hash: u64) clipboard.PasteResult,
-    /// ⌘↩: writes the entry only (Return too, with `paste_plain_text` off).
-    copy: *const fn (ctx: *anyopaque, hash: u64) bool,
+    /// ⌘↩: writes the entry only (Return too, with `paste_plain_text` off): `.copied`,
+    /// `.failed` or `.unreadable`.
+    copy: *const fn (ctx: *anyopaque, hash: u64) clipboard.PasteResult,
 };
 
 const visible_rows = 7;
@@ -90,7 +91,7 @@ pub const Screen = struct {
         s.gen = h.store.gen;
         s.n = h.store.find(n.query.text(), &s.found);
         if (same_query) for (s.found[0..s.n], 0..) |f, i|
-            if (h.store.entries.items[f.index].hash == s.sel_hash) {
+            if (h.store.at(f.index).hash == s.sel_hash) {
                 s.sel = i;
                 break;
             };
@@ -99,7 +100,7 @@ pub const Screen = struct {
 
     fn selected(s: *const Screen, h: *const Host) ?clipboard.Entry {
         if (s.sel >= s.n) return null;
-        return h.store.entries.items[s.found[s.sel].index];
+        return h.store.at(s.found[s.sel].index);
     }
 
     /// The screen in place of the rows, the panel's height following it.
@@ -156,12 +157,12 @@ pub const Screen = struct {
         const e = s.selected(h) orelse return;
         if (!h.store.cfg.paste_plain_text) return s.copy(h);
         const r = h.paste(h.ctx, e.hash);
-        s.note = clipboard.pasteNote(r) orelse "";
+        s.note = note(r);
     }
 
     fn copy(s: *Screen, h: *const Host) void {
         const e = s.selected(h) orelse return;
-        s.note = if (h.copy(h.ctx, e.hash)) "Copied" else "Could not write the clipboard.";
+        s.note = note(h.copy(h.ctx, e.hash));
     }
 
     fn header(s: *Screen, c: *ui.Context, n: *panel.Nanolight, p: Palette) bool {
@@ -187,16 +188,13 @@ pub const Screen = struct {
     fn list(s: *Screen, c: *ui.Context, p: Palette, h: *const Host) void {
         if (s.n == 0) {
             const why = h.status(h.ctx);
-            const none = if (h.store.entries.items.len == 0)
-                "Nothing copied yet."
-            else
-                "No matches.";
-            return empty(c, p, if (why != null and h.store.entries.items.len == 0) why.? else none);
+            const none = if (h.store.len() == 0) "Nothing copied yet." else "No matches.";
+            return empty(c, p, if (why != null and h.store.len() == 0) why.? else none);
         }
         const first = if (s.sel >= visible_rows) s.sel + 1 - visible_rows else 0;
         const now = account.now();
         for (first..@min(s.n, first + visible_rows)) |i| {
-            const e = h.store.entries.items[s.found[i].index];
+            const e = h.store.at(s.found[i].index);
             ui.key(c, c.print("clip-row-{d}", .{i}));
             const r = ui.div(c).row().wFull().h(chrome.row_h).px(chrome.row_px).gap(chrome.row_gap)
                 .itemsCenter().rounded(10).control();
@@ -213,21 +211,21 @@ pub const Screen = struct {
             var tb: [48]u8 = undefined;
             ui.text(
                 c,
-                c.print("{s}", .{clipboard.title(&tb, e)}),
+                c.print("{s}", .{title(&tb, e)}),
                 .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis },
             );
             ui.spacer(c);
             var rb: [24]u8 = undefined;
-            const app = clipboard.appName(e.source);
+            const app = appName(e.source);
             ui.textf(
                 c,
                 .{ .size = 12, .color = p.sub.alpha(0.85), .tabular = true },
                 "{s}{s}{s} · {s}",
                 .{
-                    clipboard.kindLabel(e.kind),
+                    kindLabel(e.kind),
                     if (app.len > 0) " · " else "",
                     app,
-                    clipboard.relative(&rb, now, e.at),
+                    relative(&rb, now, e.at),
                 },
             );
         }
@@ -245,7 +243,7 @@ pub const Screen = struct {
                     c,
                     .{ .size = 13, .color = p.text },
                     "Image, {d} × {d} pixels, {s}",
-                    .{ e.width, e.height, clipboard.sizeText(&sb, e.size) },
+                    .{ e.width, e.height, sizeText(&sb, e.size) },
                 );
             },
             .text, .file => {
@@ -280,7 +278,7 @@ pub const Screen = struct {
             .{
                 e.count,
                 if (e.count == 1) "" else "s",
-                clipboard.relative(&rb, account.now(), e.at),
+                relative(&rb, account.now(), e.at),
             },
         );
     }
@@ -298,7 +296,7 @@ pub const Screen = struct {
         else if (hh) |h| {
             var cut = p.caption();
             cut.truncate = .ellipsis;
-            ui.textf(c, cut, "Clipboard History · {d}", .{h.store.entries.items.len});
+            ui.textf(c, cut, "Clipboard History · {d}", .{h.store.len()});
         } else ui.text(c, "Clipboard History", p.caption());
         ui.spacer(c);
         const h = hh orelse return;
@@ -319,4 +317,138 @@ fn empty(c: *ui.Context, p: Palette, said: []const u8) void {
     const box = ui.div(c).wFull().grow().center();
     defer box.end();
     ui.text(c, said, .{ .size = 13, .color = p.sub, .wrap = true });
+}
+
+// ----- how an entry reads -----
+
+/// The footer's word on how a paste or a copy went; empty after a paste.
+pub fn note(r: clipboard.PasteResult) []const u8 {
+    return switch (r) {
+        .pasted => "",
+        .copied => "Copied",
+        .copied_no_permission => "Copied. Allow Nanolight in Privacy & Security > Accessibility " ++
+            "to paste.",
+        .copied_unsupported => "Copied. Pasting is not supported on this system yet.",
+        .failed => "Could not write the clipboard.",
+        .unreadable => "Could not read this entry: its saved content is gone or damaged.",
+    };
+}
+
+/// "Safari" of "com.apple.Safari", "chrome" of "chrome.exe"; an app ID that
+/// is not a dotted name stays as it is.
+fn appName(source: []const u8) []const u8 {
+    const s = if (std.ascii.endsWithIgnoreCase(source, ".exe"))
+        source[0 .. source.len - 4]
+    else
+        source;
+    if (s.len != source.len) return s;
+    if (std.mem.count(
+        u8,
+        s,
+        ".",
+    ) >= 2) if (std.mem.lastIndexOfScalar(u8, s, '.')) |i| if (i + 1 < s.len) return s[i + 1 ..];
+    return s;
+}
+
+/// "now", "5 min ago", "3 h ago", "2 d ago".
+fn relative(buf: []u8, now: i64, at: i64) []const u8 {
+    const d = @max(now - at, 0);
+    const r = if (d < 60)
+        std.fmt.bufPrint(buf, "just now", .{})
+    else if (d < std.time.s_per_hour)
+        std.fmt.bufPrint(buf, "{d} min ago", .{@divFloor(d, 60)})
+    else if (d < std.time.s_per_day)
+        std.fmt.bufPrint(buf, "{d} h ago", .{@divFloor(d, std.time.s_per_hour)})
+    else
+        std.fmt.bufPrint(buf, "{d} d ago", .{@divFloor(d, std.time.s_per_day)});
+    return r catch "";
+}
+
+/// "12 bytes", "34 KB", "1.5 MB".
+fn sizeText(buf: []u8, n: u64) []const u8 {
+    const r = if (n < 1024)
+        std.fmt.bufPrint(buf, "{d} bytes", .{n})
+    else if (n < 1 << 20)
+        std.fmt.bufPrint(buf, "{d} KB", .{n >> 10})
+    else
+        std.fmt.bufPrint(buf, "{d}.{d} MB", .{ n >> 20, (n & ((1 << 20) - 1)) * 10 >> 20 });
+    return r catch "";
+}
+
+fn kindLabel(k: clipboard.Kind) []const u8 {
+    return switch (k) {
+        .text => "Text",
+        .image => "Image",
+        .file => "File",
+    };
+}
+
+/// One line for a list: a text's first line, an image's size, a file's name
+/// (and how many more).
+fn title(buf: []u8, e: clipboard.Entry) []const u8 {
+    switch (e.kind) {
+        .text => {
+            var lines = std.mem.splitScalar(u8, e.text, '\n');
+            while (lines.next()) |l| {
+                const t = std.mem.trim(u8, l, " \t\r");
+                if (t.len > 0) return search.clip(t, 200);
+            }
+            return "";
+        },
+        .image => return std.fmt.bufPrint(
+            buf,
+            "Image {d} × {d}",
+            .{ e.width, e.height },
+        ) catch "Image",
+        .file => {
+            const n = std.mem.count(u8, e.text, "\n") + 1;
+            const first = e.text[0 .. std.mem.indexOfScalar(u8, e.text, '\n') orelse e.text.len];
+            const name = std.fs.path.basename(first);
+            if (n == 1) return name;
+            return std.fmt.bufPrint(buf, "{s} and {d} more", .{ name, n - 1 }) catch name;
+        },
+    }
+}
+
+const testing = std.testing;
+
+test "how entries read" {
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("Safari", appName("com.apple.Safari"));
+    try testing.expectEqualStrings("chrome", appName("chrome.exe"));
+    try testing.expectEqualStrings("firefox", appName("firefox"));
+    try testing.expectEqualStrings("org.gnome", appName("org.gnome"));
+    try testing.expectEqualStrings("just now", relative(&buf, 100, 90));
+    try testing.expectEqualStrings("5 min ago", relative(&buf, 1000, 700));
+    try testing.expectEqualStrings("3 h ago", relative(&buf, 20000, 9000));
+    try testing.expectEqualStrings("2 d ago", relative(&buf, 200000, 20000));
+    const t: clipboard.Entry = .{
+        .hash = 1,
+        .kind = .text,
+        .text = "\n  hello\nworld",
+        .size = 14,
+        .at = 0,
+    };
+    try testing.expectEqualStrings("hello", title(&buf, t));
+    const im: clipboard.Entry = .{
+        .hash = 2,
+        .kind = .image,
+        .text = "",
+        .size = 1,
+        .width = 800,
+        .height = 600,
+        .at = 0,
+    };
+    try testing.expectEqualStrings("Image 800 × 600", title(&buf, im));
+    const f: clipboard.Entry = .{
+        .hash = 3,
+        .kind = .file,
+        .text = "/a/b/c.txt\n/a/d.txt",
+        .size = 1,
+        .at = 0,
+    };
+    try testing.expectEqualStrings("c.txt and 1 more", title(&buf, f));
+    try testing.expectEqualStrings("12 bytes", sizeText(&buf, 12));
+    try testing.expectEqualStrings("34 KB", sizeText(&buf, 34 * 1024 + 5));
+    try testing.expectEqualStrings("1.5 MB", sizeText(&buf, 3 << 19));
 }
