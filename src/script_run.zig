@@ -7,10 +7,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
+const assert = std.debug.assert;
 const sc = @import("script_commands.zig");
 const model = @import("raycast_model.zig");
 const Ext = @import("raycast_view.zig").Ext;
 const windows = builtin.os.tag == .windows;
+
+comptime {
+    // Each argument is a field of the form.
+    assert(sc.max_args == model.max_fields);
+}
 
 pub const Hooks = struct {
     ctx: *anyopaque,
@@ -25,6 +31,9 @@ const max_out = 256 * 1024;
 /// A script this size or larger isn't read, so it isn't run: its header,
 /// which may ask to confirm or for arguments, would go unread.
 const max_script_bytes = 1 << 20;
+
+const run_actions = [_]model.Action{.run};
+const done_actions = [_]model.Action{ .copy, .again };
 
 /// The row a script is opened from.
 pub const Row = struct {
@@ -52,12 +61,10 @@ pub const Runner = struct {
     bytes: []const u8 = "",
     meta: sc.Meta = .{},
     title: []const u8 = "",
-    args: [3]std.ArrayList(u8) = .{ .empty, .empty, .empty },
+    args: [sc.max_args]std.ArrayList(u8) = @splat(.empty),
     child: ?std.process.Child = null,
     watch: ?nanoui.fdwatch.Watch = null,
     out: std.ArrayList(u8) = .empty,
-    /// The command's screen is up (not a silent run).
-    shown: bool = false,
     footer_buf: [160]u8 = undefined,
 
     pub fn deinit(r: *Runner) void {
@@ -85,44 +92,62 @@ pub const Runner = struct {
         r.file = a.dupe(u8, row.path[sc.prefix.len..]) catch return;
         r.title = a.dupe(u8, row.title) catch return;
         for (&r.args) |*x| x.clearRetainingCapacity();
-        r.ext.start(r.title, row.icon, .{ .ctx = r, .func = said });
-        r.shown = true;
+        r.ext.start(.{ .name = r.title, .icon = row.icon }, .{ .ctx = r, .func = heard });
         const limit: std.Io.Limit = .limited(max_script_bytes);
         r.bytes = std.Io.Dir.cwd().readFileAlloc(io(), r.file, a, limit) catch
             return r.fail("Couldn't read the script.");
         r.meta = sc.parse(a, r.bytes) orelse .{ .title = r.title };
-        if (r.meta.argCount() > 0 or r.meta.confirm) return r.ask();
+        if (r.asks()) return r.ask();
         r.run();
     }
 
-    /// The arguments' form (or, with none, \"Run X?\"), Run on ⌘↩.
+    /// It asks before it runs: for its arguments, or to confirm.
+    fn asks(r: *const Runner) bool {
+        return r.meta.argCount() > 0 or r.meta.confirm;
+    }
+
+    /// The arguments' form (or, with none, "Run X?"), Run on ⌘↩.
     fn ask(r: *Runner) void {
         var arena: std.heap.ArenaAllocator = .init(r.gpa);
-        const a = arena.allocator();
-        var fields: std.ArrayList(model.Field) = .empty;
-        for (r.meta.args, 0..) |maybe, i| {
-            const arg = maybe orelse continue;
-            var opts: std.ArrayList(model.Option) = .empty;
-            for (arg.data) |d| opts.append(a, .{ .value = d.value, .title = d.title }) catch {};
-            const dropdown = std.mem.eql(u8, arg.type, "dropdown");
-            if (dropdown and arg.data.len > 0 and r.args[i].items.len == 0) r.args[i].appendSlice(r.gpa, arg.data[0].value) catch {};
-            const first: std.json.Value = .{ .string = a.dupe(u8, r.args[i].items) catch "" };
-            fields.append(a, .{
-                .id = a.dupe(u8, &.{ 'a', 'r', 'g', @intCast('1' + i) }) catch continue,
-                .type = if (dropdown) "dropdown" else "text",
-                .title = if (arg.placeholder.len > 0) arg.placeholder else "Argument",
-                .placeholder = if (arg.optional) "Optional" else "",
-                .value = first,
-                .options = opts.items,
-            }) catch {};
-        }
-        const run_action = a.dupe(model.Action, &.{.{ .id = "run", .title = "Run" }}) catch &.{};
-        const v: model.View = if (fields.items.len > 0)
-            .{ .kind = "form", .title = r.title, .fields = fields.items, .actions = run_action }
-        else
-            .{ .kind = "detail", .title = r.title, .markdown = std.fmt.allocPrint(a, "# Run {s}?\n{s}", .{ r.title, r.meta.description }) catch "", .actions = run_action };
+        const v = r.question(arena.allocator()) catch {
+            // Out of memory: the screen keeps what it showed.
+            arena.deinit();
+            return;
+        };
         r.ext.show(arena, v);
         r.hooks.redraw(r.hooks.ctx);
+    }
+
+    /// `ask`'s view, its strings in `a`.
+    fn question(r: *Runner, a: std.mem.Allocator) !model.View {
+        const title = try a.dupe(u8, r.title);
+        var fields: std.ArrayList(model.Field) = .empty;
+        for (r.meta.args, 0..) |maybe, slot| {
+            const arg = maybe orelse continue;
+            const dropdown = std.mem.eql(u8, arg.type, "dropdown");
+            // A dropdown starts on its first choice.
+            if (dropdown and arg.data.len > 0 and r.args[slot].items.len == 0)
+                try r.args[slot].appendSlice(r.gpa, arg.data[0].value);
+            const opts = try a.alloc(model.Option, arg.data.len);
+            for (opts, arg.data) |*o, d| o.* = .{
+                .value = try a.dupe(u8, d.value),
+                .title = try a.dupe(u8, d.title),
+            };
+            const label = if (arg.placeholder.len > 0) arg.placeholder else "Argument";
+            try fields.append(a, .{
+                .slot = slot,
+                .kind = if (dropdown) .dropdown else .text,
+                .title = try a.dupe(u8, label),
+                .placeholder = if (arg.optional) "Optional" else "",
+                .value = try a.dupe(u8, r.args[slot].items),
+                .options = opts,
+            });
+        }
+        const actions = &run_actions;
+        if (fields.items.len > 0)
+            return .{ .form = .{ .title = title, .fields = fields.items, .actions = actions } };
+        const md = try std.fmt.allocPrint(a, "# Run {s}?\n{s}", .{ r.title, r.meta.description });
+        return .{ .detail = .{ .title = title, .body = .{ .markdown = md }, .actions = actions } };
     }
 
     /// Starts the script with its arguments.
@@ -148,12 +173,16 @@ pub const Runner = struct {
             return r.fail("The script couldn't be started (is its interpreter installed?).");
         r.child = child;
         const out = child.stdout.?;
-        r.watch = if (windows)
-            nanoui.fdwatch.reader(out.handle, r, bytesIn, ended) catch null
+        r.watch = (if (windows)
+            nanoui.fdwatch.reader(out.handle, r, bytesIn, ended)
         else
-            nanoui.fdwatch.readable(out.handle, r, readable) catch null;
+            nanoui.fdwatch.readable(out.handle, r, readable)) catch {
+            // Unwatched, nothing would read its output or end it: it is
+            // stopped here rather than left "Running…".
+            r.stop();
+            return r.fail("Couldn't follow the script's output.");
+        };
         if (r.meta.mode == .silent) {
-            r.shown = false;
             r.ext.stop();
             r.hooks.hide(r.hooks.ctx);
         } else r.showOutput(false);
@@ -174,63 +203,86 @@ pub const Runner = struct {
         // Said in the panel (and the footer), not left at "Starting…".
         if (r.ext.view == null) {
             var arena: std.heap.ArenaAllocator = .init(r.gpa);
-            const md = std.fmt.allocPrint(arena.allocator(), "# {s}\n{s}", .{ r.title, why }) catch "";
-            r.ext.show(arena, .{ .kind = "detail", .title = r.title, .markdown = md });
+            // Out of memory: the footer still says why.
+            if (r.failed(arena.allocator(), why)) |v| r.ext.show(arena, v) else |_| arena.deinit();
         }
         r.ext.note(why, true);
         r.hooks.redraw(r.hooks.ctx);
     }
 
+    /// `fail`'s view, its strings in `a`.
+    fn failed(r: *Runner, a: std.mem.Allocator, why: []const u8) !model.View {
+        const md = try std.fmt.allocPrint(a, "# {s}\n{s}", .{ r.title, why });
+        return .{ .detail = .{ .title = try a.dupe(u8, r.title), .body = .{ .markdown = md } } };
+    }
+
     /// What it printed so far, as its mode shows it.
     fn showOutput(r: *Runner, done: bool) void {
-        if (!r.shown) return;
+        if (!r.ext.open) return;
         var arena: std.heap.ArenaAllocator = .init(r.gpa);
-        const a = arena.allocator();
-        const text = std.mem.trimEnd(u8, r.out.items, " \r\n");
-        const acts = a.dupe(model.Action, &.{ .{ .id = "copy", .title = "Copy Output" }, .{ .id = "again", .title = "Run Again" } }) catch &.{};
-        var v: model.View = .{ .kind = "detail", .title = r.title, .loading = !done, .actions = if (done) acts else &.{} };
-        if (r.meta.mode == .full_output) {
-            v.output = a.dupe(u8, if (text.len == 0 and done) "(no output)" else text) catch "";
-        } else {
-            const last = if (std.mem.lastIndexOfScalar(u8, text, '\n')) |nl| text[nl + 1 ..] else text;
-            v.markdown = std.fmt.allocPrint(a, "# {s}", .{if (last.len > 0) last else if (done) "Done" else "Running…"}) catch "";
-        }
+        const v = r.printed(arena.allocator(), done) catch {
+            // Out of memory: the screen keeps what it showed.
+            arena.deinit();
+            return;
+        };
         r.ext.show(arena, v);
         r.hooks.redraw(r.hooks.ctx);
     }
 
-    fn said(ctx: *anyopaque, line: []const u8) void {
+    /// `showOutput`'s view, its strings in `a`.
+    fn printed(r: *Runner, a: std.mem.Allocator, done: bool) !model.View {
+        const text = std.mem.trimEnd(u8, r.out.items, " \r\n");
+        const body: model.Detail.Body = if (r.meta.mode == .full_output) .{
+            .output = try a.dupe(u8, if (text.len == 0 and done) "(no output)" else text),
+        } else body: {
+            const last = lastLine(text);
+            const heading = if (last.len > 0) last else if (done) "Done" else "Running…";
+            break :body .{ .markdown = try std.fmt.allocPrint(a, "# {s}", .{heading}) };
+        };
+        return .{ .detail = .{
+            .title = try a.dupe(u8, r.title),
+            .body = body,
+            .loading = !done,
+            .actions = if (done) &done_actions else &.{},
+        } };
+    }
+
+    /// What the screen said (raycast_view.zig `Sender`).
+    fn heard(ctx: *anyopaque, event: model.Event) void {
         const r: *Runner = @ptrCast(@alignCast(ctx));
-        var arena: std.heap.ArenaAllocator = .init(r.gpa);
-        defer arena.deinit();
-        const m = model.parse(arena.allocator(), line) catch return;
-        const id = if (m.id) |v| (if (v == .string) v.string else "") else "";
-        if (std.mem.eql(u8, m.type, "field")) {
-            if (id.len == 4 and id[3] >= '1' and id[3] <= '3') {
-                const slot = &r.args[id[3] - '1'];
-                slot.clearRetainingCapacity();
-                if (m.value == .string) slot.appendSlice(r.gpa, m.value.string) catch {};
-                // A dropdown shows what was picked (text fields keep their own).
-                if (r.meta.args[id[3] - '1']) |arg| if (std.mem.eql(u8, arg.type, "dropdown")) r.ask();
-            }
-        } else if (std.mem.eql(u8, m.type, "action")) {
-            if (std.mem.eql(u8, id, "run") or std.mem.eql(u8, id, "again")) {
-                if (std.mem.eql(u8, id, "again") and (r.meta.argCount() > 0 or r.meta.confirm)) return r.ask();
-                r.run();
-            } else if (std.mem.eql(u8, id, "copy")) {
-                r.hooks.copy(r.hooks.ctx, std.mem.trimEnd(u8, r.out.items, "\n"));
-                r.ext.note("Copied to the clipboard", false);
-            }
-        } else if (std.mem.eql(u8, m.type, "pop")) {
-            r.pop();
-            r.hooks.redraw(r.hooks.ctx);
+        switch (event) {
+            .field => |f| r.field(f.slot, f.value),
+            .action => |a| switch (a) {
+                .run => r.run(),
+                .again => if (r.asks()) r.ask() else r.run(),
+                .copy => {
+                    r.hooks.copy(r.hooks.ctx, std.mem.trimEnd(u8, r.out.items, "\n"));
+                    r.ext.note("Copied to the clipboard", false);
+                },
+            },
+            .pop => {
+                r.pop();
+                r.hooks.redraw(r.hooks.ctx);
+            },
         }
+    }
+
+    /// Argument `slot`'s new value.
+    fn field(r: *Runner, slot: usize, value: []const u8) void {
+        // The form's fields are the header's arguments (`question`).
+        const arg = r.meta.args[slot].?;
+        const held = &r.args[slot];
+        // Out of memory: the old value stays.
+        held.ensureTotalCapacity(r.gpa, value.len) catch return;
+        held.clearRetainingCapacity();
+        held.appendSliceAssumeCapacity(value);
+        // A dropdown shows what was picked (text fields keep their own).
+        if (std.mem.eql(u8, arg.type, "dropdown")) r.ask();
     }
 
     /// Ends the script and closes its screen.
     pub fn pop(r: *Runner) void {
         r.stop();
-        r.shown = false;
         r.ext.stop();
     }
 
@@ -273,8 +325,8 @@ pub const Runner = struct {
         const term = c.wait(r.io) catch null;
         const ok = if (term) |t| t.success() else false;
         const text = std.mem.trimEnd(u8, r.out.items, " \r\n");
-        const last = if (std.mem.lastIndexOfScalar(u8, text, '\n')) |nl| text[nl + 1 ..] else text;
-        if (!r.shown) {
+        const last = lastLine(text);
+        if (!r.ext.open) {
             // Silent: the last line, said in the footer of the search.
             const said_text = if (last.len > 0) last else if (ok) r.title else "Failed";
             const n = @min(said_text.len, r.footer_buf.len);
@@ -294,8 +346,24 @@ pub const Runner = struct {
     }
 };
 
+fn lastLine(text: []const u8) []const u8 {
+    const nl = std.mem.lastIndexOfScalar(u8, text, '\n') orelse return text;
+    return text[nl + 1 ..];
+}
+
 fn ignore(_: *anyopaque) void {}
 fn ignoreText(_: *anyopaque, _: []const u8) void {}
+
+/// A runner whose hooks do nothing, for tests that start no process.
+fn quiet(ext: *Ext, probe: *u8) Runner {
+    return .{ .gpa = std.testing.allocator, .io = std.testing.io, .ext = ext, .hooks = .{
+        .ctx = probe,
+        .hide = ignore,
+        .redraw = ignore,
+        .copy = ignoreText,
+        .footer = ignoreText,
+    } };
+}
 
 test "a script too big to read isn't run, since its header could ask first" {
     const t = std.testing;
@@ -315,13 +383,7 @@ test "a script too big to read isn't run, since its header could ask first" {
     var ext: Ext = .{ .gpa = t.allocator };
     defer ext.deinit();
     var probe: u8 = 0;
-    var r: Runner = .{ .gpa = t.allocator, .io = t.io, .ext = &ext, .hooks = .{
-        .ctx = &probe,
-        .hide = ignore,
-        .redraw = ignore,
-        .copy = ignoreText,
-        .footer = ignoreText,
-    } };
+    var r = quiet(&ext, &probe);
     defer r.deinit();
     var buf: [128]u8 = undefined;
     const dir = try std.fmt.bufPrint(&buf, "{s}.zig-cache/tmp/{s}/", .{ sc.prefix, tmp.sub_path });
@@ -331,11 +393,49 @@ test "a script too big to read isn't run, since its header could ask first" {
     const small = try std.fmt.bufPrint(&path_buf, "{s}wipe.sh", .{dir});
     r.start(.{ .path = small, .title = "Wipe" });
     try t.expect(ext.open and r.child == null);
-    try t.expect(std.mem.indexOf(u8, ext.view.?.markdown.?, "Run Wipe?") != null);
+    try t.expect(std.mem.indexOf(u8, ext.view.?.detail.body.markdown, "Run Wipe?") != null);
 
     // Unread, it says so and doesn't run.
     r.start(.{ .path = try std.fmt.bufPrint(&path_buf, "{s}big.sh", .{dir}), .title = "Wipe" });
     try t.expect(ext.open and r.child == null);
     try t.expectEqualStrings("Couldn't read the script.", ext.note_buf[0..ext.note_len]);
-    try t.expect(std.mem.indexOf(u8, ext.view.?.markdown.?, "Couldn't read") != null);
+    try t.expect(std.mem.indexOf(u8, ext.view.?.detail.body.markdown, "Couldn't read") != null);
+}
+
+test "a dropdown's pick is kept and shown in the form; a typed value is only kept" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(t.io, .{ .sub_path = "hi.sh", .data = "#!/bin/sh\n" ++
+        "# @raycast.schemaVersion 1\n# @raycast.title Greet\n" ++
+        "# @raycast.argument1 { \"type\": \"text\", \"placeholder\": \"Name\" }\n" ++
+        "# @raycast.argument3 { \"type\": \"dropdown\", \"placeholder\": \"Lang\", " ++
+        "\"data\": [{\"title\": \"English\", \"value\": \"en\"}, " ++
+        "{\"title\": \"French\", \"value\": \"fr\"}] }\n" });
+    var ext: Ext = .{ .gpa = t.allocator };
+    defer ext.deinit();
+    var probe: u8 = 0;
+    var r = quiet(&ext, &probe);
+    defer r.deinit();
+    var buf: [160]u8 = undefined;
+    const dir = ".zig-cache/tmp/";
+    const path = try std.fmt.bufPrint(&buf, "{s}{s}{s}/hi.sh", .{ sc.prefix, dir, tmp.sub_path });
+    r.start(.{ .path = path, .title = "Greet" });
+    // Two fields, the second for argument 3, on its first choice.
+    const asked = ext.view.?.form.fields;
+    try t.expectEqual(@as(usize, 2), asked.len);
+    try t.expectEqual(@as(usize, 2), asked[1].slot);
+    try t.expectEqualStrings("en", asked[1].value);
+    try t.expectEqualStrings("French", asked[1].options[1].title);
+
+    Runner.heard(&r, .{ .field = .{ .slot = 0, .value = "Rach" } });
+    try t.expectEqualStrings("Rach", r.args[0].items);
+    try t.expect(ext.view.?.form.fields.ptr == asked.ptr);
+
+    Runner.heard(&r, .{ .field = .{ .slot = 2, .value = "fr" } });
+    try t.expectEqualStrings("fr", r.args[2].items);
+    const shown = ext.view.?.form.fields;
+    try t.expectEqualStrings("fr", shown[1].value);
+    try t.expectEqualStrings("Rach", shown[0].value);
+    try t.expect(r.child == null);
 }

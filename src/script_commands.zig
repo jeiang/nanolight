@@ -24,6 +24,9 @@ pub const folder_path = "script-folder:";
 
 pub const Mode = enum { silent, compact, full_output, inline_ };
 
+/// `@raycast.argument1` to `@raycast.argument3`.
+pub const max_args = 3;
+
 pub const Argument = struct {
     /// "text", "password" or "dropdown".
     type: []const u8 = "text",
@@ -41,7 +44,7 @@ pub const Meta = struct {
     description: []const u8 = "",
     cwd: []const u8 = "",
     confirm: bool = false,
-    args: [3]?Argument = .{ null, null, null },
+    args: [max_args]?Argument = @splat(null),
     schema: bool = false,
 
     pub fn argCount(m: *const Meta) usize {
