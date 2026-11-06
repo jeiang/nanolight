@@ -131,7 +131,11 @@ pub fn build(b: *std.Build) void {
         b.step("clip-probe", "Build the Linux clipboard probe (zig-out/bin/clip-probe)").dependOn(&b.addInstallArtifact(probe, .{}).step);
     }
 
-    addReleaseSteps(b, .{ .version = version_option, .test_step = test_step });
+    addReleaseSteps(b, .{
+        .version = version_option,
+        .test_step = test_step,
+        .nix = app_options.nix_managed,
+    });
 }
 
 /// One build of the app: its target, and what it is told at compile time.
@@ -248,6 +252,8 @@ const ReleaseOptions = struct {
     /// `-Dversion`: required to package, since the version is compiled in.
     version: ?[]const u8,
     test_step: *std.Build.Step,
+    /// `-Dnix`: Nix's sandbox has no macOS SDK for the Mac tools' frameworks.
+    nix: bool,
 };
 
 fn addReleaseSteps(b: *std.Build, options: ReleaseOptions) void {
@@ -261,33 +267,34 @@ fn addReleaseSteps(b: *std.Build, options: ReleaseOptions) void {
     options.test_step.dependOn(&package_tool.step);
     addPackage(b, .{ .version = options.version, .tool = package_tool });
     const on_mac = b.graph.host.result.os.tag == .macos;
+    const mac_test_step: ?*std.Build.Step = if (options.nix) null else options.test_step;
     _ = addMacTool(b, .{
         .name = "verify-release",
         .root = "tools/verify_release.zig",
         .description = "Check a published release's files, notarization and first run (-- vX.Y.Z)",
         .on_mac = on_mac,
-        .test_step = options.test_step,
+        .test_step = mac_test_step,
     });
     _ = addMacTool(b, .{
         .name = "verify-update",
         .root = "tools/verify_update.zig",
         .description = "Launch a release for real and update to it (-- vOLD vNEW; CI only)",
         .on_mac = on_mac,
-        .test_step = options.test_step,
+        .test_step = mac_test_step,
     });
     _ = addMacTool(b, .{
         .name = "verify-typing",
         .root = "tools/verify_typing.zig",
         .description = "Check the panel's query never goes back (-- [cycles]; CI only)",
         .on_mac = on_mac,
-        .test_step = options.test_step,
+        .test_step = mac_test_step,
     });
     const icon = addMacTool(b, .{
         .name = "icon",
         .root = "tools/icon.zig",
         .description = "Redraw src/icon.png, src/icon-256.png and macos/AppIcon.icns",
         .on_mac = on_mac,
-        .test_step = options.test_step,
+        .test_step = mac_test_step,
     });
     // It writes the icon's files in the source tree.
     if (icon) |run| run.setCwd(b.path("."));
@@ -306,7 +313,8 @@ const MacTool = struct {
     root: []const u8,
     description: []const u8,
     on_mac: bool,
-    test_step: *std.Build.Step,
+    /// Where `zig build test` builds the tool, if it does.
+    test_step: ?*std.Build.Step,
 };
 
 /// A step that runs a tool of the Mac's (its arguments after `--`), or that
@@ -322,7 +330,7 @@ fn addMacTool(b: *std.Build, tool: MacTool) ?*std.Build.Step.Run {
     module.linkFramework("CoreFoundation", .{});
     module.linkFramework("CoreGraphics", .{});
     const exe = b.addExecutable(.{ .name = tool.name, .root_module = module });
-    tool.test_step.dependOn(&exe.step);
+    if (tool.test_step) |test_step| test_step.dependOn(&exe.step);
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     step.dependOn(&run.step);
