@@ -12,6 +12,7 @@ const search = @import("search.zig");
 const files = @import("files.zig");
 const calc = @import("calc.zig");
 const convert = @import("convert.zig");
+const rates = @import("rates.zig");
 const panes = @import("settings_panes.zig");
 const commands = @import("commands.zig");
 const mac = @import("builtin").os.tag == .macos;
@@ -164,19 +165,19 @@ pub const Math = struct {
     answer: union(enum) { value: f64, conversion: convert.Answer },
 };
 
-/// The card for `query`, converting money by `rates` when in hand. Operators
+/// The card for `query`, converting money by `table` when in hand. Operators
 /// it ends with are left off ("2 + 3 *", "500 usd to eur *"), so the card
 /// stays while the next number is typed.
-pub fn math(query: []const u8, rates: ?*const convert.Rates) ?Math {
+pub fn math(query: []const u8, table: ?*const rates.Rates) ?Math {
     const text = calc.trimOps(std.mem.trim(u8, query, " "));
     if (calc.eval(text)) |v| return .{ .text = text, .answer = .{ .value = v } };
-    const a = convert.answer(text, rates) orelse return null;
+    const a = convert.answer(text, if (table) |x| x.lookup() else null) orelse return null;
     return .{ .text = text, .answer = .{ .conversion = a } };
 }
 
 /// Whether `query` shows the answer card: then it is not searched for.
-pub fn isMath(query: []const u8, rates: ?*const convert.Rates) bool {
-    return math(query, rates) != null;
+pub fn isMath(query: []const u8, table: ?*const rates.Rates) bool {
+    return math(query, table) != null;
 }
 
 pub const Results = struct {
@@ -199,8 +200,7 @@ pub const Results = struct {
     note_buf: [96]u8 = undefined,
     note: []const u8 = "",
     /// Currency rates, when in hand, and whether fetching them failed.
-    rates: ?*const convert.Rates = null,
-    rates_failed: bool = false,
+    rates: rates.Status = .{},
     /// The query is a currency conversion: rates are needed (or may be stale).
     need_rates: bool = false,
     /// Row 0 is a currency card still waiting for rates: nothing to copy yet.
@@ -245,7 +245,7 @@ pub const Results = struct {
             );
             return;
         }
-        if (math(query, r.rates)) |m| switch (m.answer) {
+        if (math(query, r.rates.table)) |m| switch (m.answer) {
             .value => |v| r.calcRow(v, m.text, query.len),
             .conversion => |a| {
                 r.pending = a == .pending;
@@ -371,7 +371,7 @@ pub const Results = struct {
             },
             .pending => {
                 r.need_rates = true;
-                r.answer = if (r.rates_failed) "Rates unavailable" else "Loading rates…";
+                r.answer = if (r.rates.failed) "Rates unavailable" else "Loading rates…";
             },
         }
     }
@@ -685,7 +685,7 @@ test "a conversion is answered like math, with the rate under a currency's" {
     try t.expectEqualStrings("Loading rates…", r.answer);
     try t.expect(r.need_rates);
     try t.expectEqualStrings("", r.copy);
-    r.rates_failed = true;
+    r.rates.failed = true;
     r.build("100 usd to ttd", &ix, &.{}, &.{}, defaults);
     try t.expectEqualStrings("Rates unavailable", r.answer);
     // The pending card does not drop the web search under it.
@@ -695,12 +695,12 @@ test "a conversion is answered like math, with the rate under a currency's" {
     try t.expect(r.pending);
     try t.expectEqual(@as(usize, 1), r.actionable(0));
     try t.expectEqual(Kind.quicklink, r.rows[r.actionable(0)].kind);
-    var rates = convert.Rates.parse(
+    var table = rates.Rates.parse(
         t.allocator,
         "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}",
     ).?;
-    defer rates.deinit();
-    r.rates = &rates;
+    defer table.deinit();
+    r.rates = .{ .table = &table };
     r.build("100 USD in TTD", &ix, &.{}, &.{}, defaults);
     try t.expectEqualStrings("678.50 TTD", r.answer);
     try t.expectEqualStrings("678.50", r.copy);
@@ -750,12 +750,12 @@ test "math around a conversion: the card shows the amount worked out and copies 
     try t.expectEqualStrings("", r.copy);
     r.build("12 ttd to usd /", &ix, &.{}, &.{}, defaults);
     try t.expect(r.pending);
-    var rates = convert.Rates.parse(
+    var table = rates.Rates.parse(
         t.allocator,
         "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785,\"eur\":0.86}}",
     ).?;
-    defer rates.deinit();
-    r.rates = &rates;
+    defer table.deinit();
+    r.rates = .{ .table = &table };
     r.build("35 * 7 ttd to usd", &ix, &.{}, &.{}, defaults);
     try t.expect(!r.pending);
     try t.expectEqualStrings("245 TTD", r.expr);
@@ -866,8 +866,8 @@ test "math is what the card takes: trailing operators, conversions, money by the
         try t.expect(!isMath(q, null));
     // Money waits for a table; with one, only the codes it has convert.
     try t.expect(isMath("100 usd to xyz", null));
-    var rates = convert.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1}}").?;
-    defer rates.deinit();
-    try t.expect(isMath("100 usd to usd", &rates));
-    try t.expect(!isMath("100 usd to xyz", &rates));
+    var table = rates.Rates.parse(t.allocator, "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1}}").?;
+    defer table.deinit();
+    try t.expect(isMath("100 usd to usd", &table));
+    try t.expect(!isMath("100 usd to xyz", &table));
 }

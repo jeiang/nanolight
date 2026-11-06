@@ -12,7 +12,7 @@ const files = @import("files.zig");
 const files_view = @import("files_view.zig");
 const answers = @import("answers.zig");
 const suggest = @import("suggest.zig");
-const convert = @import("convert.zig");
+const rates = @import("rates.zig");
 const search = @import("search.zig");
 const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
@@ -45,10 +45,6 @@ pub const Host = struct {
     files: ?Ask = null,
     /// Settings' answers: Settings is drawn only with them.
     settings: ?*const SettingsHost = null,
-    /// A currency conversion is listed: fetch the rates unless they are
-    /// fresh, and answer with `Nanolight.ratesLanded`. Without it, none are
-    /// fetched.
-    rates: ?Call = null,
     /// Runs system command `i` (commands.zig). Without it, nothing runs.
     command: ?Run = null,
     /// Clipboard history (clipboard_view.zig). Without it the "Clipboard
@@ -59,7 +55,6 @@ pub const Host = struct {
         ctx: *anyopaque,
         func: *const fn (ctx: *anyopaque, query: []const u8) void,
     };
-    pub const Call = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque) void };
     pub const Run = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque, i: usize) void };
 };
 
@@ -114,8 +109,8 @@ pub const Nanolight = struct {
     quicklinks: []const settings.Quicklink = &settings.default_quicklinks,
     web: suggest.List = .{},
     cache: suggest.Cache = .{},
-    /// Currency rates and their fetching (the host's).
-    feed: ?*const convert.Feed = null,
+    /// Currency rates and their fetching (rates.zig); without them none are fetched.
+    rates: ?*rates.Live = null,
     /// A search's page is in the panel, for the query as it was then.
     previewing: bool = false,
     preview_q: u64 = 0,
@@ -406,25 +401,30 @@ pub const Nanolight = struct {
                 ask.func(ask.ctx, q);
             }
         };
-        if (s.res.need_rates) if (s.host) |host| if (host.rates) |get| get.func(get.ctx);
         // The first row: an app, the answer, or the search for what was
         // typed; never a completion nobody picked (they come after it).
         s.sel = s.res.actionable(0);
     }
 
     pub fn fill(s: *Nanolight) void {
+        s.res.clip_on = if (s.host) |h| h.clipboard != null else false;
+        s.res.found = &s.found;
+        rates.fill(s.rates, s, buildRows);
+    }
+
+    /// Lists the query's rows with `status`; true when they list a currency
+    /// conversion, which asks for the rates.
+    fn buildRows(s: *Nanolight, status: rates.Status) bool {
         var sug: [results.max_apps]u32 = undefined;
         const ns = s.index.suggestions(&sug);
         var web: [suggest.max_rows][]const u8 = undefined;
-        s.res.rates = s.ratesTable();
-        s.res.rates_failed = if (s.feed) |f| f.failed() else false;
-        s.res.clip_on = if (s.host) |h| h.clipboard != null else false;
-        s.res.found = &s.found;
+        s.res.rates = status;
         s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web), s.quicklinks);
+        return s.res.need_rates;
     }
 
-    pub fn ratesTable(s: *const Nanolight) ?*const convert.Rates {
-        return if (s.feed) |f| f.table() else null;
+    pub fn ratesTable(s: *const Nanolight) ?*const rates.Rates {
+        return if (s.rates) |r| r.feed.table() else null;
     }
 
     /// The rates arrived (or could not be had): the conversion listed, if

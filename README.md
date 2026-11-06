@@ -239,13 +239,14 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | --- | --- |
 | `src/main.zig` | Startup: the arguments, the features wired to the panel, the app's loop |
 | `src/app.zig` | The app around the panel: its window, shown and hidden, its key and its welcome |
-| `src/suggest_live.zig`, `src/rates_live.zig`, `src/files_live.zig`, `src/commands_live.zig` | The app's side of Google's completions, currency rates, file search and system commands |
+| `src/suggest_live.zig`, `src/files_live.zig`, `src/commands_live.zig` | The app's side of Google's completions, file search and system commands |
 | `src/menu_live.zig`, `src/update_live.zig`, `src/settings_bind.zig` | The menu bar icon and its menu, updates, and Settings' answers |
 | `src/view.zig` | The panel: query, rows, footer, keys |
 | `src/results.zig` | What a query lists, in order |
 | `src/search.zig` | Text: fuzzy matching and ranking (allocation-free), UTF-8 cutting, URL escaping |
-| `src/calc.zig` | The calculator |
-| `src/convert.zig` | Unit and currency conversion: the parser, unit table, rates table and when to refetch it |
+| `src/calc.zig` | The calculator, and the math read around a conversion's units |
+| `src/convert.zig` | Unit and currency conversion: the parser and unit table, money by the rates it is handed |
+| `src/rates.zig` | Currency rates: the table, when to refetch it, its fetch and its copy on disk |
 | `src/suggest.zig` | Google's completions: the privacy guard, decoding, the cache (after [browse](https://github.com/justrach/browse)) |
 | `src/preview.zig` | The results page in the panel (WKWebView, the Mac) |
 | `src/platform.zig` | Each OS's parts, picked once, and what it can do; `src/pc_stubs.zig` stands in for the Mac's, checked against them |
