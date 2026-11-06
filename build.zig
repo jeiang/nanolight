@@ -7,6 +7,7 @@
 //!   zig build test           its search, math, suggestions and panel
 //!   zig build server         the sync server, zig-out/bin/nanolight-server
 //!   zig build clip-probe     the Linux clipboard watcher, run without the panel
+//!   zig build lint           zig fmt's check and TigerStyle's line and catch rules
 //!   -Dnix=true               a Nix build: Nix owns updates and startup, so
 //!                            no updater and no login-item UI
 //!
@@ -85,7 +86,25 @@ pub fn build(b: *std.Build) void {
     if (os == .macos) tests.root_module.linkFramework("ApplicationServices", .{});
     // zig-out/bin/nanolight-tests: the tests, to run on another machine.
     b.step("test-bin", "Install the tests as zig-out/bin/nanolight-tests").dependOn(&b.addInstallArtifact(tests, .{ .dest_sub_path = if (os == .windows) "nanolight-tests.exe" else "nanolight-tests" }).step);
-    b.step("test", "Test Nanolight's search, math, suggestions and panel").dependOn(&b.addRunArtifact(tests).step);
+    const test_step = b.step("test", "Test Nanolight's search, math, suggestions and panel, and the lint");
+    test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    // `zig build lint`: zig fmt's check, and the TigerStyle rules a machine
+    // can check (tools/lint.zig, docs/TIGER_STYLE.md).
+    const lint = b.addExecutable(.{ .name = "lint", .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/lint.zig"),
+        .target = b.graph.host,
+        .optimize = .debug,
+    }) });
+    const lint_run = b.addRunArtifact(lint);
+    lint_run.addDirectoryArg(b.path("src"));
+    lint_run.addDirectoryArg(b.path("tools"));
+    lint_run.addFileArg(b.path("build.zig"));
+    const lint_step = b.step("lint", "Check formatting and TigerStyle's mechanical rules");
+    const fmt_paths = [_]std.Build.LazyPath{ b.path("src"), b.path("tools"), b.path("build.zig") };
+    lint_step.dependOn(&b.addFmt(.{ .paths = &fmt_paths, .check = true }).step);
+    lint_step.dependOn(&lint_run.step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = lint.root_module })).step);
 
     // nanolight-server: the sync server (src/server.zig). Plain std, no nanoui.
     const server = b.addExecutable(.{ .name = "nanolight-server", .root_module = b.createModule(.{

@@ -34,6 +34,7 @@ in {
       ../build.zig
       ../build.zig.zon
       ../src
+      ../tools
       ../macos
       ../LICENSE
     ];

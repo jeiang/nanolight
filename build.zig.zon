@@ -9,5 +9,5 @@
             .hash = "nanoui-0.12.0-we0KMa-SJAAVqwMpS2tGhq0-ptie65zdk8NOf2IQKBxR",
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", "src", "macos", "LICENSE" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "tools", "macos", "LICENSE" },
 }
