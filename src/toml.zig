@@ -4,6 +4,7 @@
 //! Datetimes are an error. It reads what `pkgs.formats.toml` writes.
 //! Everything is allocated from the arena given to `parse`.
 const std = @import("std");
+const assert = std.debug.assert;
 
 pub const Value = union(enum) {
     string: []const u8,
@@ -74,7 +75,6 @@ const Parser = struct {
     src: []const u8,
     pos: usize = 0,
     diag: *Diag,
-    depth: usize = 0,
 
     const max_depth = 64;
 
@@ -210,7 +210,11 @@ const Parser = struct {
         const path = try p.keyPath();
         if (!p.eat('=')) return p.fail("expected = after the key");
         p.skipWs();
-        const v = try p.value();
+        try p.put(t, path, try p.value());
+    }
+
+    /// Sets the dotted key `path` of `t` to `v`.
+    fn put(p: *Parser, t: *Table, path: []const []const u8, v: Value) Error!void {
         var dest = t;
         for (path[0 .. path.len - 1]) |k| dest = try p.into(dest, k, true);
         const gop = try dest.map.getOrPut(p.a, path[path.len - 1]);
@@ -220,46 +224,81 @@ const Parser = struct {
 
     // ----- values -----
 
+    /// An array or an inline table still being read.
+    const Open = struct {
+        container: Value,
+        /// In an inline table: the key of the value being read.
+        path: []const []const u8 = &.{},
+    };
+
+    /// One value. Arrays and inline tables nest on an explicit stack, at
+    /// most `max_depth` values deep.
     fn value(p: *Parser) Error!Value {
-        p.depth += 1;
-        defer p.depth -= 1;
-        if (p.depth > max_depth) return p.fail("arrays and inline tables nest too deeply");
-        switch (p.peek() orelse return p.fail("expected a value")) {
-            '"' => return .{ .string = try p.basic(true) },
-            '\'' => return .{ .string = try p.literal(true) },
-            '[' => return p.array(),
-            '{' => return p.inlineTable(),
-            else => return p.scalar(),
+        var opens: [max_depth]Open = undefined;
+        var len: usize = 0;
+        while (true) {
+            if (len == max_depth) return p.fail("arrays and inline tables nest too deeply");
+            var v: Value = switch (p.peek() orelse return p.fail("expected a value")) {
+                '"' => .{ .string = try p.basic(true) },
+                '\'' => .{ .string = try p.literal(true) },
+                '[', '{' => |c| blk: {
+                    p.pos += 1;
+                    opens[len] = .{ .container = try p.container(c) };
+                    len += 1;
+                    const empty = (try p.advance(&opens[len - 1], true)) orelse continue;
+                    len -= 1;
+                    break :blk empty;
+                },
+                else => try p.scalar(),
+            };
+            // `v` is whole: add it to its container, closing those it ends.
+            while (len > 0) {
+                const top = &opens[len - 1];
+                switch (top.container) {
+                    .array => |arr| try arr.items.append(p.a, v),
+                    .table => |t| try p.put(t, top.path, v),
+                    else => unreachable,
+                }
+                v = (try p.advance(top, false)) orelse break;
+                len -= 1;
+            }
+            if (len == 0) return v;
         }
     }
 
-    fn array(p: *Parser) Error!Value {
-        p.pos += 1;
+    fn container(p: *Parser, open: u8) Error!Value {
+        if (open == '{') return .{ .table = try p.newTable(.inline_) };
+        assert(open == '[');
         const arr = try p.a.create(Array);
         arr.* = .{};
-        while (true) {
-            p.skipBlank();
-            if (p.peek() == ']') break;
-            try arr.items.append(p.a, try p.value());
-            p.skipBlank();
-            if (p.peek() == ',') p.pos += 1 else if (p.peek() != ']') return p.fail("expected , or ] in the array");
-        }
-        p.pos += 1;
         return .{ .array = arr };
     }
 
-    fn inlineTable(p: *Parser) Error!Value {
-        p.pos += 1;
-        const t = try p.newTable(.inline_);
-        while (true) {
+    /// Reads up to `o`'s next value, or past its end (`first`: none read
+    /// yet). Null when a value follows, else the closed container.
+    fn advance(p: *Parser, o: *Open, first: bool) Error!?Value {
+        const array = o.container == .array;
+        assert(array or o.container == .table);
+        const close: u8 = if (array) ']' else '}';
+        if (!first) {
             p.skipBlank();
-            if (p.peek() == '}') break;
-            try p.keyValue(t);
-            p.skipBlank();
-            if (p.peek() == ',') p.pos += 1 else if (p.peek() != '}') return p.fail("expected , or } in the inline table");
+            if (p.peek() == ',') {
+                p.pos += 1;
+            } else if (p.peek() != close) {
+                if (array) return p.fail("expected , or ] in the array");
+                return p.fail("expected , or } in the inline table");
+            }
         }
-        p.pos += 1;
-        return .{ .table = t };
+        p.skipBlank();
+        if (p.peek() == close) {
+            p.pos += 1;
+            return o.container;
+        }
+        if (array) return null;
+        o.path = try p.keyPath();
+        if (!p.eat('=')) return p.fail("expected = after the key");
+        p.skipWs();
+        return null;
     }
 
     fn scalar(p: *Parser) Error!Value {
@@ -736,4 +775,53 @@ test "structure errors: closed and clashing tables" {
     // A table and an array of tables of one name.
     try expectFail("[[a]]\n[a]\n", 2);
     try expectFail("[a]\n[[a]]\n", 2);
+}
+
+test "nesting at the depth limit reads, past it fails" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const depth = Parser.max_depth;
+    var buf: [4 + 2 * (depth + 1) + 1]u8 = undefined;
+    @memcpy(buf[0..4], "a = ");
+    @memset(buf[4..][0..depth], '[');
+    @memset(buf[4 + depth ..][0..depth], ']');
+    var r = try parseOk(arena.allocator(), buf[0 .. 4 + 2 * depth]);
+    var v = r.get("a").?;
+    for (1..depth) |_| v = v.items()[0];
+    try testing.expectEqual(@as(usize, 0), v.items().len);
+    // One more level, or a value in the deepest array, is too deep.
+    @memset(buf[4..][0 .. depth + 1], '[');
+    @memset(buf[4 + depth + 1 ..][0 .. depth + 1], ']');
+    try expectFail(buf[0 .. 4 + 2 * (depth + 1)], 1);
+    @memset(buf[4..][0..depth], '[');
+    buf[4 + depth] = '1';
+    try expectFail(buf[0 .. 4 + 2 * depth + 1], 1);
+
+    // Inline tables count the same: `{ b = ` per level.
+    var tbuf: [4 + 6 * depth + 2 * depth]u8 = undefined;
+    var n: usize = 0;
+    @memcpy(tbuf[0..4], "a = ");
+    n = 4;
+    for (0..depth - 1) |_| {
+        @memcpy(tbuf[n..][0..6], "{ b = ");
+        n += 6;
+    }
+    tbuf[n] = '1';
+    n += 1;
+    @memset(tbuf[n..][0 .. depth - 1], '}');
+    n += depth - 1;
+    r = try parseOk(arena.allocator(), tbuf[0..n]);
+    v = r.get("a").?;
+    for (1..depth) |_| v = v.table.get("b").?;
+    try testing.expectEqual(@as(i64, 1), v.int);
+}
+
+test "a long run of brackets fails cleanly" {
+    const long = 100_000;
+    var buf: [4 + long]u8 = undefined;
+    @memcpy(buf[0..4], "a = ");
+    @memset(buf[4..], '[');
+    try expectFail(&buf, 1);
+    @memset(buf[4..], '{');
+    try expectFail(&buf, 1);
 }
