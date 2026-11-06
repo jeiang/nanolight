@@ -47,14 +47,23 @@ pub const ScriptCommands = struct {
 };
 
 /// What a file key seeds in the app's own settings (prefs.zig), in this
-/// order, and whether a change to it is a local change that syncs. `key`
-/// is its path in `Config` ("table.key") and names its applied record.
-const Seed = struct { key: []const u8, rule: Rule, syncs: bool = false };
+/// order, and the synced field it sets, if any. `key` is its path in `Config`
+/// ("table.key") and names its applied record.
+const Seed = struct {
+    key: []const u8,
+    rule: Rule,
+    setting: ?settings.Field = null,
+
+    /// Whether a change to it is a local change that syncs: it sets one of the `choices`.
+    fn syncs(s: Seed) bool {
+        return if (s.setting) |f| settings.isChoice(f) else false;
+    }
+};
 const Rule = union(enum) { hotkey, quicklinks, flag: prefs.Key };
 const seeds = [_]Seed{
-    .{ .key = "hotkey", .rule = .hotkey, .syncs = true },
-    .{ .key = "quicklinks", .rule = .quicklinks, .syncs = true },
-    .{ .key = "suggestions", .rule = .{ .flag = .suggest }, .syncs = true },
+    .{ .key = "hotkey", .rule = .hotkey, .setting = .hotkey },
+    .{ .key = "quicklinks", .rule = .quicklinks, .setting = .quicklinks },
+    .{ .key = "suggestions", .rule = .{ .flag = .suggest }, .setting = .suggest },
     .{ .key = "open_searches_in_browser", .rule = .{ .flag = .searches_out } },
     .{ .key = "show_in_menu_bar", .rule = .{ .flag = .menu_bar } },
     .{ .key = "clipboard.enabled", .rule = .{ .flag = .clipboard } },
@@ -394,7 +403,7 @@ fn seed(store: nanoui.kv.Store, gpa: std.mem.Allocator, c: Config, now: i64) voi
     _ = prefs.setText(store, .config_seen, "1");
     var synced = false;
     inline for (seeds) |s| {
-        if (seedOne(store, gpa, s, field(c, s.key)) and s.syncs) synced = true;
+        if (seedOne(store, gpa, s, field(c, s.key)) and comptime s.syncs()) synced = true;
     }
     // A failure is logged; the change still syncs at the next one.
     if (synced) _ = prefs.setInt(store, .sync_at, now);

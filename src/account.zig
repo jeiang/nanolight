@@ -15,7 +15,6 @@ const Settings = settings.Settings;
 
 const pull_every_s = 5 * 60;
 const push_after_ms = 2000;
-pub const off_text = "Sync: off (set [sync] in config.toml)";
 
 comptime {
     // Whatever launches a request sheds to fit, the rest fits.
@@ -117,17 +116,18 @@ pub const Account = struct {
         a.hooks.changed(a.hooks.ctx);
     }
 
-    /// "Sync: host, last synced 3 min ago", "Sync: error ...", or `off_text`.
-    pub fn status(a: *const Account, buf: []u8) []const u8 {
+    /// "Sync: host, last synced 3 min ago", "Sync: error ...", or null: off, or
+    /// too long for `buf`.
+    pub fn status(a: *const Account, buf: []u8) ?[]const u8 {
         const host = hostOf(a.cfg.url);
         return switch (a.state) {
-            .off => off_text,
-            .pending => std.fmt.bufPrint(buf, "Sync: {s}, syncing…", .{host}) catch off_text,
+            .off => null,
+            .pending => std.fmt.bufPrint(buf, "Sync: {s}, syncing…", .{host}) catch null,
             .synced => |at| blk: {
                 var ago_buf: [32]u8 = undefined;
                 const when = ago(&ago_buf, now() - at);
                 const line = std.fmt.bufPrint(buf, "Sync: {s}, last synced {s}", .{ host, when });
-                break :blk line catch off_text;
+                break :blk line catch null;
             },
             .failed => |*r| blk: {
                 const line = std.fmt.bufPrint(buf, "Sync: error {s}", .{r.text()});
@@ -309,7 +309,7 @@ test "the status line says when it last synced" {
         .cfg = .{},
     };
     var line: [160]u8 = undefined;
-    try std.testing.expectEqualStrings(off_text, off.status(&line));
+    try std.testing.expect(off.status(&line) == null);
     var bad = off;
     bad.cfg = .{ .url = "http://h:1" };
     var reason: Reason = .{};
@@ -317,10 +317,10 @@ test "the status line says when it last synced" {
     reason.len = (std.fmt.bufPrint(&reason.buf, why, .{}) catch unreachable).len;
     bad.state = .{ .failed = reason };
     const said = "Sync: error the server rejected the token";
-    try std.testing.expectEqualStrings(said, bad.status(&line));
+    try std.testing.expectEqualStrings(said, bad.status(&line).?);
     var good = bad;
     good.state = .{ .synced = now() - 400 };
-    try std.testing.expectEqualStrings("Sync: h:1, last synced 6 min ago", good.status(&line));
+    try std.testing.expectEqualStrings("Sync: h:1, last synced 6 min ago", good.status(&line).?);
 }
 
 /// An account whose requests are only counted: tests answer them.
@@ -379,7 +379,8 @@ test "a failed sync says why and is not retried, even if asked again meanwhile" 
     try std.testing.expectEqual(@as(u32, 1), t.sends);
     try std.testing.expect(t.acc.inflight == null and !t.acc.dirty);
     var line: [160]u8 = undefined;
-    try std.testing.expectEqualStrings("Sync: error the server answered 500", t.acc.status(&line));
+    const said = "Sync: error the server answered 500";
+    try std.testing.expectEqualStrings(said, t.acc.status(&line).?);
 }
 
 test "a change made while a sync is out is sent once that one succeeds" {

@@ -123,7 +123,8 @@ pub const Settings = struct {
     /// Whether this system has clipboard history (its section shows).
     clip_here: bool = false,
     cleared: enum { idle, done, failed } = .idle,
-    sync: []const u8 = @import("account.zig").off_text,
+    /// The host's sync status, pulled each frame.
+    sync: []const u8 = "",
     version: []const u8 = @import("build_options").version,
     ready: ?[]const u8 = null,
 

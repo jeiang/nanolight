@@ -12,6 +12,8 @@ const prefs = @import("prefs.zig");
 const suggest_live = @import("suggest_live.zig");
 const App = @import("app.zig").App;
 
+pub const off_text = "Sync: off (set [sync] in config.toml)";
+
 /// Pinned once started: the account's hooks point here.
 pub const Sync = struct {
     core: *App,
@@ -43,9 +45,10 @@ pub const Sync = struct {
         a.load();
     }
 
-    /// "Sync: host, last synced 3 min ago", "Sync: error ...", or `account.off_text`.
+    /// "Sync: host, last synced 3 min ago", "Sync: error ...", or `off_text`.
     pub fn status(sy: *Sync) []const u8 {
-        return if (sy.acct) |*a| a.status(&sy.label) else account.off_text;
+        const a = if (sy.acct) |*x| x else return off_text;
+        return a.status(&sy.label) orelse off_text;
     }
 
     /// The menu bar's sync row: the status, as text. Nothing to click.
@@ -109,48 +112,86 @@ fn copyQuicklinks(
 }
 
 fn snapshot(ctx: *anyopaque, arena: std.mem.Allocator) Settings {
-    const sy = from(ctx);
-    const core = sy.core;
-    const ix = core.s.index;
-    var list: std.ArrayList(settings.Launch) = .empty;
-    for (ix.apps.items) |a| if (a.launches > 0) {
-        const one: settings.Launch = .{
-            .name = a.name,
-            .path = a.path,
-            .count = a.launches,
-        };
-        list.append(arena, one) catch break;
-    };
-    const at = prefs.int(core.kv, arena, .sync_at);
-    var out: Settings = .{ .hotkey = "cmd_space", .suggest = core.s.suggest_on, .at = at };
-    out.launches = list.items;
-    out.quicklinks = sy.quicklinks;
-    const name = arena.create([keys.name_max]u8) catch return out;
-    out.hotkey = core.choice.name(name);
-    return out;
+    var here: Here = .{ .sy = from(ctx) };
+    return settings.snapshot(&here, arena);
 }
+
+/// This machine's synced fields, one method each (`settings.snapshot`).
+const Here = struct {
+    sy: *Sync,
+
+    pub fn hotkey(h: *Here, arena: std.mem.Allocator) []const u8 {
+        const name = arena.create([keys.name_max]u8) catch return "cmd_space";
+        return h.sy.core.choice.name(name);
+    }
+
+    pub fn suggest(h: *Here, _: std.mem.Allocator) bool {
+        return h.sy.core.s.suggest_on;
+    }
+
+    pub fn at(h: *Here, arena: std.mem.Allocator) i64 {
+        return prefs.int(h.sy.core.kv, arena, .sync_at);
+    }
+
+    pub fn launches(h: *Here, arena: std.mem.Allocator) []const settings.Launch {
+        var list: std.ArrayList(settings.Launch) = .empty;
+        for (h.sy.core.s.index.apps.items) |a| if (a.launches > 0) {
+            const one: settings.Launch = .{ .name = a.name, .path = a.path, .count = a.launches };
+            list.append(arena, one) catch break;
+        };
+        return list.items;
+    }
+
+    pub fn quicklinks(h: *Here, _: std.mem.Allocator) []const settings.Quicklink {
+        return h.sy.quicklinks;
+    }
+};
 
 /// The account's settings, merged: the key, the suggestions, the quicklinks, the counts.
 fn applySynced(ctx: *anyopaque, st: Settings) void {
     const sy = from(ctx);
     const core = sy.core;
-    // A failure is logged; the next sync sends this machine's older time.
-    _ = prefs.setInt(core.kv, .sync_at, st.at);
-    if (keys.Choice.parse(st.hotkey)) |c| if (!c.eql(core.choice)) {
-        _ = prefs.setHotkey(core.kv, c);
-        core.useKey(c);
-    };
-    suggest_live.set(core, st.suggest, .synced);
-    if (sy.setQuicklinks(st.quicklinks)) prefs.setQuicklinks(core.kv, core.app.gpa, sy.quicklinks);
-    const ix = core.s.index;
-    for (st.launches) |la| if (ix.resolve(la.path, la.name)) |i| {
-        ix.apps.items[i].launches = @max(ix.apps.items[i].launches, la.count);
-    };
-    ix.save(core.kv);
+    var take: Take = .{ .sy = sy };
+    settings.apply(st, &take);
+    core.s.index.save(core.kv);
     core.s.built = 1;
     core.menuChanged();
     core.redraw();
 }
+
+/// The account's synced fields taken here, one method each (`settings.apply`).
+const Take = struct {
+    sy: *Sync,
+
+    pub fn hotkey(t: *Take, name: []const u8) void {
+        const core = t.sy.core;
+        const c = keys.Choice.parse(name) orelse return;
+        if (c.eql(core.choice)) return;
+        _ = prefs.setHotkey(core.kv, c);
+        core.useKey(c);
+    }
+
+    pub fn suggest(t: *Take, on: bool) void {
+        suggest_live.set(t.sy.core, on, .synced);
+    }
+
+    pub fn at(t: *Take, when: i64) void {
+        // A failure is logged; the next sync sends this machine's older time.
+        _ = prefs.setInt(t.sy.core.kv, .sync_at, when);
+    }
+
+    pub fn launches(t: *Take, list: []const settings.Launch) void {
+        const ix = t.sy.core.s.index;
+        for (list) |la| if (ix.resolve(la.path, la.name)) |i| {
+            ix.apps.items[i].launches = @max(ix.apps.items[i].launches, la.count);
+        };
+    }
+
+    pub fn quicklinks(t: *Take, list: []const settings.Quicklink) void {
+        const sy = t.sy;
+        if (sy.setQuicklinks(list)) prefs.setQuicklinks(sy.core.kv, sy.core.app.gpa, sy.quicklinks);
+    }
+};
 
 /// The sync status changed: the menu shows it.
 fn changed(ctx: *anyopaque) void {

@@ -17,6 +17,7 @@ const single = @import("single.zig");
 const account = @import("account.zig");
 const apps = @import("apps.zig");
 const prefs = @import("prefs.zig");
+const settings = @import("settings.zig");
 
 /// A menu's item waits for the menu: it closes first, then the panel
 /// takes the keys.
@@ -233,8 +234,9 @@ pub const App = struct {
         Hook.run(a.hooks.menu);
     }
 
-    /// This machine chose its key or turned suggestions on or off, just now.
-    pub fn touched(a: *App) void {
+    /// This machine changed `choice` (one of `settings.choices`), just now.
+    pub fn touched(a: *App, comptime choice: settings.Field) void {
+        comptime std.debug.assert(settings.isChoice(choice));
         // A failure is logged; this change then syncs as an older one.
         _ = prefs.setInt(a.kv, .sync_at, account.now());
         if (a.acct) |x| x.changed();
@@ -275,7 +277,7 @@ pub const App = struct {
         const a = from(ctx);
         _ = prefs.setHotkey(a.kv, choice);
         a.useKey(choice);
-        a.touched();
+        a.touched(.hotkey);
     }
 
     fn fix(ctx: *anyopaque, clash: shortcut_clash.Clash) void {
