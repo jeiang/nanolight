@@ -2,6 +2,8 @@
 const std = @import("std");
 const ui = @import("nanoui").ui;
 const files = @import("files.zig");
+const paths = @import("paths.zig");
+const spotlight = @import("spotlight.zig");
 const Nanolight = @import("view.zig").Nanolight;
 const Palette = @import("palette.zig").Palette;
 const Row = @import("results.zig").Row;
@@ -34,7 +36,7 @@ pub fn filesAnswered(s: *Nanolight, typed: []const u8, found: *files.List) void 
 pub fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
     const e = &s.found.entries[r.file];
     var buf: [files.max_path]u8 = undefined;
-    const parent = files.parent(&buf, e.path());
+    const parent = paths.parent(&buf, e.path());
     chrome.nameDetail(c, p, e.name(), s.highlight(i, r, p), parent, .ellipsis);
     ui.text(c, if (e.folder) "Folder" else "File", .{ .size = 11.5, .color = p.sub });
 }
@@ -49,7 +51,7 @@ pub fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
 pub fn rebuild(s: *Nanolight) void {
     const q = std.mem.trim(u8, s.query.text(), " \t\r\n");
     if (platform.files and s.files_on and
-        (files.isPath(q) or (files.eligible(q) and @import("calc.zig").eval(q) == null)))
+        (paths.isPath(q) or (spotlight.eligible(q) and @import("calc.zig").eval(q) == null)))
     {
         s.found.filter(q);
         if (s.host) |host| if (host.files) |ask| ask(host.ctx, q);
@@ -58,7 +60,7 @@ pub fn rebuild(s: *Nanolight) void {
 
 pub fn takeOnTab(s: *Nanolight, c: *ui.Context) bool {
     if (s.sel >= s.res.n or s.res.rows[s.sel].kind != .file or
-        !files.isPath(s.query.text())) return false;
+        !paths.isPath(s.query.text())) return false;
     if (c.shortcut(.{ .key = ui.Shortcut.tab })) takeFile(s, s.res.rows[s.sel].file);
     return true;
 }

@@ -113,15 +113,6 @@ pub const Probe = struct {
     }
 };
 
-/// The Mac's starters, which these tests' apps are named after.
-pub const mac_starters = [_][]const u8{
-    "Safari",
-    "Notes",
-    "Calendar",
-    "System Settings",
-    "Finder",
-};
-
 /// The selected row is the first quicklink: the search for what was typed.
 pub fn onFirstQuicklink(s: *const view.Nanolight) bool {
     const r = s.res.rows[s.sel];

@@ -242,13 +242,9 @@ pub const Live = struct {
         l.setSuggest(st.suggest, .synced);
         if (l.setQuicklinks(st.quicklinks)) prefs.setQuicklinks(l.kv, l.app.gpa, l.ql_custom);
         const ix = l.s.index;
-        for (st.launches) |la| {
-            const i = if (la.path.len > 0)
-                ix.findPath(la.path) orelse ix.find(la.name)
-            else
-                ix.find(la.name);
-            if (i) |idx| ix.apps.items[idx].launches = @max(ix.apps.items[idx].launches, la.count);
-        }
+        for (st.launches) |la| if (ix.resolve(la.path, la.name)) |i| {
+            ix.apps.items[i].launches = @max(ix.apps.items[i].launches, la.count);
+        };
         ix.save(l.kv);
         l.s.built = 1;
         l.menu();
@@ -728,7 +724,8 @@ pub fn main(init: std.process.Init) !void {
     defer app.destroy();
     var index: Index = .init(init.gpa);
     defer index.deinit();
-    apps.scanSystem(&index, init.io, init.environ_map);
+    apps.scan(&index, init.io, init.environ_map, &.{});
+    index.finish();
     const kv = nanoui.kv.standard();
     index.load(kv);
     // A headless run is no one's: neither their config nor their settings.

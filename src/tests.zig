@@ -10,7 +10,6 @@ const Rig = support.Rig;
 const Probe = support.Probe;
 const Web = support.Web;
 const Prefs = support.Prefs;
-const mac_starters = support.mac_starters;
 const onFirstQuicklink = support.onFirstQuicklink;
 const press = support.press;
 const retype = support.retype;
@@ -29,6 +28,10 @@ test {
     _ = @import("prefs.zig");
     _ = @import("palette.zig");
     _ = @import("apps.zig");
+    _ = @import("app_scan.zig");
+    _ = @import("launch_counts.zig");
+    _ = @import("paths.zig");
+    _ = @import("spotlight.zig");
     _ = @import("keys.zig");
     _ = @import("shortcut.zig");
     _ = @import("shortcut_clash.zig");
@@ -50,6 +53,7 @@ test {
     _ = @import("platform.zig");
     switch (@import("builtin").os.tag) {
         .macos => {
+            _ = @import("apps_mac.zig");
             _ = @import("single_mac.zig");
             _ = @import("clickthrough.zig");
             _ = @import("hotkey_mac.zig");
@@ -79,7 +83,6 @@ test "the panel finds, moves, answers and hands off" {
     const ix = &rig.ix;
     const s = &rig.s;
     const t = &rig.t;
-    ix.starters = &mac_starters;
     try rig.apps(&.{ "Safari", "System Settings", "Notes", "Calculator", "Finder" });
     try rig.mount(.{ .host = probe.host(), .height = 480 });
     // No query: suggestions.
@@ -252,7 +255,6 @@ test "Google's completions land below, and a search shows in the panel" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{"Safari"});
     try rig.mount(.{ .host = web.host() });
     // An address is never asked about; words are.
@@ -385,7 +387,6 @@ test "the welcome: a key, pressed for real, then a first search" {
     rig.init(gpa);
     defer rig.deinit();
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{"Safari"});
     rig.s.onboard = &o;
     try rig.mount(.{ .screen = .none, .height = 480 });
@@ -439,7 +440,6 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{"Safari"});
     prefs.nl = s;
     try rig.mount(.{ .host = prefs.host() });
@@ -519,7 +519,6 @@ test "the panel never outgrows its window, which is never resized" {
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{
         "Safari",  "Mail",  "Maps",   "Music",    "Notes",
         "Numbers", "Pages", "Photos", "Calendar", "Calculator",
@@ -556,7 +555,6 @@ test "on a PC the panel's keys are Ctrl's, and Settings says so" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{ "Safari", "System Settings" });
     try rig.mount(.{ .host = prefs.host() });
     press(t, &.{.{ .insert = "s" }});
@@ -579,7 +577,6 @@ test "a welcome whose key is set elsewhere skips the key step, in two steps" {
     rig.init(gpa);
     defer rig.deinit();
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{"Safari"});
     rig.s.onboard = &o;
     try rig.mount(.{ .screen = .none, .height = 480 });
@@ -603,7 +600,6 @@ test "Ctrl+J and Ctrl+K move down and up, and the field never sees them" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{ "Safari", "System Settings", "Notes" });
     try rig.mount(.{ .host = probe.host(), .height = 480 });
     press(t, &.{.{ .insert = "s" }});
