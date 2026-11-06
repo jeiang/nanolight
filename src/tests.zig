@@ -402,13 +402,21 @@ test "the welcome: a key, pressed for real, then a first search" {
     try std.testing.expect(steps.done and !o.active);
     try std.testing.expect(t.hasText("3,072"));
 
-    // Esc skips from the first step, keeping the key shown there.
+    // Esc skips from the first step, keeping the key shown there: applied
+    // only when it is not the one in use already.
     steps = .{};
     o.start(.ctrl_space);
     t.settle(1);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(steps.done and !o.active);
-    try std.testing.expectEqual(shortcut.Choice.ctrl_space, steps.applied.?);
+    try std.testing.expect(steps.applied == null);
+    steps = .{};
+    o.start(.ctrl_space);
+    t.settle(1);
+    t.key(.right);
+    _ = t.shortcut(.{ .key = ui.Shortcut.escape });
+    try std.testing.expect(steps.done and !o.active);
+    try std.testing.expectEqual(shortcut.Choice.opt_cmd_space, steps.applied.?);
 }
 
 const SettingsHost = @import("settings_host.zig").SettingsHost;

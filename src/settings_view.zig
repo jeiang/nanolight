@@ -100,6 +100,10 @@ const base_height: f32 = if (mac) 620 else 512;
 const clip_height: f32 = if (mac) 110 else 116;
 /// The tallest it gets (with the clipboard's section).
 pub const height: f32 = base_height + clip_height;
+comptime {
+    // The window is never resized: Settings fits in it.
+    @import("std").debug.assert(height <= panel.max_height);
+}
 
 pub const Settings = struct {
     open: bool = false,

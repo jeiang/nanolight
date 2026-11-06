@@ -603,7 +603,8 @@ pub const Live = struct {
                 const live: *Live = @ptrCast(@alignCast(ctx.?));
                 const w = live.window orelse return;
                 if (!(w.isVisible() and w.isFocused())) toggle(live);
-                live.o.active = false;
+                // Over the welcome: skipped, kept as done, its key not taken.
+                live.o.end(.drop_choice);
                 live.s.openSettings();
                 w.redraw();
             }
