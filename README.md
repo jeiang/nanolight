@@ -250,8 +250,9 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 | `src/server.zig`, `src/settings.zig` | `nanolight-server`: the protocol as a pure function, tokens, atomic records; and the record both sides merge |
 | `src/raycast_model.zig`, `src/raycast_view.zig` | The panel's command screen (a script's output, arguments) |
 | `src/script_commands.zig`, `src/script_run.zig` | Raycast script commands, run in Zig |
-| `src/clipboard.zig` | Clipboard history: the model, the store on disk, retention, search, and the per-OS `Watcher` seam |
-| `src/clipboard_mac.zig`, `src/clipboard_win.zig`, `src/clipboard_linux.zig` | Each OS's watcher and paste: the Mac's NSPasteboard poll and ⌘V; Windows' clipboard sequence poll, DIB-to-PNG and Ctrl+V; Linux's X11 (XFixes, XTest) and Wayland (data-control, virtual keyboard) sides, with the shared read plan and served formats (`clipboard_x11.zig`, `clipboard_wl.zig`); `zig build clip-probe` runs them without the panel |
+| `src/clipboard.zig` | Clipboard history: the model, the store on disk, retention, search, and the `Watcher` contract every OS keeps |
+| `src/clipboard_mac.zig`, `src/clipboard_win.zig`, `src/clipboard_poll.zig` | The Mac's NSPasteboard and Windows' clipboard sequence (DIB-to-PNG), each read by the one change-count poll and paste (⌘V, Ctrl+V) in `clipboard_poll.zig` |
+| `src/clipboard_linux.zig`, `src/clipboard_x11.zig`, `src/clipboard_wl.zig`, `src/clipboard_offer.zig` | Linux's choice of transport, its X11 (XFixes, XTest) and Wayland (data-control, virtual keyboard) sides, and what both share: the read plan, the served formats, timeouts; `zig build clip-probe` runs them without the panel |
 | `src/clipboard_view.zig`, `src/clipboard_live.zig` | The Clipboard History screen, and the app's side of it (the store, the watcher, Return and ⌘↩) |
 | `src/commands.zig` | System commands: each OS's table, the `PATH` check, ranking, the runner |
 | `src/toml.zig`, `src/config.zig` | `config.toml`: the TOML subset parser, the typed schema and loader, and how the file seeds settings |

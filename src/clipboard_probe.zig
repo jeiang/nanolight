@@ -58,17 +58,18 @@ pub fn main(init: std.process.Init) !void {
     var w: clipboard.Watcher = .{};
     var token: u8 = 0;
     w.start(.{ .ctx = &token, .observe = observe, .excluded = excluded }) catch |e| {
-        return say("start failed: {t}: {s}", .{ e, w.why orelse "" });
+        return say("start failed: {t}: {s}", .{ e, w.status() orelse "" });
     };
-    say("started: {s}", .{@tagName(w.backend)});
+    say("started", .{});
     if (std.mem.eql(u8, args[1], "paste-text")) {
         say(
             "paste -> {t}",
             .{w.paste(.{ .kind = .text, .text = args[2] }, .{ .ctx = &token, .func = hide })},
         );
     } else if (std.mem.eql(u8, args[1], "paste-png")) {
+        const limit: std.Io.Limit = .limited(clipboard.Kind.image.cap());
         const png = try std.Io.Dir.cwd()
-            .readFileAlloc(init.io, args[2], init.arena.allocator(), .limited(clipboard.max_image));
+            .readFileAlloc(init.io, args[2], init.arena.allocator(), limit);
         say(
             "paste -> {t}",
             .{w.paste(.{ .kind = .image, .png = png }, .{ .ctx = &token, .func = hide })},

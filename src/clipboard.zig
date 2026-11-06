@@ -1,8 +1,9 @@
 //! Clipboard history: what was copied (text, images, files), kept on disk
-//! for a while, searchable. This file is the model and the store, with no
-//! window and no OS in it; each OS's watcher and paste are its own file
-//! (clipboard_mac.zig, clipboard_win.zig, clipboard_linux.zig), picked at
-//! compile time as `Watcher`.
+//! for a while, searchable. This file is the model, the store and the
+//! watcher contract, with no window and no OS in it; each OS's watcher and
+//! paste are their own file (clipboard_mac.zig, clipboard_win.zig,
+//! clipboard_linux.zig), picked at compile time as `Watcher`. How an entry
+//! reads on screen is clipboard_view.zig's.
 //!
 //! On disk, in one directory: `index.json` (the entries, newest first) and
 //! `blobs/<hash>.png` (an image) or `blobs/<hash>.txt` (a text too long for
@@ -15,31 +16,67 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const search = @import("search.zig");
 
-pub const Kind = enum { text, image, file };
+pub const Kind = enum {
+    text,
+    image,
+    file,
+
+    /// What a kind's content is and where it is kept.
+    pub const Info = struct {
+        /// The most of it kept; a watcher reads (and converts) nothing larger.
+        cap: usize,
+        /// Its content is the PNG (`Item.png`), not text.
+        png: bool,
+        /// Its blob's extension, and when the content goes there.
+        ext: *const [blob_ext_len]u8,
+        blob: enum { always, when_long, never },
+    };
+
+    pub fn info(k: Kind) Info {
+        return switch (k) {
+            .text => .{ .cap = 10 << 20, .png = false, .ext = "txt", .blob = .when_long },
+            .image => .{ .cap = 20 << 20, .png = true, .ext = "png", .blob = .always },
+            // A copied list of files, as paths one a line.
+            .file => .{ .cap = 256 << 10, .png = false, .ext = "txt", .blob = .never },
+        };
+    }
+
+    pub fn cap(k: Kind) usize {
+        return k.info().cap;
+    }
+};
 
 /// User-only (0600 / 0700); Windows has no mode and keeps its profile's ACL.
 const Perm = Io.File.Permissions;
 pub const private_file: Perm = if (@hasDecl(Perm, "fromMode")) .fromMode(0o600) else .default_file;
 pub const private_dir: Perm = if (@hasDecl(Perm, "fromMode")) .fromMode(0o700) else .default_dir;
 
-/// Silent under test: the build fails a test run that writes to stderr.
-fn warn(comptime fmt: []const u8, args: anytype) void {
-    if (!builtin.is_test) std.log.warn(fmt, args);
+/// The clipboard modules' log: silent under test, where the build fails a run that writes
+/// to stderr.
+pub fn log(comptime level: std.log.Level, comptime fmt: []const u8, args: anytype) void {
+    if (builtin.is_test) return;
+    switch (level) {
+        .err => std.log.err(fmt, args),
+        .warn => std.log.warn(fmt, args),
+        .info => std.log.info(fmt, args),
+        .debug => std.log.debug(fmt, args),
+    }
 }
 
-pub const max_text: usize = 10 << 20;
-pub const max_image: usize = 20 << 20;
-/// A copied list of files, as paths one a line.
-pub const max_files: usize = 256 << 10;
 /// The most the history keeps of all its entries' content together (their `size`),
 /// whatever `max_entries` says (0 there limits only the count): past it, the oldest go first.
 pub const max_store_bytes: u64 = 256 << 20;
 comptime {
     // The newest entry always fits on its own.
-    std.debug.assert(@max(max_text, max_image, max_files) <= max_store_bytes);
+    for (std.enums.values(Kind)) |k| std.debug.assert(k.cap() <= max_store_bytes);
 }
-/// What the index keeps of a text longer than `Store.inline_max`.
+/// A text longer than this goes to a blob (all of it stays in memory without a dir).
+const inline_max = 4096;
+/// What the index keeps of a text that went to a blob.
 pub const preview_max = 512;
+comptime {
+    std.debug.assert(preview_max < inline_max);
+}
 /// How much of a text is matched against a search.
 const match_max = 160;
 /// The app a thing was copied from matches this much under the thing.
@@ -68,6 +105,7 @@ pub const Entry = struct {
 /// What a watcher saw on the clipboard. Slices are the watcher's own: the
 /// store copies what it keeps.
 pub const Item = struct {
+    /// Any kind when `concealed`: nothing of it was read.
     kind: Kind,
     /// A text, or a file list's paths one a line.
     text: []const u8 = "",
@@ -78,8 +116,6 @@ pub const Item = struct {
     /// Marked concealed or transient by the app that copied it.
     concealed: bool = false,
 };
-
-pub const Result = enum { added, bumped, disabled, excluded, concealed, empty, too_big, failed };
 
 /// config.toml's `[clipboard]` table.
 pub const Config = struct {
@@ -99,28 +135,64 @@ pub fn hash(kind: Kind, bytes: []const u8) u64 {
     return std.hash.Wyhash.hash(@backingInt(kind) + 1, bytes);
 }
 
-/// "blobs/<16 hex digits>.<ext>", the extensions being three letters.
-const blob_name_len = 48;
+// ----- the format on disk -----
+
+/// The version `index.json` is written in, and the one `load` reads.
+const format_version = 1;
+/// The largest `index.json` read; past it, the file is not this app's.
+const max_index_bytes = 256 << 20;
+const blob_dir = "blobs";
+/// "blobs/<16 hex digits>.<ext>".
 const blob_ext_len = 3;
-comptime {
-    std.debug.assert("blobs/".len + 16 + ".".len + blob_ext_len <= blob_name_len);
+const blob_name_len = blob_dir.len + "/".len + 16 + ".".len + blob_ext_len;
+
+/// The file that holds `e`'s content, in `buf`; null when the index holds it all.
+fn blobName(e: Entry, buf: *[blob_name_len]u8) ?[]const u8 {
+    const i = e.kind.info();
+    switch (i.blob) {
+        .always => {},
+        .when_long => if (e.text.len >= e.size) return null,
+        .never => return null,
+    }
+    return std.fmt.bufPrint(buf, blob_dir ++ "/{x:0>16}.{s}", .{ e.hash, i.ext }) catch unreachable;
 }
 
-fn blobName(buf: *[blob_name_len]u8, h: u64, ext: []const u8) []const u8 {
-    std.debug.assert(ext.len == blob_ext_len);
-    return std.fmt.bufPrint(buf, "blobs/{x:0>16}.{s}", .{ h, ext }) catch unreachable;
-}
+const DiskEntry = struct {
+    hash: []const u8,
+    kind: Kind,
+    text: []const u8 = "",
+    size: u64 = 0,
+    w: u32 = 0,
+    h: u32 = 0,
+    source: []const u8 = "",
+    at: i64 = 0,
+    count: u32 = 1,
+};
+
+const Disk = struct {
+    v: u32 = format_version,
+    entries: []const DiskEntry = &.{},
+};
+
+/// `index.json` as `load` reads it: the entries one by one, so a bad one is skipped alone.
+const DiskIn = struct {
+    v: u32 = format_version,
+    entries: []const std.json.Value = &.{},
+};
 
 /// Deletes `name` in `dir`; true when it is gone, a missing file included. A failure is
 /// logged: on these paths it means content may outlive a delete the person asked for.
 fn deleteIfThere(io: Io, dir: Io.Dir, name: []const u8) bool {
     dir.deleteFile(io, name) catch |e| {
         if (e == error.FileNotFound) return true;
-        warn("nanolight: clipboard: could not delete {s}: {t}", .{ name, e });
+        log(.warn, "nanolight: clipboard: could not delete {s}: {t}", .{ name, e });
         return false;
     };
     return true;
 }
+
+/// An entry's content as the OS writes it; `owned` is the caller's to free.
+pub const Loaded = struct { content: Content, owned: ?[]u8 = null };
 
 pub const Store = struct {
     gpa: std.mem.Allocator,
@@ -132,13 +204,8 @@ pub const Store = struct {
     on: bool = true,
     /// False when the config file failed to load: nothing records, whatever `on` says.
     config_ok: bool = true,
-    /// Newest first.
+    /// Newest first. Read it through `len`, `at` and `find`.
     entries: std.ArrayList(Entry) = .empty,
-    /// A text longer than this goes to a blob (all of it stays here without a dir).
-    inline_max: usize = 4096,
-    /// The total content kept, oldest dropped first past it: `max_store_bytes` (a test
-    /// makes it small).
-    budget_bytes: u64 = max_store_bytes,
     /// Counts every change, so a screen knows its list is stale.
     gen: u32 = 0,
 
@@ -152,7 +219,7 @@ pub const Store = struct {
     pub fn turn(s: *Store, on: bool, kept: bool) void {
         if (kept or !on) s.on = on;
         if (!kept and !on)
-            warn("nanolight: clipboard history is off until Nanolight quits; " ++
+            log(.warn, "nanolight: clipboard history is off until Nanolight quits; " ++
                 "that could not be saved", .{});
     }
 
@@ -166,6 +233,22 @@ pub const Store = struct {
         s.gpa.free(e.source);
     }
 
+    // ----- the list -----
+
+    pub fn len(s: *const Store) usize {
+        return s.entries.items.len;
+    }
+
+    /// The `i`th entry, newest first; valid until the next change.
+    pub fn at(s: *const Store, i: usize) Entry {
+        return s.entries.items[i];
+    }
+
+    pub fn get(s: *const Store, h: u64) ?*const Entry {
+        for (s.entries.items) |*e| if (e.hash == h) return e;
+        return null;
+    }
+
     // ----- what is kept -----
 
     /// Whether `source` is one of the excluded apps.
@@ -175,26 +258,22 @@ pub const Store = struct {
         return false;
     }
 
-    /// Keeps `item` copied at `now`, or says why not. A copy of what is
-    /// already kept makes it newest and counts it.
-    pub fn add(s: *Store, item: Item, now: i64) Result {
-        if (!s.on or !s.config_ok) return .disabled;
-        if (item.concealed) return .concealed;
-        if (s.excluded(item.source)) return .excluded;
-        const content = if (item.kind == .image) item.png else item.text;
-        if (content.len == 0 or (item.kind != .image and
-            std.mem.trim(u8, content, " \t\r\n").len == 0)) return .empty;
-        const cap = switch (item.kind) {
-            .text => max_text,
-            .image => max_image,
-            .file => max_files,
-        };
-        if (content.len > cap) {
-            std.log.info(
-                "nanolight: clipboard: a {s} of {d} bytes is over the {d} byte limit; not kept",
-                .{ @tagName(item.kind), content.len, cap },
+    /// Keeps `item` copied at `now`; whether the history changed. A copy of
+    /// what is already kept makes it newest and counts it.
+    pub fn add(s: *Store, item: Item, now: i64) bool {
+        if (!s.on or !s.config_ok) return false;
+        if (item.concealed) return false;
+        if (s.excluded(item.source)) return false;
+        const content = if (item.kind.info().png) item.png else item.text;
+        if (content.len == 0 or (!item.kind.info().png and
+            std.mem.trim(u8, content, " \t\r\n").len == 0)) return false;
+        if (content.len > item.kind.cap()) {
+            log(
+                .info,
+                "nanolight: clipboard: a {t} of {d} bytes is over the {d} byte limit; not kept",
+                .{ item.kind, content.len, item.kind.cap() },
             );
-            return .too_big;
+            return false;
         }
         const h = hash(item.kind, content);
         for (s.entries.items, 0..) |*e, i| if (e.hash == h and e.kind == item.kind) {
@@ -206,29 +285,27 @@ pub const Store = struct {
             } else |_| {};
             std.mem.rotate(Entry, s.entries.items[0 .. i + 1], i);
             s.changedOrWarn();
-            return .bumped;
+            return true;
         };
-        const e = s.make(item, h, content, now) orelse return .failed;
+        const e = s.make(item, h, content, now) orelse return false;
         s.entries.insert(s.gpa, 0, e) catch {
             s.dropBlob(e);
             s.free(e);
-            return .failed;
+            return false;
         };
         _ = s.enforce();
         s.changedOrWarn();
-        return .added;
+        return true;
     }
 
     /// The entry for `item`, its blob written.
     fn make(s: *Store, item: Item, h: u64, content: []const u8, now: i64) ?Entry {
-        const spill = item.kind == .text and s.dir != null and content.len > s.inline_max;
-        const body = s.gpa.dupe(
-            u8,
-            if (item.kind == .image) "" else if (spill) search.clip(
-                content,
-                @min(preview_max, s.inline_max),
-            ) else content,
-        ) catch return null;
+        const spill = item.kind.info().blob == .when_long and s.dir != null and
+            content.len > inline_max;
+        const shown = if (item.kind.info().png)
+            ""
+        else if (spill) search.clip(content, preview_max) else content;
+        const body = s.gpa.dupe(u8, shown) catch return null;
         const source = s.gpa.dupe(u8, item.source) catch {
             s.gpa.free(body);
             return null;
@@ -243,34 +320,27 @@ pub const Store = struct {
             .source = source,
             .at = now,
         };
-        if (item.kind == .image or spill) s.writeBlob(e, content) catch |err| {
-            warn("nanolight: clipboard: could not write a blob: {t}", .{err});
+        s.writeBlob(e, content) catch |err| {
+            log(.warn, "nanolight: clipboard: could not write a blob: {t}", .{err});
             s.free(e);
             return null;
         };
         return e;
     }
 
-    fn blobFor(e: Entry, buf: *[blob_name_len]u8) ?[]const u8 {
-        return switch (e.kind) {
-            .image => blobName(buf, e.hash, "png"),
-            .text => if (e.text.len < e.size) blobName(buf, e.hash, "txt") else null,
-            .file => null,
-        };
-    }
-
     fn writeBlob(s: *Store, e: Entry, bytes: []const u8) !void {
         const dir = s.dir orelse return;
         var buf: [blob_name_len]u8 = undefined;
-        _ = try dir.createDirPathStatus(s.io, "blobs", private_dir);
-        try writeAtomic(s.io, dir, blobFor(e, &buf).?, bytes);
+        const name = blobName(e, &buf) orelse return;
+        _ = try dir.createDirPathStatus(s.io, blob_dir, private_dir);
+        try writeAtomic(s.io, dir, name, bytes);
     }
 
     /// A failure is logged; the next `load` sweeps the file.
     fn dropBlob(s: *Store, e: Entry) void {
         const dir = s.dir orelse return;
         var buf: [blob_name_len]u8 = undefined;
-        if (blobFor(e, &buf)) |name| _ = deleteIfThere(s.io, dir, name);
+        if (blobName(e, &buf)) |name| _ = deleteIfThere(s.io, dir, name);
     }
 
     /// After a change in memory: counted, and the index written.
@@ -282,33 +352,30 @@ pub const Store = struct {
     /// `changed` where the caller cannot act on a failure: it is logged, and the next
     /// change writes the whole index again.
     fn changedOrWarn(s: *Store) void {
-        s.changed() catch |e| warn("nanolight: clipboard: could not write index.json: {t}", .{e});
+        s.changed() catch |e| indexNotWritten(e);
     }
 
-    /// The text of `e`, all of it. Caller frees.
-    pub fn fullText(s: *Store, gpa: std.mem.Allocator, e: Entry) ![]u8 {
+    fn indexNotWritten(e: anyerror) void {
+        log(.warn, "nanolight: clipboard: could not write index.json: {t}", .{e});
+    }
+
+    /// All of `e`'s content, from its blob when it has one: a missing or
+    /// unreadable blob is an error.
+    pub fn read(s: *Store, gpa: std.mem.Allocator, e: Entry) !Loaded {
+        const png = e.kind.info().png;
         var buf: [blob_name_len]u8 = undefined;
-        const name = blobFor(e, &buf) orelse return gpa.dupe(u8, e.text);
+        const name = blobName(e, &buf) orelse
+            return .{ .content = .{ .kind = e.kind, .text = e.text } };
         const dir = s.dir orelse return error.NoDirectory;
-        return dir.readFileAlloc(s.io, name, gpa, .limited(max_text));
-    }
-
-    /// The PNG of an image entry, or null if its file is gone. Caller frees.
-    pub fn png(s: *Store, gpa: std.mem.Allocator, e: Entry) ?[]u8 {
-        if (e.kind != .image) return null;
-        const dir = s.dir orelse return null;
-        var buf: [blob_name_len]u8 = undefined;
-        return dir.readFileAlloc(
-            s.io,
-            blobName(&buf, e.hash, "png"),
-            gpa,
-            .limited(max_image),
-        ) catch null;
-    }
-
-    pub fn get(s: *const Store, h: u64) ?*const Entry {
-        for (s.entries.items) |*e| if (e.hash == h) return e;
-        return null;
+        const bytes = try dir.readFileAlloc(s.io, name, gpa, .limited(e.kind.cap()));
+        return .{
+            .content = .{
+                .kind = e.kind,
+                .text = if (png) "" else bytes,
+                .png = if (png) bytes else "",
+            },
+            .owned = bytes,
+        };
     }
 
     pub fn remove(s: *Store, h: u64) bool {
@@ -334,15 +401,15 @@ pub const Store = struct {
         if (s.dir) |dir| gone = deleteIfThere(s.io, dir, "index.json.corrupt") and gone;
         s.changed() catch |e| {
             // The old index still names what was copied: it must not stay.
-            warn("nanolight: clipboard: could not write index.json: {t}; deleting it", .{e});
+            log(.warn, "nanolight: clipboard: could not write index.json: {t}; deleting it", .{e});
             if (s.dir) |dir| gone = deleteIfThere(s.io, dir, "index.json") and gone;
         };
         if (!gone) return error.Incomplete;
     }
 
     /// Drops what is older than `retention_days`, then the oldest past `max_entries` or
-    /// `budget_bytes`. Returns how many went; an error means the index on disk still
-    /// lists them (logged by the caller; the next change or launch writes it again).
+    /// `max_store_bytes`. Returns how many went; an error means the index on disk still
+    /// lists them (the next change or launch writes it again).
     pub fn prune(s: *Store, now: i64) !usize {
         var gone: usize = 0;
         if (s.cfg.retention_days > 0) {
@@ -362,20 +429,20 @@ pub const Store = struct {
         return gone;
     }
 
-    /// The oldest entries go while there are more than `max_entries` (0: any number) or
-    /// their content is over `budget_bytes`.
+    /// `prune` where the caller cannot act on a failure: it is logged.
+    pub fn pruneOrWarn(s: *Store, now: i64) void {
+        _ = s.prune(now) catch |e| indexNotWritten(e);
+    }
+
+    /// The oldest entries past `keepCount` go.
     fn enforce(s: *Store) usize {
-        var total: u64 = 0;
-        for (s.entries.items) |e| total +|= e.size;
-        const max = s.cfg.max_entries;
-        var gone: usize = 0;
-        while (total > s.budget_bytes or (max > 0 and s.entries.items.len > max)) {
-            const e = s.entries.pop() orelse break;
-            total -|= e.size;
+        const keep = keepCount(s.entries.items, max_store_bytes, s.cfg.max_entries);
+        const gone = s.entries.items.len - keep;
+        for (s.entries.items[keep..]) |e| {
             s.dropBlob(e);
             s.free(e);
-            gone += 1;
         }
+        s.entries.shrinkRetainingCapacity(keep);
         return gone;
     }
 
@@ -425,62 +492,94 @@ pub const Store = struct {
 
     // ----- the files -----
 
-    /// Reads `index.json`. A missing one is an empty history; one that does
-    /// not parse is deleted (its text must not outlive Clear History) and the
-    /// history starts empty, its blobs left alone (the sweep frees them).
+    /// Reads `index.json`. A missing one is an empty history. An entry that
+    /// does not read is skipped (and its blob swept). An index of another
+    /// version starts the history empty and is left as it is until the
+    /// next change writes this version; one that is not an index at all is
+    /// deleted (its text must not outlive Clear History). Either way its
+    /// blobs are left alone.
     pub fn load(s: *Store, now: i64) void {
         const dir = s.dir orelse return;
-        const bytes = dir.readFileAlloc(s.io, "index.json", s.gpa, .limited(256 << 20)) catch |e| {
-            if (e != error.FileNotFound) warn(
+        const limit: std.Io.Limit = .limited(max_index_bytes);
+        const bytes = dir.readFileAlloc(s.io, "index.json", s.gpa, limit) catch |e| {
+            if (e != error.FileNotFound) log(
+                .warn,
                 "nanolight: clipboard: index.json: {t}; starting empty",
                 .{e},
             );
             return;
         };
         defer s.gpa.free(bytes);
-        const parsed = std.json.parseFromSlice(
-            Disk,
-            s.gpa,
+        var arena: std.heap.ArenaAllocator = .init(s.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const disk = std.json.parseFromSliceLeaky(
+            DiskIn,
+            a,
             bytes,
             .{ .ignore_unknown_fields = true },
         ) catch {
-            warn("nanolight: clipboard: index.json is damaged; deleting it, starting empty", .{});
+            log(
+                .warn,
+                "nanolight: clipboard: index.json is damaged; deleting it, starting empty",
+                .{},
+            );
             _ = deleteIfThere(s.io, dir, "index.json");
             return;
         };
-        defer parsed.deinit();
-        for (parsed.value.entries) |d| {
-            const h = std.fmt.parseInt(u64, d.hash, 16) catch continue;
-            const body = s.gpa.dupe(u8, d.text) catch continue;
-            const source = s.gpa.dupe(u8, d.source) catch {
-                s.gpa.free(body);
+        if (disk.v != format_version) {
+            log(
+                .warn,
+                "nanolight: clipboard: index.json is version {d}, not {d}; starting empty",
+                .{ disk.v, format_version },
+            );
+            return;
+        }
+        var skipped: usize = 0;
+        for (disk.entries) |v| {
+            const d = std.json.parseFromValueLeaky(
+                DiskEntry,
+                a,
+                v,
+                .{ .ignore_unknown_fields = true },
+            ) catch {
+                skipped += 1;
                 continue;
             };
-            s.entries.append(
-                s.gpa,
-                .{
-                    .hash = h,
-                    .kind = d.kind,
-                    .text = body,
-                    .size = d.size,
-                    .width = d.w,
-                    .height = d.h,
-                    .source = source,
-                    .at = d.at,
-                    .count = @max(d.count, 1),
-                },
-            ) catch {
-                s.gpa.free(body);
-                s.gpa.free(source);
+            s.append(d) catch {
+                skipped += 1;
+                continue;
             };
         }
+        if (skipped > 0) log(
+            .warn,
+            "nanolight: clipboard: index.json: skipped {d} entries that did not read",
+            .{skipped},
+        );
         std.mem.sort(Entry, s.entries.items, {}, newer);
-        if (s.prune(now)) |_| {} else |e| {
-            warn("nanolight: clipboard: could not write index.json: {t}", .{e});
-        }
+        s.pruneOrWarn(now);
         // A blob it could not delete is logged; the next launch sweeps again.
         _ = s.sweep();
         s.gen +%= 1;
+    }
+
+    fn append(s: *Store, d: DiskEntry) !void {
+        const h = try std.fmt.parseInt(u64, d.hash, 16);
+        const body = try s.gpa.dupe(u8, d.text);
+        errdefer s.gpa.free(body);
+        const source = try s.gpa.dupe(u8, d.source);
+        errdefer s.gpa.free(source);
+        try s.entries.append(s.gpa, .{
+            .hash = h,
+            .kind = d.kind,
+            .text = body,
+            .size = d.size,
+            .width = d.w,
+            .height = d.h,
+            .source = source,
+            .at = d.at,
+            .count = @max(d.count, 1),
+        });
     }
 
     fn newer(_: void, a: Entry, b: Entry) bool {
@@ -491,7 +590,7 @@ pub const Store = struct {
     /// (a leftover `.tmp`). False when one may be left (logged).
     fn sweep(s: *Store) bool {
         const dir = s.dir orelse return true;
-        var blobs = dir.openDir(s.io, "blobs", .{ .iterate = true }) catch |e| {
+        var blobs = dir.openDir(s.io, blob_dir, .{ .iterate = true }) catch |e| {
             if (e == error.FileNotFound) return true;
             return sweepFailed(e);
         };
@@ -499,15 +598,10 @@ pub const Store = struct {
         var gone = true;
         var it = blobs.iterate();
         while (it.next(s.io) catch |e| return sweepFailed(e)) |f| {
-            const stem = std.fs.path.stem(f.name);
-            const h = std.fmt.parseInt(u64, stem, 16) catch {
-                gone = deleteIfThere(s.io, blobs, f.name) and gone;
-                continue;
-            };
             const keep = for (s.entries.items) |e| {
                 var buf: [blob_name_len]u8 = undefined;
-                const name = blobFor(e, &buf) orelse continue;
-                if (e.hash == h and std.mem.eql(u8, name["blobs/".len..], f.name)) break true;
+                const name = blobName(e, &buf) orelse continue;
+                if (std.mem.eql(u8, std.fs.path.basename(name), f.name)) break true;
             } else false;
             if (!keep) gone = deleteIfThere(s.io, blobs, f.name) and gone;
         }
@@ -515,7 +609,7 @@ pub const Store = struct {
     }
 
     fn sweepFailed(e: anyerror) bool {
-        warn("nanolight: clipboard: could not list blobs: {t}", .{e});
+        log(.warn, "nanolight: clipboard: could not list blobs: {t}", .{e});
         return false;
     }
 
@@ -545,22 +639,18 @@ pub const Store = struct {
     }
 };
 
-const DiskEntry = struct {
-    hash: []const u8,
-    kind: Kind,
-    text: []const u8 = "",
-    size: u64 = 0,
-    w: u32 = 0,
-    h: u32 = 0,
-    source: []const u8 = "",
-    at: i64 = 0,
-    count: u32 = 1,
-};
-
-const Disk = struct {
-    v: u8 = 1,
-    entries: []const DiskEntry = &.{},
-};
+/// How many of `entries` (newest first) stay: the newest while there are at most
+/// `max_entries` (0: any number) and their content is within `budget`.
+fn keepCount(entries: []const Entry, budget: u64, max_entries: u32) usize {
+    var total: u64 = 0;
+    for (entries) |e| total +|= e.size;
+    var n = entries.len;
+    while (n > 0 and (total > budget or (max_entries > 0 and n > max_entries))) {
+        n -= 1;
+        total -|= entries[n].size;
+    }
+    return n;
+}
 
 /// Written to a temp file, fsynced, then renamed: a crash leaves the old
 /// file or the new one.
@@ -574,84 +664,6 @@ fn writeAtomic(io: Io, dir: Io.Dir, name: []const u8, bytes: []const u8) !void {
     try f.writeStreamingAll(io, bytes);
     try f.sync(io);
     try dir.rename(tmp, dir, name, io);
-}
-
-// ----- how an entry reads -----
-
-/// "Safari" of "com.apple.Safari", "chrome" of "chrome.exe"; an app ID that
-/// is not a dotted name stays as it is.
-pub fn appName(source: []const u8) []const u8 {
-    const s = if (std.ascii.endsWithIgnoreCase(source, ".exe"))
-        source[0 .. source.len - 4]
-    else
-        source;
-    if (s.len != source.len) return s;
-    if (std.mem.count(
-        u8,
-        s,
-        ".",
-    ) >= 2) if (std.mem.lastIndexOfScalar(u8, s, '.')) |i| if (i + 1 < s.len) return s[i + 1 ..];
-    return s;
-}
-
-/// "now", "5 min ago", "3 h ago", "2 d ago".
-pub fn relative(buf: []u8, now: i64, at: i64) []const u8 {
-    const d = @max(now - at, 0);
-    const r = if (d < 60)
-        std.fmt.bufPrint(buf, "just now", .{})
-    else if (d < std.time.s_per_hour)
-        std.fmt.bufPrint(buf, "{d} min ago", .{@divFloor(d, 60)})
-    else if (d < std.time.s_per_day)
-        std.fmt.bufPrint(buf, "{d} h ago", .{@divFloor(d, std.time.s_per_hour)})
-    else
-        std.fmt.bufPrint(buf, "{d} d ago", .{@divFloor(d, std.time.s_per_day)});
-    return r catch "";
-}
-
-/// "12 bytes", "34 KB", "1.5 MB".
-pub fn sizeText(buf: []u8, n: u64) []const u8 {
-    const r = if (n < 1024)
-        std.fmt.bufPrint(buf, "{d} bytes", .{n})
-    else if (n < 1 << 20)
-        std.fmt.bufPrint(buf, "{d} KB", .{n >> 10})
-    else
-        std.fmt.bufPrint(buf, "{d}.{d} MB", .{ n >> 20, (n & ((1 << 20) - 1)) * 10 >> 20 });
-    return r catch "";
-}
-
-pub fn kindLabel(k: Kind) []const u8 {
-    return switch (k) {
-        .text => "Text",
-        .image => "Image",
-        .file => "File",
-    };
-}
-
-/// One line for a list: a text's first line, an image's size, a file's name
-/// (and how many more).
-pub fn title(buf: []u8, e: Entry) []const u8 {
-    switch (e.kind) {
-        .text => {
-            var lines = std.mem.splitScalar(u8, e.text, '\n');
-            while (lines.next()) |l| {
-                const t = std.mem.trim(u8, l, " \t\r");
-                if (t.len > 0) return search.clip(t, 200);
-            }
-            return "";
-        },
-        .image => return std.fmt.bufPrint(
-            buf,
-            "Image {d} × {d}",
-            .{ e.width, e.height },
-        ) catch "Image",
-        .file => {
-            const n = std.mem.count(u8, e.text, "\n") + 1;
-            const first = e.text[0 .. std.mem.indexOfScalar(u8, e.text, '\n') orelse e.text.len];
-            const name = std.fs.path.basename(first);
-            if (n == 1) return name;
-            return std.fmt.bufPrint(buf, "{s} and {d} more", .{ name, n - 1 }) catch name;
-        },
-    }
 }
 
 /// The width and height a PNG's header gives, or null if it is not one.
@@ -674,14 +686,20 @@ pub const Content = struct {
     png: []const u8 = "",
 };
 
+/// How a paste or a copy of an entry went.
 pub const PasteResult = enum {
     /// Written, and the keystroke sent to the app that had the keys.
     pasted,
+    /// Written, as asked: no paste.
+    copied,
     /// Written only: the OS has not allowed this app to send keys.
     copied_no_permission,
     /// Written only: pasting is not done on this system (yet).
     copied_unsupported,
+    /// The clipboard could not be written.
     failed,
+    /// The entry's content could not be read (its blob is gone or damaged).
+    unreadable,
 };
 
 /// What a watcher tells the app.
@@ -696,28 +714,52 @@ pub const Sink = struct {
 /// Called to hide the panel, before the app that had the keys is woken.
 pub const Hide = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque) void };
 
-/// This OS's watcher. Each one has:
+pub const StartError = error{Unavailable};
+
+/// This OS's watcher. Every one has, all on the main thread:
 ///
-///   `pub const available: bool` and `unavailable_reason: []const u8`
-///   `start(w, sink) !void` and `stop(w)`: watching, on the main thread
+///   `start(w, sink) StartError!void` and `stop(w)`: watching
+///   `status(w) ?[]const u8`: why it is not watching, once a start failed
 ///   `noteFrontmost(w)`: called as the panel opens, to remember where to paste
-///   `paste(w, content, hide) PasteResult`
+///   `paste(w, content, hide) PasteResult` (never `.copied` or `.unreadable`)
 ///   `copy(w, content) bool`: writes it, no paste
+///
+/// and keeps to these rules:
+///
+///   - Nothing over its kind's `cap` is read or converted: it is logged and dropped.
+///   - An item its source marked concealed or transient is observed with
+///     `concealed` set and nothing of it read.
+///   - What its own `copy` and `paste` write is not observed: a poll watcher
+///     (clipboard_poll.zig) keeps the change count it wrote; a Linux one offers
+///     `own_mime` and skips an offer that has it (clipboard_offer.zig).
+///   - `Item.source` is what the OS names: the frontmost app's bundle ID when the
+///     change is seen (Mac), the owner's exe (Windows), the owner window's
+///     WM_CLASS (X11). Wayland names no source, so `exclude_apps` cannot apply there.
 pub const Watcher = switch (builtin.os.tag) {
     .macos => @import("clipboard_mac.zig").Watcher,
     .windows => @import("clipboard_win.zig").Watcher,
     else => @import("clipboard_linux.zig").Watcher,
 };
 
-/// The text for a footer after a paste that only copied, or null.
-pub fn pasteNote(r: PasteResult) ?[]const u8 {
-    return switch (r) {
-        .pasted => null,
-        .copied_no_permission => "Copied. Allow Nanolight in Privacy & Security > Accessibility " ++
-            "to paste.",
-        .copied_unsupported => "Copied. Pasting is not supported on this system yet.",
-        .failed => "Could not write the clipboard.",
+comptime {
+    conforms(Watcher);
+}
+
+/// Fails the build unless `W` has the surface `Watcher` documents.
+pub fn conforms(comptime W: type) void {
+    const surface = .{
+        .{ "start", fn (*W, Sink) StartError!void },
+        .{ "stop", fn (*W) void },
+        .{ "status", fn (*const W) ?[]const u8 },
+        .{ "noteFrontmost", fn (*W) void },
+        .{ "paste", fn (*W, Content, Hide) PasteResult },
+        .{ "copy", fn (*W, Content) bool },
     };
+    inline for (surface) |d| {
+        if (!@hasDecl(W, d[0])) @compileError(@typeName(W) ++ " has no " ++ d[0]);
+        if (@TypeOf(@field(W, d[0])) != d[1])
+            @compileError(@typeName(W) ++ "." ++ d[0] ++ " is not " ++ @typeName(d[1]));
+    }
 }
 
 // ----- tests -----
@@ -735,21 +777,22 @@ fn memory(cfg: Config) Store {
 test "a copy is kept, newest first, and the same copy again bumps it" {
     var s = memory(.{});
     defer s.deinit();
-    try testing.expectEqual(Result.added, s.add(textItem("one", "a"), 100));
-    try testing.expectEqual(Result.added, s.add(textItem("two", "b"), 200));
-    try testing.expectEqualStrings("two", s.entries.items[0].text);
-    try testing.expectEqual(Result.bumped, s.add(textItem("one", "c"), 300));
-    try testing.expectEqual(@as(usize, 2), s.entries.items.len);
-    const e = s.entries.items[0];
+    try testing.expect(s.add(textItem("one", "a"), 100));
+    try testing.expect(s.add(textItem("two", "b"), 200));
+    try testing.expectEqualStrings("two", s.at(0).text);
+    try testing.expect(s.add(textItem("one", "c"), 300));
+    try testing.expectEqual(@as(usize, 2), s.len());
+    const e = s.at(0);
     try testing.expectEqualStrings("one", e.text);
     try testing.expectEqual(@as(u32, 2), e.count);
     try testing.expectEqual(@as(i64, 300), e.at);
     try testing.expectEqualStrings("c", e.source);
     // A bump with no source keeps the old one; another kind with the same bytes is another entry.
-    try testing.expectEqual(Result.bumped, s.add(textItem("one", ""), 400));
-    try testing.expectEqualStrings("c", s.entries.items[0].source);
-    try testing.expectEqual(Result.added, s.add(.{ .kind = .file, .text = "one" }, 500));
-    try testing.expectEqual(@as(usize, 3), s.entries.items.len);
+    try testing.expect(s.add(textItem("one", ""), 400));
+    try testing.expectEqualStrings("c", s.at(0).source);
+    try testing.expectEqual(@as(usize, 2), s.len());
+    try testing.expect(s.add(.{ .kind = .file, .text = "one" }, 500));
+    try testing.expectEqual(@as(usize, 3), s.len());
 }
 
 test "the switch: on holds only once kept, off holds even when it is not" {
@@ -771,33 +814,27 @@ test "nothing is stored when disabled, excluded, concealed, empty or too big" {
     var s = memory(.{});
     defer s.deinit();
     s.on = false;
-    try testing.expectEqual(Result.disabled, s.add(textItem("x", ""), 1));
+    try testing.expect(!s.add(textItem("x", ""), 1));
     s.on = true;
     s.config_ok = false;
-    try testing.expectEqual(Result.disabled, s.add(textItem("x", ""), 1));
+    try testing.expect(!s.add(textItem("x", ""), 1));
     s.config_ok = true;
     s.cfg = .{ .exclude_apps = &.{ "com.bitwarden.desktop", "KeePassXC.exe" } };
-    try testing.expectEqual(Result.excluded, s.add(textItem("x", "com.Bitwarden.Desktop"), 1));
-    try testing.expectEqual(Result.excluded, s.add(textItem("x", "keepassxc.exe"), 1));
-    try testing.expectEqual(
-        Result.concealed,
-        s.add(.{ .kind = .text, .text = "hunter2", .concealed = true }, 1),
-    );
-    try testing.expectEqual(Result.empty, s.add(textItem("", ""), 1));
-    try testing.expectEqual(Result.empty, s.add(textItem(" \n\t", ""), 1));
-    try testing.expectEqual(Result.empty, s.add(.{ .kind = .image }, 1));
-    const big = try testing.allocator.alloc(u8, max_image + 1);
+    try testing.expect(!s.add(textItem("x", "com.Bitwarden.Desktop"), 1));
+    try testing.expect(!s.add(textItem("x", "keepassxc.exe"), 1));
+    try testing.expect(!s.add(.{ .kind = .text, .text = "hunter2", .concealed = true }, 1));
+    try testing.expect(!s.add(textItem("", ""), 1));
+    try testing.expect(!s.add(textItem(" \n\t", ""), 1));
+    try testing.expect(!s.add(.{ .kind = .image }, 1));
+    const big = try testing.allocator.alloc(u8, Kind.image.cap() + 1);
     defer testing.allocator.free(big);
     @memset(big, 'a');
-    try testing.expectEqual(
-        Result.too_big,
-        s.add(.{ .kind = .text, .text = big[0 .. max_text + 1] }, 1),
-    );
-    try testing.expectEqual(Result.too_big, s.add(.{ .kind = .image, .png = big }, 1));
-    try testing.expectEqual(@as(usize, 0), s.entries.items.len);
+    try testing.expect(!s.add(.{ .kind = .text, .text = big[0 .. Kind.text.cap() + 1] }, 1));
+    try testing.expect(!s.add(.{ .kind = .image, .png = big }, 1));
+    try testing.expectEqual(@as(usize, 0), s.len());
     try testing.expectEqual(@as(u32, 0), s.gen);
     // An unknown source is never excluded.
-    try testing.expectEqual(Result.added, s.add(textItem("x", ""), 1));
+    try testing.expect(s.add(textItem("x", ""), 1));
 }
 
 test "pruning by age and by count" {
@@ -813,9 +850,9 @@ test "pruning by age and by count" {
         -1,
     }) |t, d| _ = s.add(textItem(t, ""), now + d);
     // Adding past the limit drops the oldest at once.
-    try testing.expectEqual(@as(usize, 3), s.entries.items.len);
-    try testing.expectEqualStrings("c", s.entries.items[0].text);
-    try testing.expectEqualStrings("a", s.entries.items[2].text);
+    try testing.expectEqual(@as(usize, 3), s.len());
+    try testing.expectEqualStrings("c", s.at(0).text);
+    try testing.expectEqualStrings("a", s.at(2).text);
 
     var t = memory(.{ .retention_days = 7, .max_entries = 0 });
     defer t.deinit();
@@ -827,46 +864,32 @@ test "pruning by age and by count" {
     try testing.expectEqual(@as(usize, 1), try t.prune(now));
     try testing.expectEqual(@as(usize, 0), try t.prune(now));
     try testing.expectEqual(@as(usize, 1), try t.prune(now + 2 * day));
-    try testing.expectEqualStrings("a", t.entries.items[0].text);
+    try testing.expectEqualStrings("a", t.at(0).text);
     // 0 days keeps everything.
     t.cfg.retention_days = 0;
     try testing.expectEqual(@as(usize, 0), try t.prune(now + 1000 * day));
 }
 
-test "the size budget drops the oldest first, at its boundary and on load" {
-    var s = memory(.{ .retention_days = 0, .max_entries = 0 });
-    defer s.deinit();
-    s.budget_bytes = 10;
-    const words = [_][]const u8{ "aaaa", "bbbb", "cc" };
-    for (words, 1..) |w, at| _ = s.add(textItem(w, ""), @intCast(at));
+test "the size budget keeps the newest, up to its boundary" {
+    const sized = struct {
+        fn of(comptime sizes: []const u64) [sizes.len]Entry {
+            var out: [sizes.len]Entry = undefined;
+            for (&out, sizes) |*e, n|
+                e.* = .{ .hash = n, .kind = .text, .text = "", .size = n, .at = 0 };
+            return out;
+        }
+    };
+    // Newest first: 1, 2, 4, 4 bytes.
+    const list = sized.of(&.{ 1, 2, 4, 4 });
     // Exactly the budget: all stay.
-    try testing.expectEqual(@as(usize, 3), s.entries.items.len);
-    // One byte over: the oldest goes, the newest stays.
-    try testing.expectEqual(Result.added, s.add(textItem("d", ""), 4));
-    try testing.expectEqual(@as(usize, 3), s.entries.items.len);
-    try testing.expectEqualStrings("d", s.entries.items[0].text);
-    try testing.expectEqualStrings("bbbb", s.entries.items[2].text);
-    // A smaller budget prunes the oldest until it fits: 7 bytes, then 3.
-    s.budget_bytes = 3;
-    try testing.expectEqual(@as(usize, 1), try s.prune(5));
-    try testing.expectEqualStrings("d", s.entries.items[0].text);
-    try testing.expectEqualStrings("cc", s.entries.items[1].text);
-
-    // An index over the budget is cut on load, oldest first.
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    {
-        var w: Store = .init(testing.allocator, testing.io, tmp.dir, .{ .retention_days = 0 });
-        defer w.deinit();
-        const texts = [_][]const u8{ "old", "mid", "new" };
-        for (texts, 1..) |t, at| _ = w.add(textItem(t, ""), @intCast(at));
-    }
-    var r: Store = .init(testing.allocator, testing.io, tmp.dir, .{ .retention_days = 0 });
-    defer r.deinit();
-    r.budget_bytes = 6;
-    r.load(10);
-    try testing.expectEqual(@as(usize, 2), r.entries.items.len);
-    try testing.expectEqualStrings("mid", r.entries.items[1].text);
+    try testing.expectEqual(@as(usize, 4), keepCount(&list, 11, 0));
+    // One byte under: the oldest goes, the newest stays.
+    try testing.expectEqual(@as(usize, 3), keepCount(&list, 10, 0));
+    try testing.expectEqual(@as(usize, 2), keepCount(&list, 3, 0));
+    // The count limit too, whichever cuts more.
+    try testing.expectEqual(@as(usize, 1), keepCount(&list, 100, 1));
+    try testing.expectEqual(@as(usize, 0), keepCount(&list, 0, 0));
+    try testing.expectEqual(@as(usize, 0), keepCount(&.{}, 0, 0));
 }
 
 test "search matches text, file names and the source app, best first" {
@@ -892,14 +915,14 @@ test "search matches text, file names and the source app, best first" {
     try testing.expectEqual(@as(u32, 0), out[0].index);
     // A prefix beats a match inside.
     try testing.expectEqual(@as(usize, 2), s.find("milk", &out));
-    try testing.expectEqualStrings("milkshake recipe", s.entries.items[out[0].index].text);
-    try testing.expectEqualStrings("remember the milk", s.entries.items[out[1].index].text);
+    try testing.expectEqualStrings("milkshake recipe", s.at(out[0].index).text);
+    try testing.expectEqualStrings("remember the milk", s.at(out[1].index).text);
     // A file's name, not its directory prefix path alone.
     try testing.expectEqual(@as(usize, 1), s.find("budget", &out));
-    try testing.expectEqual(Kind.file, s.entries.items[out[0].index].kind);
+    try testing.expectEqual(Kind.file, s.at(out[0].index).kind);
     // The source app, for every kind.
     try testing.expectEqual(@as(usize, 1), s.find("preview", &out));
-    try testing.expectEqual(Kind.image, s.entries.items[out[0].index].kind);
+    try testing.expectEqual(Kind.image, s.at(out[0].index).kind);
     try testing.expectEqual(@as(usize, 0), s.find("zzzzqq", &out));
     // Room for only some.
     var one: [1]search.Ranked = undefined;
@@ -911,24 +934,28 @@ test "a long text goes to a blob and comes back whole; an image keeps its PNG" {
     defer tmp.cleanup();
     var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{});
     defer s.deinit();
-    s.inline_max = 16;
-    const long = "0123456789abcdef0123456789abcdef";
-    try testing.expectEqual(Result.added, s.add(textItem(long, ""), 1));
-    try testing.expectEqual(
-        Result.added,
-        s.add(.{ .kind = .image, .png = "\x89PNGdata", .width = 2, .height = 3 }, 2),
-    );
+    var long: [inline_max + 1]u8 = undefined;
+    for (&long, 0..) |*c, i| c.* = "0123456789abcdef"[i % 16];
+    try testing.expect(s.add(textItem(&long, ""), 1));
+    const png = "\x89PNGdata";
+    try testing.expect(s.add(.{ .kind = .image, .png = png, .width = 2, .height = 3 }, 2));
     // The index holds the start only, the blob the rest.
-    const e = s.get(hash(.text, long)).?.*;
+    const e = s.get(hash(.text, &long)).?.*;
     try testing.expectEqual(@as(u64, long.len), e.size);
-    const whole = try s.fullText(testing.allocator, e);
-    defer testing.allocator.free(whole);
-    try testing.expectEqualStrings(long, whole);
+    try testing.expectEqual(@as(usize, preview_max), e.text.len);
+    const whole = try s.read(testing.allocator, e);
+    defer testing.allocator.free(whole.owned.?);
+    try testing.expectEqualStrings(&long, whole.content.text);
     const img = s.get(hash(.image, "\x89PNGdata")).?.*;
-    const bytes = s.png(testing.allocator, img).?;
-    defer testing.allocator.free(bytes);
-    try testing.expectEqualStrings("\x89PNGdata", bytes);
+    const bytes = try s.read(testing.allocator, img);
+    defer testing.allocator.free(bytes.owned.?);
+    try testing.expectEqualStrings("\x89PNGdata", bytes.content.png);
     try testing.expectEqual(@as(u32, 3), img.height);
+    // A short text and a file list are all in the index.
+    _ = s.add(.{ .kind = .file, .text = "/a/b" }, 3);
+    const files = try s.read(testing.allocator, s.at(0));
+    try testing.expect(files.owned == null);
+    try testing.expectEqualStrings("/a/b", files.content.text);
     // Removing an entry removes its blob.
     try testing.expect(s.remove(img.hash));
     try testing.expect(!s.remove(img.hash));
@@ -941,6 +968,9 @@ test "a long text goes to a blob and comes back whole; an image keeps its PNG" {
         try testing.expect(std.mem.endsWith(u8, f.name, ".txt"));
     }
     try testing.expectEqual(@as(usize, 1), names);
+    // A blob that is gone is an error, not an empty entry.
+    try tmp.dir.deleteTree(testing.io, "blobs");
+    try testing.expectError(error.FileNotFound, s.read(testing.allocator, e));
 }
 
 test "the history survives a restart, newest first, and blobs nobody names are swept" {
@@ -961,18 +991,124 @@ test "the history survives a restart, newest first, and blobs nobody names are s
     var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{});
     defer s.deinit();
     s.load(40);
-    try testing.expectEqual(@as(usize, 2), s.entries.items.len);
-    try testing.expectEqualStrings("first", s.entries.items[0].text);
-    try testing.expectEqual(@as(u32, 2), s.entries.items[0].count);
-    try testing.expectEqualStrings("a.b.App", s.entries.items[0].source);
-    try testing.expectEqual(Kind.image, s.entries.items[1].kind);
+    try testing.expectEqual(@as(usize, 2), s.len());
+    try testing.expectEqualStrings("first", s.at(0).text);
+    try testing.expectEqual(@as(u32, 2), s.at(0).count);
+    try testing.expectEqualStrings("a.b.App", s.at(0).source);
+    try testing.expectEqual(Kind.image, s.at(1).kind);
     try testing.expectError(
         error.FileNotFound,
         tmp.dir.access(testing.io, "blobs/00000000000000ff.png", .{}),
     );
-    const bytes = s.png(testing.allocator, s.entries.items[1]).?;
-    defer testing.allocator.free(bytes);
-    try testing.expectEqualStrings("png1", bytes);
+    const bytes = try s.read(testing.allocator, s.at(1));
+    defer testing.allocator.free(bytes.owned.?);
+    try testing.expectEqualStrings("png1", bytes.content.png);
+}
+
+test "an index too big for the budget is cut on load, oldest first" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // Three entries of 100 MiB each (their size, not their bytes): the budget keeps two.
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "index.json",
+        .data =
+        \\{"v":1,"entries":[
+        \\{"hash":"01","kind":"file","text":"/old","size":104857600,"at":1},
+        \\{"hash":"02","kind":"file","text":"/mid","size":104857600,"at":2},
+        \\{"hash":"03","kind":"file","text":"/new","size":104857600,"at":3}]}
+        ,
+    });
+    var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{ .retention_days = 0 });
+    defer s.deinit();
+    s.load(10);
+    try testing.expectEqual(@as(usize, 2), s.len());
+    try testing.expectEqualStrings("/mid", s.at(1).text);
+}
+
+test "an index the old version wrote still loads" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "blobs");
+    try tmp.dir.writeFile(
+        testing.io,
+        .{ .sub_path = "blobs/00000000000000bb.png", .data = "png bytes" },
+    );
+    // Written by the store before the format was versioned on read: every field, v 1.
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "index.json",
+        .data =
+        \\{"v":1,"entries":[{"hash":"00000000000000aa","kind":"text","text":"hello",
+        \\"size":5,"w":0,"h":0,"source":"com.apple.Notes","at":300,"count":2},
+        \\{"hash":"00000000000000bb","kind":"image","text":"","size":9,"w":800,"h":600,
+        \\"source":"","at":200,"count":1},{"hash":"00000000000000cc","kind":"file",
+        \\"text":"/Users/me/a.txt","size":15,"w":0,"h":0,"source":"com.apple.finder",
+        \\"at":100,"count":1}]}
+        ,
+    });
+    var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{ .retention_days = 0 });
+    defer s.deinit();
+    s.load(400);
+    try testing.expectEqual(@as(usize, 3), s.len());
+    try testing.expectEqualStrings("hello", s.at(0).text);
+    try testing.expectEqual(@as(u32, 2), s.at(0).count);
+    try testing.expectEqualStrings("com.apple.Notes", s.at(0).source);
+    try testing.expectEqual(Kind.image, s.at(1).kind);
+    try testing.expectEqual(@as(u32, 600), s.at(1).height);
+    const img = try s.read(testing.allocator, s.at(1));
+    defer testing.allocator.free(img.owned.?);
+    try testing.expectEqualStrings("png bytes", img.content.png);
+    try testing.expectEqualStrings("/Users/me/a.txt", s.at(2).text);
+}
+
+test "an entry that does not read is skipped, and the rest are kept" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "blobs");
+    try tmp.dir.writeFile(
+        testing.io,
+        .{ .sub_path = "blobs/000000000000000b.png", .data = "only the bad entry's" },
+    );
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "index.json",
+        .data =
+        \\{"v":1,"entries":[{"hash":"zz","kind":"text","text":"bad hash"},
+        \\{"hash":"0b","kind":"sound","size":3,"at":7},
+        \\{"hash":"0c","kind":"text","text":7},
+        \\"not an entry",
+        \\{"hash":"0a","kind":"text","text":"y","at":5,"size":1},
+        \\{"hash":"0d","kind":"file","text":"/z","at":6,"size":2,"later":"field"}]}
+        ,
+    });
+    var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{ .retention_days = 0 });
+    defer s.deinit();
+    s.load(10);
+    try testing.expectEqual(@as(usize, 2), s.len());
+    try testing.expectEqualStrings("/z", s.at(0).text);
+    try testing.expectEqualStrings("y", s.at(1).text);
+    // The skipped entry's blob is nobody's now.
+    try testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(testing.io, "blobs/000000000000000b.png", .{}),
+    );
+}
+
+test "an index of another version starts empty and is left alone" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "blobs");
+    try tmp.dir.writeFile(
+        testing.io,
+        .{ .sub_path = "blobs/0000000000000001.png", .data = "keep" },
+    );
+    const later = "{\"v\":2,\"entries\":[{\"hash\":\"01\",\"kind\":\"image\",\"size\":4}]}";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "index.json", .data = later });
+    var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{});
+    defer s.deinit();
+    s.load(1);
+    try testing.expectEqual(@as(usize, 0), s.len());
+    var buf: [128]u8 = undefined;
+    try testing.expectEqualStrings(later, try tmp.dir.readFile(testing.io, "index.json", &buf));
+    try tmp.dir.access(testing.io, "blobs/0000000000000001.png", .{});
 }
 
 test "a corrupt index starts empty, is deleted, and its blobs are left alone" {
@@ -987,33 +1123,12 @@ test "a corrupt index starts empty, is deleted, and its blobs are left alone" {
     var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{});
     defer s.deinit();
     s.load(1);
-    try testing.expectEqual(@as(usize, 0), s.entries.items.len);
-    try testing.expectError(
-        error.FileNotFound,
-        tmp.dir.access(testing.io, "index.json.corrupt", .{}),
-    );
+    try testing.expectEqual(@as(usize, 0), s.len());
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "index.json", .{}));
     try tmp.dir.access(testing.io, "blobs/0000000000000001.png", .{});
     // And it works from there.
-    try testing.expectEqual(Result.added, s.add(textItem("fresh", ""), 2));
+    try testing.expect(s.add(textItem("fresh", ""), 2));
     try tmp.dir.access(testing.io, "index.json", .{});
-}
-
-test "an entry with a bad hash in the index is skipped" {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(
-        testing.io,
-        .{
-            .sub_path = "index.json",
-            .data = "{\"v\":1,\"entries\":[{\"hash\":\"zz\",\"kind\":\"text\",\"text\":\"x\"}," ++
-                "{\"hash\":\"0a\",\"kind\":\"text\",\"text\":\"y\",\"at\":5,\"size\":1}]}",
-        },
-    );
-    var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{ .retention_days = 0 });
-    defer s.deinit();
-    s.load(10);
-    try testing.expectEqual(@as(usize, 1), s.entries.items.len);
-    try testing.expectEqualStrings("y", s.entries.items[0].text);
 }
 
 test "clear forgets everything, blobs too" {
@@ -1029,7 +1144,7 @@ test "clear forgets everything, blobs too" {
         .{ .sub_path = "blobs/0000000000000009.png.tmp", .data = "x" },
     );
     try s.clear();
-    try testing.expectEqual(@as(usize, 0), s.entries.items.len);
+    try testing.expectEqual(@as(usize, 0), s.len());
     try testing.expectError(
         error.FileNotFound,
         tmp.dir.access(testing.io, "index.json.corrupt", .{}),
@@ -1041,7 +1156,7 @@ test "clear forgets everything, blobs too" {
     var again: Store = .init(testing.allocator, testing.io, tmp.dir, .{});
     defer again.deinit();
     again.load(3);
-    try testing.expectEqual(@as(usize, 0), again.entries.items.len);
+    try testing.expectEqual(@as(usize, 0), again.len());
 }
 
 test "clear that cannot write the index deletes it, and one that leaves a file says so" {
@@ -1061,7 +1176,7 @@ test "clear that cannot write the index deletes it, and one that leaves a file s
     // Something in blobs/ that cannot be deleted: memory is cleared, the caller told.
     try tmp.dir.createDirPath(testing.io, "blobs/0000000000000001.png/x");
     try testing.expectError(error.Incomplete, s.clear());
-    try testing.expectEqual(@as(usize, 0), s.entries.items.len);
+    try testing.expectEqual(@as(usize, 0), s.len());
 }
 
 test "store files are user-only" {
@@ -1083,54 +1198,16 @@ test "store files are user-only" {
     try testing.expectEqual(@as(u32, 0), @as(u32, @intCast(st.permissions.toMode())) & 0o077);
 }
 
-test "how entries read" {
-    var buf: [64]u8 = undefined;
-    try testing.expectEqualStrings("Safari", appName("com.apple.Safari"));
-    try testing.expectEqualStrings("chrome", appName("chrome.exe"));
-    try testing.expectEqualStrings("firefox", appName("firefox"));
-    try testing.expectEqualStrings("org.gnome", appName("org.gnome"));
-    try testing.expectEqualStrings("just now", relative(&buf, 100, 90));
-    try testing.expectEqualStrings("5 min ago", relative(&buf, 1000, 700));
-    try testing.expectEqualStrings("3 h ago", relative(&buf, 20000, 9000));
-    try testing.expectEqualStrings("2 d ago", relative(&buf, 200000, 20000));
-    const t: Entry = .{ .hash = 1, .kind = .text, .text = "\n  hello\nworld", .size = 14, .at = 0 };
-    try testing.expectEqualStrings("hello", title(&buf, t));
-    const im: Entry = .{
-        .hash = 2,
-        .kind = .image,
-        .text = "",
-        .size = 1,
-        .width = 800,
-        .height = 600,
-        .at = 0,
-    };
-    try testing.expectEqualStrings("Image 800 × 600", title(&buf, im));
-    const f: Entry = .{
-        .hash = 3,
-        .kind = .file,
-        .text = "/a/b/c.txt\n/a/d.txt",
-        .size = 1,
-        .at = 0,
-    };
-    try testing.expectEqualStrings("c.txt and 1 more", title(&buf, f));
-    try testing.expectEqualStrings("12 bytes", sizeText(&buf, 12));
-    try testing.expectEqualStrings("34 KB", sizeText(&buf, 34 * 1024 + 5));
-    try testing.expectEqualStrings("1.5 MB", sizeText(&buf, 3 << 19));
+test "a PNG's header gives its size" {
     const hdr = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x03\x20\x00\x00\x02\x58";
     try testing.expectEqual([2]u32{ 800, 600 }, pngSize(hdr).?);
     try testing.expect(pngSize("not a png at all, really not") == null);
 }
 
 test "every OS's watcher has the same surface" {
-    inline for (.{
-        "available",
-        "unavailable_reason",
-        "start",
-        "stop",
-        "noteFrontmost",
-        "paste",
-        "copy",
-    }) |name| {
-        try testing.expect(@hasDecl(Watcher, name));
+    comptime {
+        conforms(@import("clipboard_mac.zig").Watcher);
+        conforms(@import("clipboard_win.zig").Watcher);
+        conforms(@import("clipboard_linux.zig").Watcher);
     }
 }
