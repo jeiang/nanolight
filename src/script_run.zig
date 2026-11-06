@@ -310,9 +310,14 @@ pub const Runner = struct {
         r.feed(bytes);
     }
 
+    /// Keeps what fits under `max_out`, and draws the screen again only when it kept
+    /// something: a script printing forever stops costing renders once its output is full.
     fn feed(r: *Runner, bytes: []const u8) void {
         const room = max_out -| r.out.items.len;
-        r.out.appendSlice(r.gpa, bytes[0..@min(bytes.len, room)]) catch {};
+        const kept = bytes[0..@min(bytes.len, room)];
+        if (kept.len == 0) return;
+        // Out of memory: this read is dropped and the screen keeps what it showed.
+        r.out.appendSlice(r.gpa, kept) catch return;
         if (r.meta.mode == .full_output) r.showOutput(false);
     }
 
@@ -363,6 +368,30 @@ fn quiet(ext: *Ext, probe: *u8) Runner {
         .copy = ignoreText,
         .footer = ignoreText,
     } };
+}
+
+fn countRedraw(ctx: *anyopaque) void {
+    const count: *u8 = @ptrCast(ctx);
+    count.* += 1;
+}
+
+test "output past the limit is dropped without drawing the screen again" {
+    const t = std.testing;
+    var ext: Ext = .{ .gpa = t.allocator };
+    defer ext.deinit();
+    var redraws: u8 = 0;
+    var r = quiet(&ext, &redraws);
+    defer r.deinit();
+    r.hooks.redraw = countRedraw;
+    r.meta.mode = .full_output;
+    ext.start(.{ .name = "Yes" }, .{ .ctx = &r, .func = Runner.heard });
+    const chunk: [16 * 1024]u8 = @splat('y');
+    while (r.out.items.len < max_out) r.feed(&chunk);
+    try t.expectEqual(max_out / chunk.len, redraws);
+    r.feed(&chunk);
+    r.feed("y\n");
+    try t.expectEqual(max_out / chunk.len, redraws);
+    try t.expectEqual(max_out, r.out.items.len);
 }
 
 test "a script too big to read isn't run, since its header could ask first" {
