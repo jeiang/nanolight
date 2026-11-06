@@ -32,8 +32,8 @@ pub fn deinit(l: *Live) void {
     l.ext_ui.deinit();
 }
 
-/// A command's row was chosen: it runs in the panel, which stays up (the
-/// panel hides after opening a row; this open keeps it).
+/// A command's row was chosen: it runs in the panel, which stays up while
+/// its screen is open (view.zig `go`).
 pub fn start(l: *Live, target: []const u8) void {
     if (std.mem.eql(u8, target, sc.folder_path)) {
         const d = sc.dir(l.app.gpa) catch return;
@@ -41,7 +41,6 @@ pub fn start(l: *Live, target: []const u8) void {
         _ = nanoui.shell.openPath(d);
         return;
     }
-    l.keep_open = true;
     const ix = l.s.index;
     var title: []const u8 = "Script";
     var png: ?[]const u8 = null;

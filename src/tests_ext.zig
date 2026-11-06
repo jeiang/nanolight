@@ -34,11 +34,6 @@ const Heard = struct {
     }
 };
 
-fn hideFlag(ctx: *anyopaque) void {
-    @as(*bool, @ptrCast(@alignCast(ctx))).* = true;
-}
-fn noopOpen(_: *anyopaque, _: []const u8) void {}
-
 /// A host that answers as script_run.zig's Runner does: inside the call,
 /// with a new view or the screen closed, while the frame that sent the
 /// event is still being drawn. Its views' arenas come from `backing`: the
@@ -127,39 +122,65 @@ const Answering = struct {
 };
 
 /// A script's screen in a panel, its host answering as the runner does.
+/// The panel's host opens a script's row as script_live.zig does.
 const Rig = struct {
     ix: Index,
     s: view.Nanolight,
     ext: Ext,
     host: Answering,
     t: ui.Tester,
+    opts: Options,
     hidden: bool,
+
+    const row = "script:/scripts/greet.sh";
 
     const Options = struct {
         /// The host's first view; none leaves "Starting…".
         first: ?Answering.First = null,
         /// Where the host's views' arenas come from (`Answering`).
         backing: std.mem.Allocator = std.heap.page_allocator,
+        /// The panel starts on its rows, the script's among them, rather
+        /// than with the script open.
+        rows: bool = false,
+        /// The script is silent: its screen goes as it starts.
+        silent: bool = false,
     };
 
     /// In place: the panel, the screen and the host point at each other.
     fn init(r: *Rig, gpa: std.mem.Allocator, opts: Options) !void {
         r.ix = .init(gpa);
         r.s = .{ .index = &r.ix };
+        r.opts = opts;
         r.hidden = false;
-        r.s.host = .{ .ctx = &r.hidden, .open = noopOpen, .hide = hideFlag };
+        r.s.host = .{ .ctx = r, .open = open, .hide = hide };
         r.ext = .{ .gpa = gpa, .back = &r.s.query };
         r.s.ext = &r.ext;
         r.host = .{ .ext = &r.ext, .backing = opts.backing };
+        try r.ix.add("Greet", row);
         r.s.reveal();
-        r.ext.start(.{ .name = "Greet" }, .{ .ctx = &r.host, .func = Answering.said });
-        if (opts.first) |first| r.host.show(first);
+        if (!opts.rows) r.script();
         try r.t.init(gpa, .init(&r.s, view.Nanolight.view), .{
             .width = view.width,
             .height = view.max_height,
             .dark = true,
         });
         r.t.settle(1);
+    }
+
+    fn script(r: *Rig) void {
+        r.ext.start(.{ .name = "Greet" }, .{ .ctx = &r.host, .func = Answering.said });
+        if (r.opts.silent) return r.ext.stop();
+        if (r.opts.first) |first| r.host.show(first);
+    }
+
+    fn open(ctx: *anyopaque, target: []const u8) void {
+        const r: *Rig = @ptrCast(@alignCast(ctx));
+        if (std.mem.eql(u8, target, row)) r.script();
+    }
+
+    fn hide(ctx: *anyopaque) void {
+        const r: *Rig = @ptrCast(@alignCast(ctx));
+        r.hidden = true;
     }
 
     fn deinit(r: *Rig) void {
@@ -324,4 +345,27 @@ test "every view replaced under a frame is freed, the last ones at deinit" {
     try std.testing.expect(r.t.hasText("Run Greet?"));
     _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(!r.ext.open);
+}
+
+test "a script's row opens its screen, and the panel stays" {
+    var r: Rig = undefined;
+    try r.init(std.testing.allocator, .{ .first = .confirm, .rows = true });
+    defer r.deinit();
+    r.t.typeText("greet");
+    r.t.settle(1);
+    try std.testing.expect(r.t.hasText("Greet") and !r.ext.open);
+    r.t.textOps(&.{.{ .command = .insert_newline }});
+    try std.testing.expect(r.ext.open and !r.hidden);
+    r.t.settle(1);
+    try std.testing.expect(r.t.hasText("Run Greet?"));
+}
+
+test "a silent script's row hides the panel as it runs" {
+    var r: Rig = undefined;
+    try r.init(std.testing.allocator, .{ .rows = true, .silent = true });
+    defer r.deinit();
+    r.t.typeText("greet");
+    r.t.settle(1);
+    r.t.textOps(&.{.{ .command = .insert_newline }});
+    try std.testing.expect(!r.ext.open and r.hidden);
 }

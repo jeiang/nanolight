@@ -110,8 +110,6 @@ pub const Live = struct {
     rates_tried: i64 = 0,
     rates_busy: bool = false,
     rates_cache_read: bool = false,
-    /// The next `hide` is skipped: a command just took the panel.
-    keep_open: bool = false,
     /// Clipboard history (clipboard_live.zig): the store, null in headless runs
     /// and without a data directory, and the OS's watcher.
     clip: ?*clipboard.Store = null,
@@ -455,10 +453,6 @@ pub const Live = struct {
 
     pub fn hide(ctx: *anyopaque) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
-        if (l.keep_open) {
-            l.keep_open = false;
-            return;
-        }
         l.s.hid(account.now());
         if (l.window) |w| w.hide();
     }

@@ -692,6 +692,8 @@ pub const Nanolight = struct {
     fn go(s: *Nanolight, target: []const u8) void {
         const h = s.host orelse return;
         h.open(h.ctx, target);
+        // A script's row opened its screen in the panel, which stays.
+        if (s.ext) |e| if (e.open) return;
         h.hide(h.ctx);
     }
 };
