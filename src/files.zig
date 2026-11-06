@@ -2,7 +2,6 @@
 //! are read here. Explicit paths use a parent directory listing instead.
 const std = @import("std");
 const search = @import("search.zig");
-const mac = @import("builtin").os.tag == .macos;
 
 pub const max_rows = 5;
 pub const max_path = 4096;
@@ -98,9 +97,9 @@ pub const List = struct {
         }.before);
     }
 
-    /// Finder icons are prepared off the UI thread along with the answer.
+    /// Finder icons are prepared off the UI thread along with the answer
+    /// (file search is the Mac's alone, platform.zig's `files`).
     pub fn icons(l: *List) void {
-        if (!mac) return;
         for (l.entries[0..l.n]) |*e| {
             const png = @import("apps.zig").iconPng(l.allocator, e.path()) orelse continue;
             l.allocator.free(e.png);
@@ -114,13 +113,12 @@ pub fn isPath(q: []const u8) bool {
 }
 
 pub fn eligible(q: []const u8) bool {
-    if (!mac or q.len < 2 or q.len > 256 or isPath(q)) return false;
+    if (q.len < 2 or q.len > 256 or isPath(q)) return false;
     for (q) |c| if (c < 0x20 or c == 0x7f) return false;
     return true;
 }
 
 pub fn home() []const u8 {
-    if (!mac) return "";
     return if (std.c.getenv("HOME")) |p| std.mem.span(p) else "";
 }
 
@@ -142,7 +140,7 @@ pub fn parent(buf: []u8, path: []const u8) []const u8 {
 /// Existing paths lead; partial paths list a handful of matching siblings.
 pub fn complete(io: std.Io, query: []const u8, out: *List) void {
     out.deinit();
-    if (!mac or !isPath(query)) return;
+    if (!isPath(query)) return;
     var expanded: [max_path]u8 = undefined;
     const path = expand(&expanded, query) orelse return;
     const clean = if (path.len > 1) std.mem.trimEnd(u8, path, "/") else path;

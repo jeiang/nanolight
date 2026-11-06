@@ -61,7 +61,7 @@ pub const Preview = struct {
         );
     }
 
-    pub fn showing(p: *const Preview) bool {
+    fn showing(p: *const Preview) bool {
         const web = p.web orelse return false;
         return objc.msg(objc.BOOL, web, "isHidden", .{}) == objc.NO;
     }

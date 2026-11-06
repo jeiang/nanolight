@@ -28,6 +28,12 @@ pub fn claim(on: single.Listener) usize {
     return n;
 }
 
+/// Never: opening Nanolight's own row starts a new copy, which takes
+/// over (`claim`).
+pub fn isSelf(_: []const u8) bool {
+    return false;
+}
+
 pub fn send(cmd: single.Command) bool {
     const h = msg.other() orelse return false;
     return msg.post(h, if (cmd == .quit) msg.wm_quit else msg.wm_toggle);

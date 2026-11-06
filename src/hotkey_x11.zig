@@ -19,6 +19,7 @@ const ErrorHandler = *const fn (*Display, *anyopaque) callconv(.c) c_int;
 
 const X = struct {
     XOpenDisplay: *const fn (?[*:0]const u8) callconv(.c) ?*Display,
+    XCloseDisplay: *const fn (*Display) callconv(.c) c_int,
     XDefaultRootWindow: *const fn (*Display) callconv(.c) Window,
     XKeysymToKeycode: *const fn (*Display, c_ulong) callconv(.c) u8,
     XGrabKey: *const fn (*Display, c_int, c_uint, Window, c_int, c_int, c_int) callconv(.c) c_int,
@@ -28,23 +29,6 @@ const X = struct {
     XNextEvent: *const fn (*Display, *XEvent) callconv(.c) c_int,
     XSync: *const fn (*Display, c_int) callconv(.c) c_int,
     XSetErrorHandler: *const fn (?ErrorHandler) callconv(.c) ?ErrorHandler,
-    XSelectInput: *const fn (*Display, Window, c_long) callconv(.c) c_int,
-    XInternAtom: *const fn (*Display, [*:0]const u8, c_int) callconv(.c) c_ulong,
-    XGetWindowProperty: *const fn (
-        *Display,
-        Window,
-        c_ulong,
-        c_long,
-        c_long,
-        c_int,
-        c_ulong,
-        *c_ulong,
-        *c_int,
-        *c_ulong,
-        *c_ulong,
-        *?[*]u8,
-    ) callconv(.c) c_int,
-    XFree: *const fn (?*anyopaque) callconv(.c) c_int,
 };
 
 const shift_mask: c_uint = 1;
@@ -53,10 +37,6 @@ const control_mask: c_uint = 4;
 const mod1_mask: c_uint = 8; // Alt
 const mod2_mask: c_uint = 16; // Num Lock
 const key_press: c_int = 2;
-const property_notify: c_int = 28;
-const property_change_mask: c_long = 1 << 22;
-/// XPropertyEvent's `atom`, after type, serial, send_event, display and window.
-const atom_offset = 5 * @sizeOf(c_long);
 const xk_space: c_ulong = 0x20;
 
 var x: ?X = null;
@@ -65,25 +45,24 @@ var watch: ?nanoui.fdwatch.Watch = null;
 var pressed: ?keys.Pressed = null;
 var grabbed: ?c_uint = null;
 var failed = false;
-/// The X server's time of the last press, for focusing the panel with it
-/// (window managers refuse focus to a window shown without a recent one).
-pub var last_time: u32 = 0;
-/// The panel's X window, when it is shown: the window manager's word on
-/// whether it is the active window (`panelActive`), and `away` called as
-/// another window becomes the active one.
-pub var panel: ?*const fn () Window = null;
-pub var away: ?keys.Pressed = null;
-var net_active: c_ulong = 0;
+/// The X server's time of the last press (`lastPress`).
+var last_time: u32 = 0;
 
 fn env(name: [*:0]const u8) ?[]const u8 {
     const v = std.c.getenv(name) orelse return null;
     return std.mem.span(v);
 }
 
-/// No key can be taken: on Wayland, or without a display.
-fn ungrabbable() bool {
-    return std.mem.eql(u8, env("XDG_SESSION_TYPE") orelse "", "wayland") or
-        env("DISPLAY") == null;
+/// Whether this is an X11 session: not Wayland, and a display.
+pub fn onX11() bool {
+    return !std.mem.eql(u8, env("XDG_SESSION_TYPE") orelse "", "wayland") and
+        env("DISPLAY") != null;
+}
+
+/// The X server's time of the last press of the key, 0 before one: window
+/// managers refuse focus to a window shown without a recent one.
+pub fn lastPress() u32 {
+    return last_time;
 }
 
 fn load() ?X {
@@ -109,16 +88,6 @@ fn readable(_: ?*anyopaque) callconv(.c) void {
     while (xl.XPending(d) > 0) {
         var ev: XEvent = .{ .type = 0 };
         _ = xl.XNextEvent(d, &ev);
-        if (ev.type == property_notify) {
-            const bytes = std.mem.asBytes(&ev);
-            const atom = std.mem.readInt(
-                c_ulong,
-                bytes[atom_offset..][0..@sizeOf(c_ulong)],
-                .little,
-            );
-            if (atom == net_active and panelActive() == false) if (away) |a| a.func(a.ctx);
-            continue;
-        }
         if (ev.type != key_press) continue;
         const bytes = std.mem.asBytes(&ev);
         last_time = @truncate(
@@ -128,53 +97,17 @@ fn readable(_: ?*anyopaque) callconv(.c) void {
     }
 }
 
-/// Nanolight's own connection, opened once: its socket watched, and the
-/// root window's property changes (the active window) delivered to it.
-fn open(xl: X) ?*Display {
+/// Nanolight's own connection, opened once, its socket watched: a key
+/// grabbed on a connection nobody reads would never fire.
+fn open(xl: X) !*Display {
     if (dpy) |d| return d;
-    const d = xl.XOpenDisplay(null) orelse return null;
+    const d = xl.XOpenDisplay(null) orelse return error.NoDisplay;
+    watch = nanoui.fdwatch.readable(xl.XConnectionNumber(d), null, readable) catch |e| {
+        _ = xl.XCloseDisplay(d);
+        return e;
+    };
     dpy = d;
-    net_active = xl.XInternAtom(d, "_NET_ACTIVE_WINDOW", 0);
-    _ = xl.XSelectInput(d, xl.XDefaultRootWindow(d), property_change_mask);
-    watch = nanoui.fdwatch.readable(xl.XConnectionNumber(d), null, readable) catch null;
     return d;
-}
-
-/// Whether the window manager has the panel as its active window; null
-/// when that can't be known (no X, no panel window, a window manager
-/// without _NET_ACTIVE_WINDOW). GTK can't say while the hot key is held:
-/// the key's grab takes the keyboard's focus from it until it is let go.
-pub fn panelActive() ?bool {
-    const xl = x orelse return null;
-    const d = dpy orelse return null;
-    const f = panel orelse return null;
-    const ours = f();
-    if (ours == 0) return null;
-    var kind: c_ulong = 0;
-    var format: c_int = 0;
-    var n: c_ulong = 0;
-    var left: c_ulong = 0;
-    var data: ?[*]u8 = null;
-    // XA_WINDOW is 33.
-    if (xl.XGetWindowProperty(
-        d,
-        xl.XDefaultRootWindow(d),
-        net_active,
-        0,
-        1,
-        0,
-        33,
-        &kind,
-        &format,
-        &n,
-        &left,
-        &data,
-    ) != 0) return null;
-    defer _ = xl.XFree(data);
-    const bytes = data orelse return null;
-    if (n == 0 or format != 32) return null;
-    const active = std.mem.readInt(c_ulong, bytes[0..@sizeOf(c_ulong)], .little);
-    return active == ours;
 }
 
 /// The modifiers to grab Space with: a PC offers no other key (`keys.any_key`).
@@ -190,9 +123,9 @@ fn modifiers(choice: Choice) c_uint {
 
 pub fn register(choice: Choice, on: keys.Pressed) !void {
     pressed = on;
-    if (ungrabbable()) return error.Wayland;
+    if (!onX11()) return error.Wayland;
     const xl = load() orelse return error.NoX11;
-    const d = open(xl) orelse return error.NoDisplay;
+    const d = try open(xl);
     const root = xl.XDefaultRootWindow(d);
     const code: c_int = xl.XKeysymToKeycode(d, xk_space);
     // Caps Lock and Num Lock are modifiers too: grab with each.
@@ -220,11 +153,12 @@ pub fn register(choice: Choice, on: keys.Pressed) !void {
 /// Whether another client (the window manager: Alt Space is its window
 /// menu on many desktops) holds `choice`: grabbed and let go again.
 pub fn taken(choice: Choice) bool {
-    if (ungrabbable()) return false;
+    if (!onX11()) return false;
     const m = modifiers(choice);
     if (grabbed == m) return false;
     const xl = load() orelse return false;
-    const d = open(xl) orelse return false;
+    // No connection, no grab to test: `register` says why.
+    const d = open(xl) catch return false;
     const root = xl.XDefaultRootWindow(d);
     const code: c_int = xl.XKeysymToKeycode(d, xk_space);
     failed = false;

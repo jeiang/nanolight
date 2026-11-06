@@ -8,9 +8,7 @@
 //! It lives in the menu bar: no Dock icon, nothing drawn while idle.
 //! `zig build run`, or `zig build app` and open zig-out/Nanolight.app.
 const std = @import("std");
-const builtin = @import("builtin");
 const nanoui = @import("nanoui");
-const mac = builtin.os.tag == .macos;
 const apps = @import("apps.zig");
 const Index = apps.Index;
 const view = @import("view.zig");
@@ -22,17 +20,11 @@ const shortcut_clash = @import("shortcut_clash.zig");
 const Onboard = @import("onboard.zig").Onboard;
 const suggest = @import("suggest.zig");
 const convert = @import("convert.zig");
-/// The panel's window, the page in it and clicks through it: the Mac's own,
-/// or Windows' and Linux's (panel_pc.zig, pc_stubs.zig).
-const panel = if (mac) @import("panel_mac.zig") else @import("panel_pc.zig");
-const preview_mod = if (mac) @import("preview.zig") else @import("pc_stubs.zig");
-const Preview = preview_mod.Preview;
+/// This OS's panel window, page, click-through, recorder, single copy and
+/// login item, and what it can do (platform.zig).
+const platform = @import("platform.zig");
+const panel = platform.panel;
 const single = @import("single.zig");
-const ClickThrough = if (mac)
-    @import("clickthrough.zig").ClickThrough
-else
-    @import("pc_stubs.zig").ClickThrough;
-const Recorder = if (mac) @import("recorder.zig").Recorder else @import("pc_stubs.zig").Recorder;
 const account = @import("account.zig");
 const rc = @import("script_live.zig");
 const settings_mod = @import("settings.zig");
@@ -67,11 +59,11 @@ pub const Live = struct {
     kv: nanoui.kv.Store,
     choice: keys.Choice = .cmd_space,
     window: ?*nanoui.Window = null,
-    preview: Preview = .{},
+    preview: platform.Preview = .{},
     /// Clicks outside the panel go to what is under it (clickthrough.zig).
-    through: ClickThrough = .{},
+    through: platform.ClickThrough = .{},
     /// A key of one's own, being recorded in Settings (recorder.zig).
-    recorder: Recorder = .{},
+    recorder: platform.Recorder = .{},
     /// The words Google is to be asked about once typing pauses, and how
     /// many pauses are still being waited out (only the last one asks).
     asking: [suggest.max_len]u8 = undefined,
@@ -116,8 +108,8 @@ pub const Live = struct {
             .hide = hide,
             .resize = resize,
             .suggest = ask,
-            .files = if (mac) @import("files_live.zig").askFiles else null,
-            .preview = if (mac) showPage else null,
+            .files = if (platform.files) @import("files_live.zig").askFiles else null,
+            .preview = if (platform.preview) showPage else null,
             .settings = &bind.box,
             .command = runCommand,
             .rates = needRates,
@@ -130,7 +122,7 @@ pub const Live = struct {
             _ = nanoui.shell.openUrl(target);
         } else if (rc.isCommand(target)) {
             rc.start(l, target);
-        } else if (single.isSelf(target)) {
+        } else if (platform.Single.isSelf(target)) {
             // Nanolight is already open: the panel comes back, empty,
             // rather than macOS starting a second copy.
             l.s.query.clear();
@@ -369,7 +361,7 @@ pub const Live = struct {
     }
 
     /// Escape (the page gone, the panel with it) or ⌘↩ while the page has the keys.
-    fn pageKey(ctx: *anyopaque, key: preview_mod.Key) void {
+    fn pageKey(ctx: *anyopaque, key: @import("preview.zig").Key) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         switch (key) {
             .escape => {
@@ -420,7 +412,7 @@ pub const Live = struct {
     /// opening the app again shows the panel. The status item stays, only
     /// unseen (nanoui's App keeps its trays until it quits).
     pub fn menuBar(l: *Live, set: ?bool) bool {
-        if (comptime !mac) return false;
+        if (comptime !platform.tray) return false;
         const objc = nanoui.objc;
         const t = l.tray orelse return false;
         if (set) |on| {
@@ -432,8 +424,7 @@ pub const Live = struct {
 
     /// The menu bar icon's menu, with the update waiting, if one is.
     fn menu(l: *Live) void {
-        // No tray icon in nanoui on Windows and Linux yet: Settings has it all.
-        if (comptime !mac) return;
+        if (comptime !platform.tray) return;
         const t = l.tray orelse return;
         const ready = if (l.updater) |u| u.ready() else null;
         const label = if (ready) |v|
@@ -480,15 +471,16 @@ pub const Live = struct {
     pub fn restartForUpdate(l: *Live) void {
         const u = l.updater orelse return;
         const v = u.ready() orelse return;
+        const note = !platform.native_autorestart;
         // A failure is logged; without the note the new copy only skips "Updated to".
-        if (!mac) _ = prefs.setText(l.kv, .updated, v);
-        if (u.restart()) l.app.quit() else if (!mac) prefs.remove(l.kv, .updated);
+        if (note) _ = prefs.setText(l.kv, .updated, v);
+        if (u.restart()) l.app.quit() else if (note) prefs.remove(l.kv, .updated);
     }
 
     fn updated(ctx: *anyopaque) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         menu(l);
-        if (!mac) @import("update_pc.zig").away(l);
+        if (!platform.native_autorestart) @import("update_pc.zig").away(l);
     }
 
     /// The panel became, or stopped being, the key window (it hides as it
@@ -501,10 +493,8 @@ pub const Live = struct {
         l.s.hid(account.now());
         l.through.stop();
         l.s.note = "";
-        // The Mac's popover hides itself; elsewhere the panel goes as
-        // another window takes the keys.
-        if (!mac and w.isVisible()) w.hide();
-        if (!mac) @import("update_pc.zig").away(l);
+        panel.lostKeys(w);
+        if (!platform.native_autorestart) @import("update_pc.zig").away(l);
     }
 
     pub fn hide(ctx: *anyopaque) void {
@@ -525,7 +515,7 @@ pub const Live = struct {
     fn toggle(ctx: *anyopaque) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         const w = l.window orelse return;
-        const showing = w.isVisible() and panel.focused(w);
+        const showing = panel.showing(w);
         l.o.pressed(showing);
         if (showing) {
             l.s.hid(account.now());
@@ -617,7 +607,7 @@ pub const Live = struct {
 
     /// Open at login (login.zig).
     pub fn login(_: *anyopaque, set: ?bool) bool {
-        return @import("login.zig").login(set);
+        return platform.Login.enabled(set);
     }
 
     /// `nanolight --toggle`, or a newer copy starting (single.zig).
@@ -723,16 +713,12 @@ const RatesAsk = struct {
 /// This platform's file in each release.
 const asset = @import("build_options").asset;
 const version = @import("build_options").version;
-extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
 pub fn main(init: std.process.Init) !void {
     var arena: std.heap.ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
     if (try answeredArgs(init, try init.minimal.args.toSlice(arena.allocator()))) return;
-    // Linux: GTK 3, where a window can be put somewhere (GTK 4 lets only
-    // the compositor place one), unless the user asked for another.
-    if (builtin.os.tag == .linux and
-        std.c.getenv("NANOUI_GTK") == null) _ = setenv("NANOUI_GTK", "3", 0);
+    panel.prepare();
     const app = try nanoui.App.create(
         init,
         .{ .name = "Nanolight", .quit_on_last_window_closed = false },
@@ -782,12 +768,20 @@ pub fn main(init: std.process.Init) !void {
     s.rebuild();
     var options: nanoui.WindowOptions = .{
         .title = "Nanolight",
+        .width = view.width,
+        .height = s.height(),
         .resizable = false,
         .visible = false,
         .on_key = .{ .ctx = &live, .func = Live.keyChanged },
         .content = .{ .view = .init(&s, Nanolight.view) },
     };
-    panel.adjust(&options, app.flags.hidden, s.height());
+    panel.adjust(&options);
+    // Headless (snapshots): the panel alone; `setup`, which leaves room
+    // round it, never runs.
+    if (app.flags.hidden) {
+        options.width = view.width;
+        options.height = s.height();
+    }
     live.window = try app.newWindow(options);
     if (app.flags.hidden) return app.run();
     try runShown(init, &live, loaded);
@@ -805,7 +799,7 @@ fn answeredArgs(init: std.process.Init, args: []const [:0]const u8) !bool {
             try w.interface.flush();
             return true;
         }
-        if (std.mem.eql(u8, arg, "--toggle")) return single.send(.toggle);
+        if (std.mem.eql(u8, arg, "--toggle")) return platform.Single.send(.toggle);
     }
     return false;
 }
@@ -846,18 +840,21 @@ fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
     if (clip_dir != null) clipboard_live.init(live, &clip_store);
     defer clipboard_live.deinit(live);
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
-    if (single.claim(.{ .ctx = live, .func = Live.command }) > 0) std.log.info(
+    if (platform.Single.claim(.{ .ctx = live, .func = Live.command }) > 0) std.log.info(
         "nanolight: asked an older copy to quit",
         .{},
     );
-    panel.setup(app, live.window.?, s, if (o.active) o.height() else s.height());
+    panel.setup(live.window.?, s);
+    panel.resize(live.window.?, if (o.active) o.height() else s.height());
     live.useKey(live.choice);
     live.through = .{ .window = live.window, .height = &s.last_h };
     live.preview.watch(.{ .ctx = live, .func = Live.pageKey });
     o.hooks = live.hooks();
     // The first run: the welcome, in the panel.
     if (!prefs.has(kv, .onboarded)) o.start(live.choice);
-    if (mac) live.tray = try app.newTray(.{ .symbol = "magnifyingglass", .tooltip = "Nanolight" });
+    if (platform.tray) live.tray = try app.newTray(
+        .{ .symbol = "magnifyingglass", .tooltip = "Nanolight" },
+    );
     // The menu bar icon, unless Settings took it away.
     if (!prefs.flag(kv, init.gpa, .menu_bar)) _ = live.menuBar(false);
     const updater = startUpdater(init, live);

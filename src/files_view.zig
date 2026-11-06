@@ -6,6 +6,7 @@ const Nanolight = @import("view.zig").Nanolight;
 const Palette = @import("palette.zig").Palette;
 const Row = @import("results.zig").Row;
 const Anchor = @import("anchor.zig").Anchor;
+const platform = @import("platform.zig");
 
 pub fn takeFile(s: *Nanolight, i: usize) void {
     const e = &s.found.entries[i];
@@ -76,7 +77,7 @@ pub fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
 /// Retain matching rows while the worker answers the new query.
 pub fn rebuild(s: *Nanolight) void {
     const q = std.mem.trim(u8, s.query.text(), " \t\r\n");
-    if (@import("builtin").os.tag == .macos and s.files_on and
+    if (platform.files and s.files_on and
         (files.isPath(q) or (files.eligible(q) and @import("calc.zig").eval(q) == null)))
     {
         s.found.filter(q);

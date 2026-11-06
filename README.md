@@ -245,7 +245,8 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/convert.zig` | Unit and currency conversion: the parser, unit table, rates table and when to refetch it |
 | `src/suggest.zig` | Google's completions: the privacy guard, decoding, the cache (after [browse](https://github.com/justrach/browse)) |
 | `src/preview.zig` | The results page in the panel (WKWebView, the Mac) |
-| `src/panel_mac.zig`, `src/panel_pc.zig` | The panel's window on the Mac, and on Windows and Linux |
+| `src/platform.zig` | Each OS's parts, picked once, and what it can do; `src/pc_stubs.zig` stands in for the Mac's, checked against them |
+| `src/panel_mac.zig`, `src/panel_pc.zig` | The panel's window on the Mac, and on Windows and Linux (with X11's focus) |
 | `src/hotkey*.zig`, `src/apps_*.zig`, `src/single*.zig`, `src/login.zig` | Each platform's key, apps, single copy and login item |
 | `src/account.zig`, `src/account_menu.zig` | The sync client: `[sync]`, the PUT and merge, the status line |
 | `src/server.zig`, `src/settings.zig` | `nanolight-server`: the protocol as a pure function, tokens, atomic records; and the record both sides merge |

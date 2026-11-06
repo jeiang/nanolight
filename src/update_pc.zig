@@ -5,7 +5,6 @@
 //! copy finds prefs' `.updated` and starts quietly, the panel saying
 //! "Updated to x" the next time it opens.
 const std = @import("std");
-const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const main = @import("main.zig");
 
@@ -14,7 +13,6 @@ var waits: u32 = 0;
 
 /// The panel went away, or an update became ready: ask again in 10 s.
 pub fn away(l: *main.Live) void {
-    if (builtin.os.tag == .macos) return;
     const u = l.updater orelse return;
     if (u.ready() == null) return;
     waits += 1;

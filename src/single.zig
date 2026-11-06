@@ -2,37 +2,15 @@
 //! starts while an older one runs asks it to quit (`claim`): the newest
 //! launch is the newest code (an update, a reinstall). `nanolight --toggle`
 //! asks the running one to show or hide its panel (`send`), for Wayland,
-//! where the desktop's shortcut settings must run it.
+//! where the desktop's shortcut settings must run it. `isSelf` says
+//! whether an app is Nanolight.
 //!
-//! Mac: NSRunningApplication (single_mac.zig); there the panel also knows
-//! its own row (`isSelf`). Windows: a message window (win_msg.zig). Linux:
-//! a socket in $XDG_RUNTIME_DIR (single_unix.zig).
-const builtin = @import("builtin");
+//! Each OS's (platform.zig's `Single`): Mac: NSRunningApplication
+//! (single_mac.zig). Windows: a message window (single_win.zig). Linux: a
+//! socket in $XDG_RUNTIME_DIR (single_unix.zig).
 
 pub const Command = enum { toggle, quit };
 pub const Listener = struct {
     ctx: *anyopaque,
     func: *const fn (ctx: *anyopaque, cmd: Command) void,
 };
-
-const impl = switch (builtin.os.tag) {
-    .macos => @import("single_mac.zig"),
-    .windows => @import("single_win.zig"),
-    else => @import("single_unix.zig"),
-};
-
-/// Whether the app at `path` is Nanolight (any copy of it).
-pub fn isSelf(path: []const u8) bool {
-    return if (@hasDecl(impl, "isSelf")) impl.isSelf(path) else false;
-}
-
-/// Asks older copies to quit and listens for commands. Returns how many
-/// copies were asked.
-pub fn claim(on: Listener) usize {
-    return impl.claim(on);
-}
-
-/// Sends `cmd` to the running copy; false when none answered.
-pub fn send(cmd: Command) bool {
-    return impl.send(cmd);
-}

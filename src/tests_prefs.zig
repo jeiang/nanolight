@@ -8,7 +8,7 @@ const settings_view = @import("settings_view.zig");
 const support = @import("test_support.zig");
 const Rig = support.Rig;
 const suggest = @import("suggest.zig");
-const mac = @import("builtin").os.tag == .macos;
+const platform = @import("platform.zig");
 const placeholder = "Search apps, do math, search the web…";
 
 /// Where the field's placeholder is in the first frame after the panel
@@ -77,7 +77,7 @@ test "searches can open in the browser, ⌘↩ showing them in the panel (issue 
 }
 
 test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" {
-    if (!mac) return error.SkipZigTest;
+    if (!platform.tray or !platform.preview) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var prefs: support.Prefs = .{};
     prefs.init();
@@ -128,7 +128,7 @@ test "Settings' Open at Login flips what the system says, not a copy" {
 }
 
 test "recording a key: idle, recording, refused, and never without a recorder" {
-    if (!mac) return error.SkipZigTest;
+    if (!platform.record) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var prefs: support.Prefs = .{};
     prefs.init();
@@ -199,7 +199,7 @@ test "Settings' header picks the panel's theme, and keeps it" {
 }
 
 test "System Settings' panes open from the panel, which stays in its window (#12)" {
-    if (!mac) return error.SkipZigTest;
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var web: support.Web = .{};
     var rig: Rig = undefined;

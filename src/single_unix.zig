@@ -44,6 +44,12 @@ pub fn send(cmd: single.Command) bool {
     return write(cmd);
 }
 
+/// Never: opening Nanolight's own row starts a new copy, which takes
+/// over (`claim`).
+pub fn isSelf(_: []const u8) bool {
+    return false;
+}
+
 pub fn claim(on: single.Listener) usize {
     listener = on;
     var n: usize = 0;

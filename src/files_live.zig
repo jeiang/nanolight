@@ -5,11 +5,11 @@ const files = @import("files.zig");
 const prefs = @import("prefs.zig");
 const suggest = @import("suggest.zig");
 const Live = @import("main.zig").Live;
-const mac = @import("builtin").os.tag == .macos;
+const platform = @import("platform.zig");
 
 /// File lookups share the suggestions' pause and keep at most one worker.
 pub fn askFiles(ctx: *anyopaque, q: []const u8) void {
-    if (!mac or q.len >= files.max_path) return;
+    if (q.len >= files.max_path) return;
     const l: *Live = @ptrCast(@alignCast(ctx));
     @memcpy(l.files.query[0..q.len], q);
     l.files.len = q.len;
@@ -25,7 +25,6 @@ pub fn askFiles(ctx: *anyopaque, q: []const u8) void {
 }
 
 fn sendFiles(l: *Live) void {
-    if (!mac) return;
     if (!l.s.files_on) return;
     // One search at a time, sent once the typing pauses, and once per query.
     if (l.files.busy) return;
@@ -112,5 +111,5 @@ pub const State = struct {
 
 pub fn load(l: *Live) void {
     // File search is local to this Mac and off unless explicitly enabled.
-    if (mac) l.s.files_on = prefs.flag(l.kv, l.app.gpa, .files);
+    if (platform.files) l.s.files_on = prefs.flag(l.kv, l.app.gpa, .files);
 }

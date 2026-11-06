@@ -15,6 +15,7 @@ const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Choice = key_choice.Choice;
 const Palette = panel.Palette;
 const mac = @import("builtin").os.tag == .macos;
+const platform = @import("platform.zig");
 /// A Nix build: the Nix modules own startup and updates.
 const nix = @import("build_options").nix_managed;
 
@@ -98,7 +99,9 @@ const Toggle = enum {
 /// the one rule for the keyboard's order and the drawing.
 fn present(kind: RowKind, clip: bool) bool {
     return switch (kind) {
-        .files, .browser, .menu_bar => mac,
+        .files => platform.files,
+        .browser => platform.preview,
+        .menu_bar => platform.tray,
         .login, .updates => !nix,
         .clipboard, .clear_clipboard => clip,
         .choice, .suggest, .welcome, .quit, .theme => true,

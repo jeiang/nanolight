@@ -11,21 +11,28 @@ const view = @import("view.zig");
 /// The system's glass under the panel, which the window's views keep.
 var glass: ?objc.Object = null;
 
-pub fn adjust(o: *nanoui.WindowOptions, hidden: bool, h: f32) void {
-    o.width = if (hidden) view.width else view.width + 2 * view.shadow_margin;
-    o.height = if (hidden) h else view.max_height + 2 * view.shadow_margin;
+/// Before the app: nothing on the Mac.
+pub fn prepare() void {}
+
+/// The window, from the panel's size: a shadow's margin bigger, as tall as
+/// the panel can be.
+pub fn adjust(o: *nanoui.WindowOptions) void {
+    o.width = view.width + 2 * view.shadow_margin;
+    o.height = view.max_height + 2 * view.shadow_margin;
     o.title_bar = .popover;
 }
 
-pub fn setup(app: *nanoui.App, w: *nanoui.Window, s: *view.Nanolight, h: f32) void {
+/// The glass goes to the panel's height at the first `resize`.
+pub fn setup(w: *nanoui.Window, s: *view.Nanolight) void {
     // A menu bar app: no Dock icon, no menu bar of its own.
-    _ = objc.msg(objc.BOOL, app.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 1)});
+    const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    _ = objc.msg(objc.BOOL, app, "setActivationPolicy:", .{@as(objc.NSInteger, 1)});
     // The panel's own shadow, not the system's: a shadowed window in dark
     // mode gets a hard black outline round its pixels.
     s.margin = view.shadow_margin;
     s.window_fades = true;
     objc.msg(void, w.nswindow, "setHasShadow:", .{objc.NO});
-    glass = backdrop(w, 18, h);
+    glass = backdrop(w, 18);
 }
 
 /// A fifth of the way down the main screen, centered.
@@ -53,10 +60,13 @@ pub fn resize(_: *nanoui.Window, h: f32) void {
     objc.msg(void, g, "setFrame:", .{glassFrame(h)});
 }
 
-/// Whether the panel has the keys.
-pub fn focused(w: *nanoui.Window) bool {
-    return w.isFocused();
+/// Whether the panel shows and has the keys.
+pub fn showing(w: *nanoui.Window) bool {
+    return w.isVisible() and w.isFocused();
 }
+
+/// The panel lost the keys: the popover hides itself.
+pub fn lostKeys(_: *nanoui.Window) void {}
 
 /// After `show`: the window fades in, the system's glass and the panel
 /// together. The panel's entrance couldn't be drawn over that glass (it
@@ -89,10 +99,10 @@ pub fn shown(w: *nanoui.Window) void {
 const fade_s: f64 = 0.12;
 
 /// Puts the system's vibrancy under the panel (NSVisualEffectView, as
-/// launchers use), `height` tall, the shadow's margin in. Not
-/// NSGlassEffectView: on macOS 27 it draws an opaque 1-pixel black line
-/// just outside its sides, which read as black edges round the panel.
-fn backdrop(w: *nanoui.Window, radius: f64, height: f32) ?objc.Object {
+/// launchers use), the shadow's margin in. Not NSGlassEffectView: on
+/// macOS 27 it draws an opaque 1-pixel black line just outside its sides,
+/// which read as black edges round the panel.
+fn backdrop(w: *nanoui.Window, radius: f64) ?objc.Object {
     const surface = w.surface orelse return null;
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -112,7 +122,6 @@ fn backdrop(w: *nanoui.Window, radius: f64, height: f32) ?objc.Object {
     objc.release(v);
     // In a flipped host view, from the top; the window never resizes.
     objc.msg(void, v, "setAutoresizingMask:", .{@as(objc.NSUInteger, 0)});
-    objc.msg(void, v, "setFrame:", .{glassFrame(height)});
     return v;
 }
 

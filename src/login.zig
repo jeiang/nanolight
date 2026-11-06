@@ -1,24 +1,16 @@
-//! Opening at login. Mac: the system's login items (SMAppService, macOS 13
-//! and later), which need the app to run from its bundle. Windows: a value
-//! under HKCU's Run key. Linux: an XDG autostart entry
-//! (~/.config/autostart/nanolight.desktop). `set` null only asks.
+//! Opening at login, each OS's (platform.zig's `Login`). Mac: the system's
+//! login items (SMAppService, macOS 13 and later), which need the app to
+//! run from its bundle. Windows: a value under HKCU's Run key. Linux: an
+//! XDG autostart entry (~/.config/autostart/nanolight.desktop). `enabled`
+//! says whether it opens at login; `set` changes it first.
 const std = @import("std");
-const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 
-pub fn login(set: ?bool) bool {
-    return switch (builtin.os.tag) {
-        .macos => Mac.login(set),
-        .windows => Windows.login(set),
-        else => Linux.login(set),
-    };
-}
-
-const Mac = struct {
+pub const Mac = struct {
     const objc = nanoui.objc;
     extern "c" fn objc_getClass(name: [*:0]const u8) ?objc.Class;
 
-    fn login(set: ?bool) bool {
+    pub fn enabled(set: ?bool) bool {
         const cls = objc_getClass("SMAppService") orelse return false;
         const svc = objc.msg(objc.Object, cls, "mainAppService", .{});
         if (set) |on| _ = objc.msg(
@@ -31,7 +23,7 @@ const Mac = struct {
     }
 };
 
-const Windows = struct {
+pub const Windows = struct {
     const L = std.unicode.utf8ToUtf16LeStringLiteral;
     const hkcu: *anyopaque = @ptrFromInt(0x80000001);
     const run_key = L("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
@@ -66,7 +58,7 @@ const Windows = struct {
         size: u32,
     ) callconv(.winapi) u32;
 
-    fn login(set: ?bool) bool {
+    pub fn enabled(set: ?bool) bool {
         if (set) |on| {
             if (on) {
                 // "C:\...\nanolight.exe", quoted for the spaces in paths.
@@ -83,7 +75,7 @@ const Windows = struct {
     }
 };
 
-const Linux = struct {
+pub const Linux = struct {
     fn io() std.Io {
         return std.Io.Threaded.global_single_threaded.io();
     }
@@ -102,7 +94,7 @@ const Linux = struct {
         ) catch null;
     }
 
-    fn login(set: ?bool) bool {
+    pub fn enabled(set: ?bool) bool {
         var buf: [1024]u8 = undefined;
         const path = entryPath(&buf) orelse return false;
         const cwd = std.Io.Dir.cwd();
