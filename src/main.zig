@@ -167,7 +167,11 @@ pub const Live = struct {
         const ix = l.s.index;
         var list: std.ArrayList(settings_mod.Launch) = .empty;
         for (ix.apps.items) |a| if (a.launches > 0) {
-            const one: settings_mod.Launch = .{ .name = a.name, .path = a.path, .count = a.launches };
+            const one: settings_mod.Launch = .{
+                .name = a.name,
+                .path = a.path,
+                .count = a.launches,
+            };
             list.append(arena, one) catch break;
         };
         var at: i64 = 0;
