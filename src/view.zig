@@ -423,7 +423,7 @@ pub const Nanolight = struct {
         s.res.build(s.query.text(), s.index, sug[0..ns], s.web.slices(&web), s.quicklinks);
     }
 
-    fn ratesTable(s: *const Nanolight) ?*const convert.Rates {
+    pub fn ratesTable(s: *const Nanolight) ?*const convert.Rates {
         return if (s.feed) |f| f.table() else null;
     }
 

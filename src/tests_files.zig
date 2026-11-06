@@ -359,3 +359,54 @@ test "the selection stays on its row as files and completions land in any order"
     s.answered("report", &web);
     try t.expectEqual(@as(usize, 0), s.sel);
 }
+
+/// A host that searches files: what it was asked, and how often.
+const FileAsks = struct {
+    last: [64]u8 = undefined,
+    last_len: usize = 0,
+    count: usize = 0,
+
+    fn host(a: *FileAsks) view.Host {
+        return .{ .ctx = a, .open = open, .hide = hide, .files = ask };
+    }
+    fn open(_: *anyopaque, _: []const u8) void {}
+    fn hide(_: *anyopaque) void {}
+    fn ask(ctx: *anyopaque, q: []const u8) void {
+        const a: *FileAsks = @ptrCast(@alignCast(ctx));
+        @memcpy(a.last[0..q.len], q);
+        a.last_len = q.len;
+        a.count += 1;
+    }
+};
+
+test "a query the answer card takes is not searched for as a file" {
+    if (!@import("platform.zig").files) return error.SkipZigTest;
+    const t = std.testing;
+    var rig: Rig = undefined;
+    rig.init(t.allocator);
+    defer rig.deinit();
+    var asks: FileAsks = .{};
+    const s = &rig.s;
+    s.host = asks.host();
+    s.files_on = true;
+    // Math typed so far, and conversions: the card shows, no search starts.
+    const cards = [_][]const u8{
+        "2 + 3",
+        "2 + 3 *",
+        "10 km to mi",
+        "10 km to mi *",
+        "100 usd to ttd",
+    };
+    for (cards) |q| {
+        s.query.set(q);
+        s.rebuild();
+        try t.expectEqual(results.Kind.calc, s.res.rows[0].kind);
+        try t.expectEqual(@as(usize, 0), asks.count);
+    }
+    // Words are searched for.
+    s.query.set("10 km report");
+    s.rebuild();
+    try t.expect(s.res.n == 0 or s.res.rows[0].kind != .calc);
+    try t.expectEqual(@as(usize, 1), asks.count);
+    try t.expectEqualStrings("10 km report", asks.last[0..asks.last_len]);
+}

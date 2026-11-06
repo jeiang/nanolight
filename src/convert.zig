@@ -212,7 +212,7 @@ fn code(word: []const u8, buf: *[3]u8) ?[]const u8 {
     return buf;
 }
 
-pub const Parsed = struct {
+const Parsed = struct {
     amount: f64,
     from: []const u8,
     to: []const u8,
@@ -224,7 +224,7 @@ pub const Parsed = struct {
 /// followed by operators on the converted value: "12 ttd to usd * 12". The
 /// amount is any math (`calc.lead`): "3 * 10 km", "(2 + 3) km", "1,500 m".
 /// Whether the names mean anything, and the operators, is for `answer`.
-pub fn parse(query: []const u8) ?Parsed {
+fn parse(query: []const u8) ?Parsed {
     var s = std.mem.trim(u8, query, " \t");
     var from: []const u8 = "";
     for (symbols) |sym| if (std.mem.startsWith(u8, s, sym.sym)) {
@@ -265,8 +265,7 @@ fn opsStart(s: []const u8) usize {
     for (s, 0..) |ch, i| {
         const in_unit = ch == '/' and i > 0 and i + 1 < s.len and
             std.ascii.isAlphabetic(s[i - 1]) and std.ascii.isAlphabetic(s[i + 1]);
-        if (std.mem.indexOfScalar(u8, "*/+-%^", ch) != null and !in_unit) return i;
-        for ([_][]const u8{ "×", "÷", "−" }) |op| if (std.mem.startsWith(u8, s[i..], op)) return i;
+        if (calc.opLen(s[i..]) > 0 and !in_unit) return i;
     }
     return s.len;
 }
@@ -404,26 +403,7 @@ fn fixed(buf: []u8, v: f64, decimals: usize, grouped: bool) []const u8 {
     var tmp: [64]u8 = undefined;
     const s = std.fmt.bufPrint(&tmp, "{d:.[1]}", .{ v, decimals }) catch return "";
     if (!grouped) return std.fmt.bufPrint(buf, "{s}", .{s}) catch "";
-    const neg = s[0] == '-';
-    const body = s[@intFromBool(neg)..];
-    const int_end = std.mem.indexOfScalar(u8, body, '.') orelse body.len;
-    var o: usize = 0;
-    if (o + 1 > buf.len) return "";
-    if (neg) {
-        buf[o] = '-';
-        o += 1;
-    }
-    for (body, 0..) |ch, i| {
-        const comma = i < int_end and i > 0 and (int_end - i) % 3 == 0;
-        if (o + 1 + @intFromBool(comma) > buf.len) return "";
-        if (comma) {
-            buf[o] = ',';
-            o += 1;
-        }
-        buf[o] = ch;
-        o += 1;
-    }
-    return buf[0..o];
+    return calc.group(buf, s);
 }
 
 /// A converted amount of money: two places, more for a tiny one.

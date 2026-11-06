@@ -6,7 +6,8 @@ const paths = @import("paths.zig");
 const spotlight = @import("spotlight.zig");
 const Nanolight = @import("view.zig").Nanolight;
 const Palette = @import("palette.zig").Palette;
-const Row = @import("results.zig").Row;
+const results = @import("results.zig");
+const Row = results.Row;
 const Anchor = @import("anchor.zig").Anchor;
 const platform = @import("platform.zig");
 const chrome = @import("chrome.zig");
@@ -47,11 +48,12 @@ pub fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
     chrome.tile(c, p, if (e.folder) "folder" else "doc");
 }
 
-/// Retain matching rows while the worker answers the new query.
+/// Retain matching rows while the worker answers the new query. A query
+/// the answer card takes is not searched for.
 pub fn rebuild(s: *Nanolight) void {
     const q = std.mem.trim(u8, s.query.text(), " \t\r\n");
     if (platform.files and s.files_on and
-        (paths.isPath(q) or (spotlight.eligible(q) and @import("calc.zig").eval(q) == null)))
+        (paths.isPath(q) or (spotlight.eligible(q) and !results.isMath(q, s.ratesTable()))))
     {
         s.found.filter(q);
         if (s.host) |host| if (host.files) |ask| ask.func(ask.ctx, q);
