@@ -51,7 +51,7 @@ pub fn start(l: *Live, target: []const u8) void {
         break;
     };
     l.s.query.clear();
-    l.scripts.start(target, title, png);
+    l.scripts.start(.{ .path = target, .title = title, .icon = png });
 }
 
 fn live(ctx: *anyopaque) *Live {

@@ -22,6 +22,18 @@ pub const Hooks = struct {
 };
 
 const max_out = 256 * 1024;
+/// A script this size or larger isn't read, so it isn't run: its header,
+/// which may ask to confirm or for arguments, would go unread.
+const max_script_bytes = 1 << 20;
+
+/// The row a script is opened from.
+pub const Row = struct {
+    /// `script:<file>`.
+    path: []const u8,
+    title: []const u8,
+    /// Its PNG, for the header.
+    icon: ?[]const u8 = null,
+};
 
 fn io() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
@@ -58,21 +70,27 @@ pub const Runner = struct {
     fn drop(r: *Runner) void {
         if (r.arena) |*a| a.deinit();
         r.arena = null;
+        r.file = "";
+        r.bytes = "";
+        r.meta = .{};
+        r.title = "";
     }
 
-    /// Opens a row's script (`script:<file>`).
-    pub fn start(r: *Runner, path: []const u8, title: []const u8, icon: ?[]const u8) void {
+    /// Opens a row's script.
+    pub fn start(r: *Runner, row: Row) void {
         r.stop();
         r.drop();
         r.arena = .init(r.gpa);
         const a = r.arena.?.allocator();
-        r.file = a.dupe(u8, path[sc.prefix.len..]) catch return;
-        r.title = a.dupe(u8, title) catch return;
-        r.bytes = std.Io.Dir.cwd().readFileAlloc(io(), r.file, a, .limited(1 << 20)) catch "";
-        r.meta = sc.parse(a, r.bytes) orelse .{ .title = r.title };
+        r.file = a.dupe(u8, row.path[sc.prefix.len..]) catch return;
+        r.title = a.dupe(u8, row.title) catch return;
         for (&r.args) |*x| x.clearRetainingCapacity();
-        r.ext.start(r.title, icon, .{ .ctx = r, .func = said });
+        r.ext.start(r.title, row.icon, .{ .ctx = r, .func = said });
         r.shown = true;
+        const limit: std.Io.Limit = .limited(max_script_bytes);
+        r.bytes = std.Io.Dir.cwd().readFileAlloc(io(), r.file, a, limit) catch
+            return r.fail("Couldn't read the script.");
+        r.meta = sc.parse(a, r.bytes) orelse .{ .title = r.title };
         if (r.meta.argCount() > 0 or r.meta.confirm) return r.ask();
         r.run();
     }
@@ -275,3 +293,49 @@ pub const Runner = struct {
         }
     }
 };
+
+fn ignore(_: *anyopaque) void {}
+fn ignoreText(_: *anyopaque, _: []const u8) void {}
+
+test "a script too big to read isn't run, since its header could ask first" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    const header = "#!/bin/sh\n# @raycast.schemaVersion 1\n# @raycast.title Wipe\n" ++
+        "# @raycast.needsConfirmation true\n";
+    try tmp.dir.writeFile(t.io, .{ .sub_path = "wipe.sh", .data = header ++ "echo wiped\n" });
+    // The same header, padded with comments to the limit.
+    const big = try t.allocator.alloc(u8, max_script_bytes);
+    defer t.allocator.free(big);
+    @memset(big, '#');
+    @memcpy(big[0..header.len], header);
+    big[big.len - 1] = '\n';
+    try tmp.dir.writeFile(t.io, .{ .sub_path = "big.sh", .data = big });
+
+    var ext: Ext = .{ .gpa = t.allocator };
+    defer ext.deinit();
+    var probe: u8 = 0;
+    var r: Runner = .{ .gpa = t.allocator, .io = t.io, .ext = &ext, .hooks = .{
+        .ctx = &probe,
+        .hide = ignore,
+        .redraw = ignore,
+        .copy = ignoreText,
+        .footer = ignoreText,
+    } };
+    defer r.deinit();
+    var buf: [128]u8 = undefined;
+    const dir = try std.fmt.bufPrint(&buf, "{s}.zig-cache/tmp/{s}/", .{ sc.prefix, tmp.sub_path });
+    var path_buf: [160]u8 = undefined;
+
+    // Read whole, it asks before it runs.
+    const small = try std.fmt.bufPrint(&path_buf, "{s}wipe.sh", .{dir});
+    r.start(.{ .path = small, .title = "Wipe" });
+    try t.expect(ext.open and r.child == null);
+    try t.expect(std.mem.indexOf(u8, ext.view.?.markdown.?, "Run Wipe?") != null);
+
+    // Unread, it says so and doesn't run.
+    r.start(.{ .path = try std.fmt.bufPrint(&path_buf, "{s}big.sh", .{dir}), .title = "Wipe" });
+    try t.expect(ext.open and r.child == null);
+    try t.expectEqualStrings("Couldn't read the script.", ext.note_buf[0..ext.note_len]);
+    try t.expect(std.mem.indexOf(u8, ext.view.?.markdown.?, "Couldn't read") != null);
+}
