@@ -7,7 +7,7 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const Index = @import("apps.zig").Index;
 const view = @import("view.zig");
-const shortcut = @import("shortcut.zig");
+const Choice = @import("keys.zig").Choice;
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 
 /// A panel over its own index, drawn by a Tester once mounted. Pinned: the
@@ -175,8 +175,8 @@ pub const Web = struct {
 /// A host that records what Settings asked it to do.
 pub const Prefs = struct {
     probe: Probe = .{},
-    key: shortcut.Choice = .cmd_space,
-    applied: ?shortcut.Choice = null,
+    key: Choice = .cmd_space,
+    applied: ?Choice = null,
     recording: bool = false,
     /// Whether the recorder can start (an event monitor the system refused).
     can_record: bool = true,
@@ -226,10 +226,10 @@ pub const Prefs = struct {
     fn hide(ctx: *anyopaque) void {
         Probe.hide(&@as(*Prefs, @ptrCast(@alignCast(ctx))).probe);
     }
-    fn choice(ctx: *anyopaque) shortcut.Choice {
+    fn choice(ctx: *anyopaque) Choice {
         return @as(*Prefs, @ptrCast(@alignCast(ctx))).key;
     }
-    fn apply(ctx: *anyopaque, c: shortcut.Choice) void {
+    fn apply(ctx: *anyopaque, c: Choice) void {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
         p.applied = c;
         p.key = c;

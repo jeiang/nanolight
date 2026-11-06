@@ -12,10 +12,12 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const motion = ui.motion;
 const panel = @import("view.zig");
+const keys = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
+const shortcut_clash = @import("shortcut_clash.zig");
 const results = @import("results.zig");
 const mac = @import("builtin").os.tag == .macos;
-const Choice = shortcut.Choice;
+const Choice = keys.Choice;
 const Palette = panel.Palette;
 
 pub const Step = enum { key, try_it, done };
@@ -26,7 +28,7 @@ pub const Hooks = struct {
     /// Uses `choice` from now on (registers it, keeps it).
     apply: *const fn (ctx: *anyopaque, choice: Choice) void,
     /// Frees the shortcut: Keyboard Shortcuts opened, a launcher quit.
-    fix: *const fn (ctx: *anyopaque, clash: shortcut.Clash) void,
+    fix: *const fn (ctx: *anyopaque, clash: shortcut_clash.Clash) void,
     /// Whether it opens at login; `set` changes it first.
     login: ?*const fn (ctx: *anyopaque, set: ?bool) bool = null,
     /// The welcome is over: keep that.
@@ -54,9 +56,8 @@ pub const Onboard = struct {
     /// different choice is applied (applying syncs it, over another Mac's).
     kept: Choice = .cmd_space,
     hooks: ?Hooks = null,
-    system_buf: [96]shortcut.SystemKey = undefined,
-    system: []const shortcut.SystemKey = &.{},
-    others: shortcut.Others = .{},
+    system_buf: [96]shortcut_clash.SystemKey = undefined,
+    holders: shortcut_clash.Holders = .{},
     /// Step 2: the shortcut closed the panel, then opened it again.
     closed: bool = false,
     reopened: bool = false,
@@ -80,13 +81,12 @@ pub const Onboard = struct {
     pub fn refresh(o: *Onboard) void {
         // Without hooks (tests) what the caller set is kept.
         const h = o.hooks orelse return;
-        o.system = shortcut.systemKeys(&o.system_buf);
-        o.others = shortcut.runningLaunchers();
+        o.holders = shortcut_clash.look(&o.system_buf);
         if (h.login) |f| o.login = f(h.ctx, null);
     }
 
-    pub fn clash(o: *const Onboard) shortcut.Clash {
-        return shortcut.clash(o.choice, o.system, &o.others);
+    pub fn clash(o: *const Onboard) shortcut_clash.Clash {
+        return shortcut_clash.clash(o.choice, &o.holders);
     }
 
     /// The hot key fired, the panel `visible` before it: step 2's presses.
@@ -185,7 +185,7 @@ pub const Onboard = struct {
                 if (b.clicked()) o.choice = ch;
                 ui.text(
                     c,
-                    c.print("{f}", .{ch}),
+                    c.print("{f}", .{shortcut.text(ch)}),
                     .{
                         .size = 14,
                         .weight = if (on) .semibold else .medium,
@@ -208,7 +208,7 @@ pub const Onboard = struct {
     /// Who else answers the keys, by name, and the one thing that frees them.
     fn status(o: *Onboard, c: *ui.Context, p: Palette) void {
         const cl = o.clash();
-        const keys = c.print("{f}", .{o.choice});
+        const keys_text = c.print("{f}", .{shortcut.text(o.choice)});
         const ok = c.theme.success;
         const warn: ui.Color = if (c.theme.dark) .hex(0xe0a33a) else .hex(0xb26b00);
         const box = ui.div(c).column().wFull().gap(8).p(12).rounded(10)
@@ -221,7 +221,7 @@ pub const Onboard = struct {
                 c,
                 .{ .size = 13, .weight = .medium, .color = p.text },
                 "{s} is free on this {s}.",
-                .{ keys, results.machine },
+                .{ keys_text, results.machine },
             );
             line.end();
             return;
@@ -232,14 +232,18 @@ pub const Onboard = struct {
                 c,
                 .{ .size = 13, .weight = .medium, .color = p.text },
                 if (mac) "macOS gives {s} to {s} first." else "{s} is held by {s}.",
-                .{ keys, who },
+                .{ keys_text, who },
             );
         } else {
             ui.textf(
                 c,
                 .{ .size = 13, .weight = .medium, .color = p.text },
                 "{s} {s} running and may answer {s} too.",
-                .{ list(c, cl.launchers), if (cl.launchers.len == 1) "is" else "are", keys },
+                .{
+                    list(c, cl.launchers.slice()),
+                    if (cl.launchers.n == 1) "is" else "are",
+                    keys_text,
+                },
             );
         }
         line.end();
@@ -254,7 +258,7 @@ pub const Onboard = struct {
         const label = if (cl.system != null)
             "Open Keyboard Shortcuts"
         else
-            c.print("Quit {s}", .{cl.launchers[0]});
+            c.print("Quit {s}", .{cl.launchers.slice()[0]});
         const b = ui.div(c).row().h(26).px(12).itemsCenter().rounded(7).bg(p.sel).border(p.rim)
             .control();
         if (b.clicked()) if (o.hooks) |h| h.fix(h.ctx, cl);
@@ -284,9 +288,8 @@ pub const Onboard = struct {
             const caps = ui.div(c).row().gap(10).itemsCenter();
             defer caps.end();
             const ch = o.choice;
-            const hotkey = @import("hotkey.zig");
             const held_mod = modsHeld(ch, c);
-            const mods = c.print("{f}", .{ch.held()});
+            const mods = c.print("{f}", .{shortcut.held(ch)});
             if (mods.len > 0) {
                 // A PC's "Ctrl Alt" is words, not glyphs: wider per key.
                 const n: f32 = @floatFromInt(@popCount(ch.mods));
@@ -300,8 +303,8 @@ pub const Onboard = struct {
             cap(
                 c,
                 p,
-                c.print("{f}", .{ch.key()}),
-                if (ch.code == hotkey.space) 180 else 68,
+                c.print("{f}", .{shortcut.key(ch)}),
+                if (ch.code == keys.space) 180 else 68,
                 o.reopened,
             );
         }
@@ -312,7 +315,7 @@ pub const Onboard = struct {
                 c,
                 .{ .size = 20, .weight = .semibold, .color = p.text, .tracking = -0.2 },
                 "Press {f} now",
-                .{o.choice},
+                .{shortcut.text(o.choice)},
             );
             ui.text(
                 c,
@@ -336,11 +339,10 @@ pub const Onboard = struct {
             if (pc.shift and !in.shift) return false;
             return true;
         }
-        const hotkey = @import("hotkey.zig");
-        if (ch.mods & hotkey.cmd != 0 and !in.cmd) return false;
-        if (ch.mods & hotkey.option != 0 and !in.alt) return false;
-        if (ch.mods & hotkey.control != 0 and !in.ctrl) return false;
-        if (ch.mods & hotkey.shift != 0 and !in.shift) return false;
+        if (ch.mods & keys.cmd != 0 and !in.cmd) return false;
+        if (ch.mods & keys.option != 0 and !in.alt) return false;
+        if (ch.mods & keys.control != 0 and !in.ctrl) return false;
+        if (ch.mods & keys.shift != 0 and !in.shift) return false;
         return true;
     }
 
@@ -392,7 +394,7 @@ pub const Onboard = struct {
                 c,
                 .{ .size = 13.5, .color = p.sub },
                 "{f} opens it anywhere. Start with one of these:",
-                .{o.choice},
+                .{shortcut.text(o.choice)},
             );
         }
         {
@@ -462,7 +464,10 @@ pub const Onboard = struct {
         );
         ui.spacer(c);
         const action: []const u8 = switch (o.step) {
-            .key => if (o.clash().clear()) "Continue" else c.print("Use {f} anyway", .{o.choice}),
+            .key => if (o.clash().clear())
+                "Continue"
+            else
+                c.print("Use {f} anyway", .{shortcut.text(o.choice)}),
             .try_it => "",
             .done => "Start searching",
         };
@@ -527,7 +532,7 @@ const TestHooks = struct {
     fn apply(ctx: *anyopaque, c: Choice) void {
         @as(*TestHooks, @ptrCast(@alignCast(ctx))).applied = c;
     }
-    fn fix(_: *anyopaque, _: shortcut.Clash) void {}
+    fn fix(_: *anyopaque, _: shortcut_clash.Clash) void {}
     fn done(ctx: *anyopaque) void {
         @as(*TestHooks, @ptrCast(@alignCast(ctx))).ended += 1;
     }

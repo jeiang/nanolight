@@ -2,13 +2,13 @@
 //! shortcut, opening at login, the sync status, updates. Optional,
 //! like the panel's other host callbacks: tests draw Settings with
 //! defaults and call nothing.
-const shortcut = @import("shortcut.zig");
+const Choice = @import("keys.zig").Choice;
 const Theme = @import("palette.zig").Theme;
 
 pub const SettingsHost = struct {
     ctx: *anyopaque,
-    choice: *const fn (ctx: *anyopaque) shortcut.Choice,
-    apply: *const fn (ctx: *anyopaque, c: shortcut.Choice) void,
+    choice: *const fn (ctx: *anyopaque) Choice,
+    apply: *const fn (ctx: *anyopaque, c: Choice) void,
     /// Starts or stops recording a key of one's own: the keys pressed go
     /// to `Settings.took`, not the panel (recorder.zig). Whether it is
     /// recording now (false when the recorder could not start).

@@ -4,7 +4,7 @@
 //! the whole desktop: there the desktop's own shortcut settings run
 //! `nanolight --toggle` (single.zig).
 const builtin = @import("builtin");
-const Choice = @import("shortcut.zig").Choice;
+const keys = @import("keys.zig");
 
 const impl = switch (builtin.os.tag) {
     .macos => @import("hotkey_mac.zig"),
@@ -12,21 +12,10 @@ const impl = switch (builtin.os.tag) {
     else => @import("hotkey_x11.zig"),
 };
 
-/// The Mac's key codes and Carbon's modifier bits, which `Choice` keeps
-/// everywhere (a PC reads its four presets from them, shortcut.zig).
-pub const cmd = keys.cmd;
-pub const shift = keys.shift;
-pub const option = keys.option;
-pub const control = keys.control;
-pub const space = keys.space;
-const keys = @import("hotkey_mac.zig");
-
-pub const Pressed = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque) void };
-
 /// Calls `on` on the main thread each time `choice` is pressed, from any
 /// app. One per app: registering again replaces it.
-pub fn register(choice: Choice, on: Pressed) !void {
-    return impl.register(choice, .{ .ctx = on.ctx, .func = on.func });
+pub fn register(choice: keys.Choice, on: keys.Pressed) !void {
+    return impl.register(choice, on);
 }
 
 /// Gives the key back (while another is recorded); `register` takes one again.
@@ -35,13 +24,7 @@ pub fn unregister() void {
 }
 
 /// Whether another program holds `choice` (Windows, X11; on the Mac the
-/// system's shortcut table says, shortcut.zig).
-pub fn taken(choice: Choice) bool {
+/// system's shortcut table says, shortcut_clash.zig).
+pub fn taken(choice: keys.Choice) bool {
     return if (@hasDecl(impl, "taken")) impl.taken(choice) else false;
-}
-
-/// Why no key can be taken here, for the welcome and Settings to say: null
-/// when one can.
-pub fn unavailable() ?[]const u8 {
-    return if (@hasDecl(impl, "unavailable")) impl.unavailable() else null;
 }

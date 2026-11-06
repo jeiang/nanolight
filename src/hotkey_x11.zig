@@ -2,10 +2,11 @@
 //! with the choice's modifiers on the root window, over an Xlib connection
 //! of Nanolight's own (libX11, opened with dlopen), whose socket nanoui's
 //! loop watches. Wayland has no such grab for apps: there the desktop's
-//! keyboard settings run `nanolight --toggle` (`unavailable` says so).
+//! keyboard settings run `nanolight --toggle`.
 const std = @import("std");
 const nanoui = @import("nanoui");
-const Choice = @import("shortcut.zig").Choice;
+const keys = @import("keys.zig");
+const Choice = keys.Choice;
 
 const Display = opaque {};
 const Window = c_ulong;
@@ -58,12 +59,10 @@ const property_change_mask: c_long = 1 << 22;
 const atom_offset = 5 * @sizeOf(c_long);
 const xk_space: c_ulong = 0x20;
 
-pub const Pressed = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque) void };
-
 var x: ?X = null;
 var dpy: ?*Display = null;
 var watch: ?nanoui.fdwatch.Watch = null;
-var pressed: ?Pressed = null;
+var pressed: ?keys.Pressed = null;
 var grabbed: ?c_uint = null;
 var failed = false;
 /// The X server's time of the last press, for focusing the panel with it
@@ -73,7 +72,7 @@ pub var last_time: u32 = 0;
 /// whether it is the active window (`panelActive`), and `away` called as
 /// another window becomes the active one.
 pub var panel: ?*const fn () Window = null;
-pub var away: ?Pressed = null;
+pub var away: ?keys.Pressed = null;
 var net_active: c_ulong = 0;
 
 fn env(name: [*:0]const u8) ?[]const u8 {
@@ -81,12 +80,10 @@ fn env(name: [*:0]const u8) ?[]const u8 {
     return std.mem.span(v);
 }
 
-/// Why no key can be taken here: on Wayland, or without a display.
-pub fn unavailable() ?[]const u8 {
-    if (std.mem.eql(u8, env("XDG_SESSION_TYPE") orelse "", "wayland") or env("DISPLAY") == null)
-        return "Wayland gives no app a key of its own: in your desktop's keyboard settings, add " ++
-            "a shortcut that runs \"nanolight --toggle\".";
-    return null;
+/// No key can be taken: on Wayland, or without a display.
+fn ungrabbable() bool {
+    return std.mem.eql(u8, env("XDG_SESSION_TYPE") orelse "", "wayland") or
+        env("DISPLAY") == null;
 }
 
 fn load() ?X {
@@ -180,7 +177,9 @@ pub fn panelActive() ?bool {
     return active == ours;
 }
 
-pub fn modifiers(choice: Choice) c_uint {
+/// The modifiers to grab Space with: a PC offers no other key (`keys.any_key`).
+fn modifiers(choice: Choice) c_uint {
+    std.debug.assert(choice.available());
     const p = choice.pc();
     var m: c_uint = 0;
     if (p.ctrl) m |= control_mask;
@@ -189,9 +188,9 @@ pub fn modifiers(choice: Choice) c_uint {
     return m;
 }
 
-pub fn register(choice: Choice, on: Pressed) !void {
+pub fn register(choice: Choice, on: keys.Pressed) !void {
     pressed = on;
-    if (unavailable() != null) return error.Wayland;
+    if (ungrabbable()) return error.Wayland;
     const xl = load() orelse return error.NoX11;
     const d = open(xl) orelse return error.NoDisplay;
     const root = xl.XDefaultRootWindow(d);
@@ -221,7 +220,7 @@ pub fn register(choice: Choice, on: Pressed) !void {
 /// Whether another client (the window manager: Alt Space is its window
 /// menu on many desktops) holds `choice`: grabbed and let go again.
 pub fn taken(choice: Choice) bool {
-    if (unavailable() != null) return false;
+    if (ungrabbable()) return false;
     const m = modifiers(choice);
     if (grabbed == m) return false;
     const xl = load() orelse return false;

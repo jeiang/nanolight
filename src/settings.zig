@@ -7,6 +7,7 @@
 //! quicklinks go with whichever changed them last (`at`), and each app keeps
 //! the higher count of the two, so what you open most anywhere comes up first.
 const std = @import("std");
+const keys = @import("keys.zig");
 
 pub const Launch = struct {
     name: []const u8,
@@ -72,7 +73,7 @@ pub const max_launches = 512;
 pub const Settings = struct {
     /// 2 added `quicklinks`; a record of 1 still decodes.
     v: u8 = 2,
-    /// shortcut.Choice's name: "cmd_space", or a recorded "key:7:2048:120".
+    /// keys.Choice's name: "cmd_space", or a recorded "key:7:2048:120".
     hotkey: []const u8,
     suggest: bool,
     /// When `hotkey`, `suggest` or `quicklinks` last changed, on whichever machine (unix seconds).
@@ -86,15 +87,12 @@ pub fn encode(gpa: std.mem.Allocator, s: Settings) ![]u8 {
     return std.json.Stringify.valueAlloc(gpa, s, .{});
 }
 
-/// The longest key name a record carries (shortcut.zig's `Choice.name`).
-pub const hotkey_max = 32;
-
 /// A record's body, or null when it isn't one of ours. Past `max_launches`,
 /// the least opened apps are left out.
 pub fn decode(arena: std.mem.Allocator, body: []const u8) ?Settings {
     const options: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
     var s = std.json.parseFromSliceLeaky(Settings, arena, body, options) catch return null;
-    if (s.v < 1 or s.v > 2 or s.hotkey.len == 0 or s.hotkey.len > hotkey_max) return null;
+    if (s.v < 1 or s.v > 2 or s.hotkey.len == 0 or s.hotkey.len > keys.name_max) return null;
     s.launches = mostOpened(arena, s.launches) catch return null;
     if (s.quicklinks.len > max_quicklinks) return null;
     for (s.quicklinks) |q| if (!fits(q)) return null;

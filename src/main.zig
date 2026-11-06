@@ -16,7 +16,9 @@ const Index = apps.Index;
 const view = @import("view.zig");
 const Nanolight = view.Nanolight;
 const hotkey = @import("hotkey.zig");
+const keys = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
+const shortcut_clash = @import("shortcut_clash.zig");
 const Onboard = @import("onboard.zig").Onboard;
 const suggest = @import("suggest.zig");
 const convert = @import("convert.zig");
@@ -44,7 +46,7 @@ const prefs = @import("prefs.zig");
 /// A Nix build: no updater and no login-item UI; the modules own both.
 const nix_managed = @import("build_options").nix_managed;
 
-pub fn applyChoice(ctx: *anyopaque, choice: shortcut.Choice) void {
+pub fn applyChoice(ctx: *anyopaque, choice: keys.Choice) void {
     Live.apply(ctx, choice);
 }
 
@@ -63,7 +65,7 @@ pub const Live = struct {
     s: *Nanolight,
     o: *Onboard,
     kv: nanoui.kv.Store,
-    choice: shortcut.Choice = .cmd_space,
+    choice: keys.Choice = .cmd_space,
     window: ?*nanoui.Window = null,
     preview: Preview = .{},
     /// Clicks outside the panel go to what is under it (clickthrough.zig).
@@ -182,7 +184,7 @@ pub const Live = struct {
         var out: Settings = .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at };
         out.launches = list.items;
         out.quicklinks = l.ql_custom;
-        const name = arena.create([shortcut.name_max]u8) catch return out;
+        const name = arena.create([keys.name_max]u8) catch return out;
         out.hotkey = l.choice.name(name);
         return out;
     }
@@ -240,8 +242,8 @@ pub const Live = struct {
         const l: *Live = @ptrCast(@alignCast(ctx));
         // A failure is logged; the next sync sends this machine's older time.
         _ = prefs.setInt(l.kv, .sync_at, st.at);
-        if (shortcut.Choice.parse(st.hotkey)) |c| if (!c.eql(l.choice)) {
-            _ = shortcut.save(l.kv, c);
+        if (keys.Choice.parse(st.hotkey)) |c| if (!c.eql(l.choice)) {
+            _ = prefs.setHotkey(l.kv, c);
             l.useKey(c);
         };
         l.setSuggest(st.suggest, .synced);
@@ -557,12 +559,12 @@ pub const Live = struct {
         };
     }
 
-    fn useKey(l: *Live, choice: shortcut.Choice) void {
+    fn useKey(l: *Live, choice: keys.Choice) void {
         l.choice = choice;
         hotkey.register(choice, .{ .ctx = l, .func = toggle }) catch |e|
             std.log.warn(
                 "nanolight: {f} can't be registered ({s}); open it from the menu bar",
-                .{ choice, @errorName(e) },
+                .{ shortcut.text(choice), @errorName(e) },
             );
     }
 
@@ -583,26 +585,26 @@ pub const Live = struct {
         return false;
     }
 
-    fn recorded(ctx: *anyopaque, r: shortcut.Recorded) void {
+    fn recorded(ctx: *anyopaque, r: keys.Recorded) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         l.s.settings_ui.took(l.s, r);
         if (l.window) |w| w.redraw();
     }
 
-    pub fn apply(ctx: *anyopaque, choice: shortcut.Choice) void {
+    pub fn apply(ctx: *anyopaque, choice: keys.Choice) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
-        _ = shortcut.save(l.kv, choice);
+        _ = prefs.setHotkey(l.kv, choice);
         l.useKey(choice);
         l.touched();
     }
 
-    fn fix(ctx: *anyopaque, clash: shortcut.Clash) void {
+    fn fix(ctx: *anyopaque, clash: shortcut_clash.Clash) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (clash.system != null) {
             _ = nanoui.shell.openUrl(
                 "x-apple.systempreferences:com.apple.Keyboard-Settings.extension",
             );
-        } else for (clash.launchers) |name| shortcut.quit(name);
+        } else for (clash.launchers.slice()) |name| shortcut_clash.quit(name);
         // A launcher takes a moment to quit: then the panel looks again.
         nanoui.App.after(900, l, struct {
             fn f(c: ?*anyopaque) callconv(.c) void {
@@ -765,7 +767,7 @@ pub fn main(init: std.process.Init) !void {
         .s = &s,
         .o = &o,
         .kv = kv,
-        .choice = shortcut.load(kv, init.gpa),
+        .choice = prefs.hotkey(kv, init.gpa),
         .cfg = cfg,
     };
     defer live.rates.deinit();

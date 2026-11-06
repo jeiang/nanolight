@@ -6,6 +6,7 @@
 //! (`watch`): the page and the panel away, or into the browser; ⌘[ goes back a page.
 const std = @import("std");
 const nanoui = @import("nanoui");
+const keys = @import("keys.zig");
 const objc = nanoui.objc;
 const view = @import("view.zig");
 
@@ -165,12 +166,12 @@ pub const Preview = struct {
         if (!p.showing()) return ev;
         const w = p.watcher orelse return ev;
         const code = objc.msg(u16, ev, "keyCode", .{});
-        const cmd = objc.msg(objc.NSUInteger, ev, "modifierFlags", .{}) & (1 << 20) != 0;
-        if (code == 53) {
+        const cmd = objc.msg(objc.NSUInteger, ev, "modifierFlags", .{}) & keys.ns_cmd != 0;
+        if (code == keys.escape) {
             w.func(w.ctx, .escape);
-        } else if (cmd and (code == 36 or code == 76)) {
+        } else if (cmd and (code == keys.return_key or code == keys.keypad_enter)) {
             w.func(w.ctx, .open_out);
-        } else if (cmd and code == 33) {
+        } else if (cmd and code == keys.left_bracket) {
             _ = objc.msg(?objc.Object, p.web.?, "goBack", .{});
         } else return ev;
         return null;

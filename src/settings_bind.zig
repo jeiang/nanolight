@@ -1,6 +1,6 @@
 //! Live's answers to Settings. The box is one, its context set to the
 //! Live that is showing the panel (one Nanolight runs).
-const shortcut = @import("shortcut.zig");
+const Choice = @import("keys.zig").Choice;
 const prefs = @import("prefs.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Theme = @import("palette.zig").Theme;
@@ -32,7 +32,7 @@ fn l(ctx: *anyopaque) *Live {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn choice(ctx: *anyopaque) shortcut.Choice {
+fn choice(ctx: *anyopaque) Choice {
     return l(ctx).choice;
 }
 

@@ -5,6 +5,8 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const Quicklink = @import("settings.zig").Quicklink;
 const Theme = @import("palette.zig").Theme;
+const keys = @import("keys.zig");
+const Choice = keys.Choice;
 
 const Store = nanoui.kv.Store;
 
@@ -21,7 +23,7 @@ pub const Key = enum {
     clipboard,
     /// The welcome was done.
     onboarded,
-    /// The key that opens the panel: shortcut.Choice's name.
+    /// The key that opens the panel: keys.Choice's name.
     hotkey,
     /// The panel's tint: a `Theme`'s name.
     theme,
@@ -191,6 +193,19 @@ pub fn setTheme(kv: Store, t: Theme) bool {
     return setText(kv, .theme, @tagName(t));
 }
 
+/// The key that opens the panel; ⌘Space (Alt Space on a PC) when none is
+/// kept, or one this OS can't take.
+pub fn hotkey(kv: Store, gpa: std.mem.Allocator) Choice {
+    const v = text(kv, gpa, .hotkey) orelse return .cmd_space;
+    defer gpa.free(v);
+    return Choice.parse(v) orelse .cmd_space;
+}
+
+pub fn setHotkey(kv: Store, c: Choice) bool {
+    var buf: [keys.name_max]u8 = undefined;
+    return setText(kv, .hotkey, c.name(&buf));
+}
+
 /// `list` as it is kept; null, and logged, out of memory.
 pub fn quicklinksJson(gpa: std.mem.Allocator, list: []const Quicklink) ?[]u8 {
     return std.json.Stringify.valueAlloc(gpa, list, .{}) catch |e| {
@@ -285,6 +300,17 @@ test "the theme is kept by name" {
     try testing.expectEqual(Theme.forest, theme(kv, testing.allocator));
     try kv.set(Key.theme.name(), "plaid");
     try testing.expectEqual(Theme.system, theme(kv, testing.allocator));
+}
+
+test "the key is kept by name" {
+    var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
+    defer m.deinit();
+    const kv = m.store();
+    try testing.expectEqual(Choice.cmd_space, hotkey(kv, testing.allocator));
+    try testing.expect(setHotkey(kv, .ctrl_space));
+    try testing.expectEqual(Choice.ctrl_space, hotkey(kv, testing.allocator));
+    try kv.set(Key.hotkey.name(), "hyper_banana");
+    try testing.expectEqual(Choice.cmd_space, hotkey(kv, testing.allocator));
 }
 
 test "a quicklink list that is not JSON is the built-in ones" {

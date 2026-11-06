@@ -93,7 +93,7 @@ Nanolight reads `config.toml` at launch, from the first of these that exists: `$
 The file seeds the settings and the app's own changes win. Nanolight remembers the last value it applied from each key, and applies a key only when the file's value differs from that: edit `hotkey` in the file and the new key takes over (and syncs, as a change made just now); leave it alone and a key chosen in Settings stays. A key you delete from the file leaves the app's value as it is. `hotkey` is a preset name (`cmd_space`, `opt_space`, `ctrl_space`, `opt_cmd_space`) or, on the Mac only, a recorded `key:<code>:<mods>:<char>`; anything else is logged and ignored. On a PC the presets are the keys named under first run below: `cmd_space` is Alt Space, `opt_space` Ctrl Alt Space, `ctrl_space` Ctrl Space, `opt_cmd_space` Ctrl Shift Space.
 
 ```toml
-hotkey = "cmd_space"          # shortcut.Choice name or recorded "key:..."; default per OS as shortcut.zig has it (Alt Space off the Mac)
+hotkey = "cmd_space"          # keys.Choice name or recorded "key:..."; default per OS as keys.zig has it (Alt Space off the Mac)
 suggestions = true            # Google completions
 open_searches_in_browser = false
 show_in_menu_bar = true
@@ -255,7 +255,8 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 | `src/clipboard_view.zig`, `src/clipboard_live.zig` | The Clipboard History screen, and the app's side of it (the store, the watcher, Return and ⌘↩) |
 | `src/commands.zig` | System commands: each OS's table, the `PATH` check, ranking, the runner |
 | `src/toml.zig`, `src/config.zig` | `config.toml`: the TOML subset parser, the typed schema and loader, and how the file seeds settings |
-| `src/onboard.zig`, `src/shortcut.zig`, `src/recorder.zig` | The welcome, which key is free, recording one's own |
+| `src/keys.zig`, `src/shortcut.zig` | The key that opens the panel as a value (the four offered, kept names, Carbon and AppKit codes), and how it reads |
+| `src/onboard.zig`, `src/shortcut_clash.zig`, `src/recorder.zig` | The welcome, which key is free, recording one's own |
 | `flake.nix`, `nix/` | The packages, the NixOS, nix-darwin and home-manager modules, the server module, and the flake's checks |
 
 The icon is drawn by `tools/icon.zig` (`zig build icon`, on a Mac). The release tools are Zig too, in `tools/`, run as `zig build` steps.

@@ -138,28 +138,28 @@ test "recording a key: idle, recording, refused, and never without a recorder" {
     const s = &rig.s;
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     const ui_s = &s.settings_ui;
-    const shortcut = @import("shortcut.zig");
+    const keys = @import("keys.zig");
     // Return on the shortcut row: recording, the recorder with it.
     ui_s.activateSelected(s);
     try std.testing.expectEqual(settings_view.KeyInput.recording, ui_s.key_input);
     try std.testing.expect(prefs.recording);
     // A letter alone is refused; it still waits.
-    ui_s.took(s, shortcut.recorded(7, 0, 'x'));
+    ui_s.took(s, keys.recorded(7, 0, 'x'));
     try std.testing.expectEqual(settings_view.KeyInput.refused, ui_s.key_input);
     try std.testing.expect(prefs.recording);
     // ⌥X is taken: idle, the recorder stopped, the key applied.
-    ui_s.took(s, shortcut.recorded(7, 1 << 19, 'x'));
+    ui_s.took(s, keys.recorded(7, keys.ns_opt, 'x'));
     try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
     try std.testing.expect(!prefs.recording);
-    try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = 1 << 11 }));
+    try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = keys.option }));
     // Esc while recording: idle, nothing applied.
     prefs.applied = null;
     ui_s.activateSelected(s);
-    ui_s.took(s, shortcut.recorded(53, 0, 0));
+    ui_s.took(s, keys.recorded(keys.escape, 0, 0));
     try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
     try std.testing.expect(prefs.applied == null and !prefs.recording);
     // A key pressed while idle is no one's.
-    ui_s.took(s, shortcut.recorded(7, 1 << 19, 'x'));
+    ui_s.took(s, keys.recorded(7, keys.ns_opt, 'x'));
     try std.testing.expect(prefs.applied == null);
     // The recorder could not start: not recording.
     prefs.can_record = false;

@@ -28,7 +28,9 @@ test {
     _ = @import("prefs.zig");
     _ = @import("palette.zig");
     _ = @import("apps.zig");
+    _ = @import("keys.zig");
     _ = @import("shortcut.zig");
+    _ = @import("shortcut_clash.zig");
     _ = @import("settings_panes.zig");
     _ = @import("commands.zig");
     _ = @import("clipboard.zig");
@@ -342,17 +344,18 @@ test "Google's completions land below, and a search shows in the panel" {
 }
 
 const onboard = @import("onboard.zig");
-const shortcut = @import("shortcut.zig");
+const keys = @import("keys.zig");
+const shortcut_clash = @import("shortcut_clash.zig");
 const nix = @import("build_options").nix_managed;
 
 const Steps = struct {
-    applied: ?shortcut.Choice = null,
+    applied: ?keys.Choice = null,
     done: bool = false,
-    fn apply(ctx: *anyopaque, c: shortcut.Choice) void {
+    fn apply(ctx: *anyopaque, c: keys.Choice) void {
         const p: *Steps = @ptrCast(@alignCast(ctx));
         p.applied = c;
     }
-    fn fix(_: *anyopaque, _: shortcut.Clash) void {}
+    fn fix(_: *anyopaque, _: shortcut_clash.Clash) void {}
     fn finished(ctx: *anyopaque) void {
         const p: *Steps = @ptrCast(@alignCast(ctx));
         p.done = true;
@@ -366,8 +369,10 @@ test "the welcome: a key, pressed for real, then a first search" {
     var o: onboard.Onboard = .{};
     // Hooks only once started: the system's shortcuts are not read in tests.
     o.start(.cmd_space);
-    const sys = [_]shortcut.SystemKey{.{ .id = 64, .enabled = true, .key = 49, .mods = 1 << 20 }};
-    o.system = &sys;
+    const sys = [_]shortcut_clash.SystemKey{
+        .{ .id = .spotlight, .enabled = true, .key = keys.space, .mods = keys.ns_cmd },
+    };
+    o.holders.system = &sys;
     var steps: Steps = .{};
     o.hooks = .{ .ctx = &steps, .apply = Steps.apply, .fix = Steps.fix, .done = Steps.finished };
     var rig: Rig = undefined;
@@ -386,7 +391,7 @@ test "the welcome: a key, pressed for real, then a first search" {
     try std.testing.expect(t.hasText("⌥ Space is free on this Mac."));
     t.key(.enter);
     t.settle(1);
-    try std.testing.expectEqual(shortcut.Choice.opt_space, steps.applied.?);
+    try std.testing.expectEqual(keys.Choice.opt_space, steps.applied.?);
     try std.testing.expect(t.hasText("Press ⌥ Space now"));
     // A button never moves it on: the key closing the panel, then opening it.
     o.pressed(false);
@@ -416,7 +421,7 @@ test "the welcome: a key, pressed for real, then a first search" {
     t.key(.right);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(steps.done and !o.active);
-    try std.testing.expectEqual(shortcut.Choice.opt_cmd_space, steps.applied.?);
+    try std.testing.expectEqual(keys.Choice.opt_cmd_space, steps.applied.?);
 }
 
 test "settings opens from ⌘,, from typing, and from the gear" {
@@ -465,29 +470,29 @@ test "settings opens from ⌘,, from typing, and from the gear" {
 
     // → picks the next shortcut and tells the host.
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.right }));
-    try std.testing.expectEqual(shortcut.Choice.opt_space, prefs.applied.?);
+    try std.testing.expectEqual(keys.Choice.opt_space, prefs.applied.?);
 
     // On the Mac, Return on it records a key of one's own (issue #1): a
     // letter alone is refused, ⌥X is taken, kept, and shown as the chosen
     // one. (A PC keeps to the four.)
-    if (@import("builtin").os.tag == .macos) {
+    if (keys.any_key) {
         press(t, &.{.{ .command = .insert_newline }});
         t.settle(1);
         try std.testing.expect(prefs.recording and t.hasText("Type a shortcut"));
-        s.settings_ui.took(s, shortcut.recorded(7, 0, 'x'));
+        s.settings_ui.took(s, keys.recorded(7, 0, 'x'));
         t.settle(1);
         try std.testing.expect(prefs.recording and t.hasText("Add ⌘, ⌥ or ⌃"));
-        s.settings_ui.took(s, shortcut.recorded(7, 1 << 19, 'x'));
+        s.settings_ui.took(s, keys.recorded(7, keys.ns_opt, 'x'));
         t.settle(1);
         try std.testing.expect(!prefs.recording and t.hasText("⌥ X"));
-        try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = 1 << 11 }));
+        try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = keys.option }));
         // ← goes back to the four.
         try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.left }));
         try std.testing.expect(prefs.applied.?.eql(.opt_cmd_space));
         try std.testing.expect(t.hasText("⌥ X"));
         try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.right }));
         try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.right }));
-        try std.testing.expectEqual(shortcut.Choice.opt_space, prefs.applied.?);
+        try std.testing.expectEqual(keys.Choice.opt_space, prefs.applied.?);
     }
 
     // ↓ onto Google Suggestions, Return flips it.

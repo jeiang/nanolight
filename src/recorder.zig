@@ -6,13 +6,13 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
-const shortcut = @import("shortcut.zig");
+const keys = @import("keys.zig");
 
 const key_down: u64 = 1 << 10;
 
 pub const Got = struct {
     ctx: *anyopaque,
-    func: *const fn (ctx: *anyopaque, r: shortcut.Recorded) void,
+    func: *const fn (ctx: *anyopaque, r: keys.Recorded) void,
 };
 
 pub const Recorder = struct {
@@ -20,7 +20,7 @@ pub const Recorder = struct {
     got: ?Got = null,
     /// The key seen, handed on once the monitor's handler has returned
     /// (handling it may stop the monitor).
-    last: ?shortcut.Recorded = null,
+    last: ?keys.Recorded = null,
 
     pub fn active(r: *const Recorder) bool {
         return r.monitor != null;
@@ -62,7 +62,7 @@ pub const Recorder = struct {
         const len = if (s.len > 0) std.unicode.utf8ByteSequenceLength(s[0]) catch 1 else 0;
         const ch: u21 = if (len > 0 and
             len <= s.len) std.unicode.utf8Decode(s[0..len]) catch 0 else 0;
-        r.last = shortcut.recorded(code, flags, ch);
+        r.last = keys.recorded(code, flags, ch);
         nanoui.App.after(0, r, deliver);
         return null;
     }

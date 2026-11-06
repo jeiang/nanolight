@@ -9,9 +9,10 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const motion = ui.motion;
 const panel = @import("view.zig");
+const key_choice = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
-const Choice = shortcut.Choice;
+const Choice = key_choice.Choice;
 const Palette = panel.Palette;
 const mac = @import("builtin").os.tag == .macos;
 /// A Nix build: the Nix modules own startup and updates.
@@ -306,7 +307,7 @@ pub const Settings = struct {
             if (b.clicked()) s.pick(n, ch);
             ui.text(
                 c,
-                c.print("{f}", .{ch}),
+                c.print("{f}", .{shortcut.text(ch)}),
                 .{
                     .size = 13.5,
                     .weight = if (on) .semibold else .medium,
@@ -314,9 +315,8 @@ pub const Settings = struct {
                 },
             );
         }
-        // One's own: the key recorded, or a press away (on the Mac, where
-        // Carbon takes any key; a PC keeps to the four).
-        if (!mac) return;
+        // One's own: the key recorded, or a press away (`keys.any_key`).
+        if (!key_choice.any_key) return;
         ui.key(c, "key-own");
         const recording = s.key_input != .idle;
         const on = recording or (s.custom != null and s.custom.?.eql(s.choice));
@@ -327,7 +327,7 @@ pub const Settings = struct {
         const text = switch (s.key_input) {
             .refused => "Add ⌘, ⌥ or ⌃",
             .recording => "Type a shortcut",
-            .idle => if (s.custom) |k| c.print("{f}", .{k}) else "Record…",
+            .idle => if (s.custom) |k| c.print("{f}", .{shortcut.text(k)}) else "Record…",
         };
         const weight: ui.Weight = if (on) .semibold else .medium;
         ui.text(c, text, .{ .size = 13.5, .weight = weight, .color = if (on) p.text else p.sub });
@@ -345,7 +345,7 @@ pub const Settings = struct {
     }
 
     /// A key pressed while recording: kept and used, or not.
-    pub fn took(s: *Settings, n: *panel.Nanolight, r: shortcut.Recorded) void {
+    pub fn took(s: *Settings, n: *panel.Nanolight, r: key_choice.Recorded) void {
         if (s.key_input == .idle) return;
         switch (r) {
             .unusable => s.key_input = .refused,
@@ -504,7 +504,10 @@ pub const Settings = struct {
         const h = s.hooks(n);
         switch (kind) {
             // ←/→ step through the four; Return records one's own.
-            .choice => if (mac) s.record(n, s.key_input == .idle) else s.nudge(n, s.shown(), 1),
+            .choice => if (key_choice.any_key)
+                s.record(n, s.key_input == .idle)
+            else
+                s.nudge(n, s.shown(), 1),
             inline .suggest, .files, .browser, .login, .menu_bar, .clipboard => |k| {
                 s.flip(n, @field(Toggle, @tagName(k)));
             },

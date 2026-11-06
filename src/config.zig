@@ -8,7 +8,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const toml = @import("toml.zig");
-const shortcut = @import("shortcut.zig");
+const keys = @import("keys.zig");
 const clipboard = @import("clipboard.zig");
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
@@ -219,7 +219,7 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8, problem: *Problem) Erro
     };
     var r: Reader = .{ .a = arena, .problem = problem };
     var c = try r.table(Config, root, "");
-    if (c.hotkey) |h| if (shortcut.Choice.parse(h) == null) {
+    if (c.hotkey) |h| if (keys.Choice.parse(h) == null) {
         try r.ignore("hotkey \"{s}\" is not a shortcut this system can use", .{h});
         c.hotkey = null;
     };
@@ -426,9 +426,9 @@ fn seedOne(store: nanoui.kv.Store, gpa: std.mem.Allocator, comptime s: Seed, val
                 return false;
             };
             // `parse` lets through only a hotkey this system can use.
-            const choice = shortcut.Choice.parse(name) orelse unreachable;
+            const choice = keys.Choice.parse(name) orelse unreachable;
             if (!fresh(store, gpa, s.key, name)) return false;
-            if (!shortcut.save(store, choice)) return false;
+            if (!prefs.setHotkey(store, choice)) return false;
             record(store, s.key, name);
         },
         .quicklinks => {
@@ -629,21 +629,21 @@ test "the file seeds once, then the app's own change wins" {
 
     // First start: everything is new.
     seed(store, testing.allocator, file, 1000);
-    try testing.expect(shortcut.load(store, testing.allocator).eql(.ctrl_space));
+    try testing.expect(prefs.hotkey(store, testing.allocator).eql(.ctrl_space));
     try expectKv(store, suggest_key, "0");
     try expectKv(store, searches_out_key, "1");
     try expectKv(store, menu_bar_key, "0");
     try expectKv(store, sync_at_key, "1000");
 
     // The person changes things in the app.
-    try testing.expect(shortcut.save(store, .opt_space));
+    try testing.expect(prefs.setHotkey(store, .opt_space));
     try store.set(suggest_key, "1");
     try store.set(menu_bar_key, "1");
     try store.set(sync_at_key, "1500");
 
     // The same file on the next start leaves all of it alone.
     seed(store, testing.allocator, file, 2000);
-    try testing.expect(shortcut.load(store, testing.allocator).eql(.opt_space));
+    try testing.expect(prefs.hotkey(store, testing.allocator).eql(.opt_space));
     try expectKv(store, suggest_key, "1");
     try expectKv(store, menu_bar_key, "1");
     try expectKv(store, sync_at_key, "1500");
@@ -653,7 +653,7 @@ test "the file seeds once, then the app's own change wins" {
     edited.suggestions = true;
     edited.hotkey = "cmd_space";
     seed(store, testing.allocator, edited, 3000);
-    try testing.expect(shortcut.load(store, testing.allocator).eql(.cmd_space));
+    try testing.expect(prefs.hotkey(store, testing.allocator).eql(.cmd_space));
     try expectKv(store, suggest_key, "1");
     try expectKv(store, sync_at_key, "3000");
     // The ones it did not touch are still the app's.
@@ -744,7 +744,7 @@ test "a value that cannot be written is not recorded as applied, and applies nex
     seed(store, testing.allocator, .{ .suggestions = false, .hotkey = "ctrl_space" }, 2);
     try expectKv(store, suggest_key, "0");
     try expectKv(store, applied_prefix ++ "suggestions", "0");
-    try testing.expect(shortcut.load(store, testing.allocator).eql(.ctrl_space));
+    try testing.expect(prefs.hotkey(store, testing.allocator).eql(.ctrl_space));
 }
 
 test "a headless or unusable load seeds nothing and records nothing" {
