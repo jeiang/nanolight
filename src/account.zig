@@ -1,23 +1,34 @@
-//! Syncing settings (settings.zig) through a nanolight-server (server.zig)
-//! to every machine on the same account. Off unless `[sync]` in config.toml
-//! names a server (`url`) and a file holding the account's token
-//! (`token_file`); nothing leaves the machine otherwise.
+//! Syncing settings (settings.zig) through a nanolight-server over the sync
+//! wire (sync_protocol.zig) to every machine on the same account. Off unless
+//! `[sync]` in config.toml names a server (`url`) and a file holding the
+//! account's token (`token_file`); nothing leaves the machine otherwise.
 //!
 //! One request does it all: PUT this machine's record, and the server's
 //! answer is the two merged. It runs at launch, when the panel opens if the
 //! last one is five minutes old, and two seconds after a change.
 const std = @import("std");
 const nanoui = @import("nanoui");
+const prefs = @import("prefs.zig");
+const protocol = @import("sync_protocol.zig");
 const settings = @import("settings.zig");
-const config = @import("config.zig");
 const Settings = settings.Settings;
 
-/// Marks this machine's first sync with a server: the stored record wins.
-const first_header = "X-Nanolight-First";
-const synced_key = @import("prefs.zig").Key.account_synced.name();
 const pull_every_s = 5 * 60;
 const push_after_ms = 2000;
 pub const off_text = "Sync: off (set [sync] in config.toml)";
+
+comptime {
+    // Whatever launches a request sheds to fit, the rest fits.
+    std.debug.assert(settings.max_without_launches <= protocol.max_body);
+}
+
+/// `[sync]` in config.toml.
+pub const Config = struct {
+    /// Empty: syncing is off.
+    url: []const u8 = "",
+    /// The file that holds the bearer token.
+    token_file: []const u8 = "",
+};
 
 pub const Hooks = struct {
     ctx: *anyopaque,
@@ -64,7 +75,7 @@ pub const Account = struct {
     io: std.Io,
     kv: nanoui.kv.Store,
     hooks: Hooks,
-    cfg: config.Sync,
+    cfg: Config,
     state: Status = .off,
     token: ?[]u8 = null,
     last_pull: i64 = 0,
@@ -144,9 +155,9 @@ pub const Account = struct {
     }
 
     fn firstHere(a: *Account) bool {
-        const have = a.kv.get(a.gpa, synced_key) catch return true;
-        defer if (have) |h| a.gpa.free(h);
-        return !sameServer(have orelse return true, a.cfg.url);
+        const have = prefs.text(a.kv, a.gpa, .account_synced) orelse return true;
+        defer a.gpa.free(have);
+        return !sameServer(have, a.cfg.url);
     }
 
     /// Sends this machine's record; with one out already, sent again once
@@ -162,22 +173,23 @@ pub const Account = struct {
         defer arena.deinit();
         const al = arena.allocator();
         const sent = a.hooks.snapshot(a.hooks.ctx, al);
-        const body = settings.encode(al, sent) catch return a.fail("out of memory");
+        const body = (settings.encodeWithin(al, sent, protocol.max_body) catch
+            return a.fail("out of memory")) orelse return a.fail("the settings are too big");
         const base = baseUrl(a.cfg.url).?;
         const url = std.fmt.allocPrint(
             al,
-            "{s}/v1/sync",
+            "{s}" ++ protocol.path,
             .{base},
         ) catch return a.fail("out of memory");
         const auth = std.fmt.allocPrint(
             al,
-            "Bearer {s}",
+            protocol.bearer_prefix ++ "{s}",
             .{token},
         ) catch return a.fail("out of memory");
         var headers = [_]nanoui.http.Header{
-            .{ .name = "Authorization", .value = auth },
-            .{ .name = "Content-Type", .value = "application/json" },
-            .{ .name = first_header, .value = "1" },
+            .{ .name = protocol.authorization_header, .value = auth },
+            .{ .name = "Content-Type", .value = protocol.content_type },
+            .{ .name = protocol.first_header, .value = protocol.first_value },
         };
         const first = a.firstHere();
         a.inflight = .{ .first = first, .sent_at = sent.at };
@@ -212,8 +224,8 @@ pub const Account = struct {
             first,
         ) catch return a.fail("out of memory");
         a.hooks.apply(a.hooks.ctx, merged);
-        // best effort: unkept, the next sync is sent as a first one again.
-        a.kv.set(synced_key, a.cfg.url) catch {};
+        // A failure is logged; the next sync is sent as a first one again.
+        _ = prefs.setText(a.kv, .account_synced, a.cfg.url);
         a.state = .{ .synced = now() };
         a.hooks.changed(a.hooks.ctx);
         if (!settings.same(merged, theirs)) a.changed();
