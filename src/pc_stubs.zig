@@ -35,6 +35,8 @@ pub const Recorder = struct {
     pub fn active(_: *const Recorder) bool {
         return false;
     }
-    pub fn start(_: *Recorder, _: Got) void {}
+    pub fn start(_: *Recorder, _: Got) bool {
+        return false;
+    }
     pub fn stop(_: *Recorder) void {}
 };
