@@ -3,8 +3,16 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const Index = @import("apps.zig").Index;
 const view = @import("view.zig");
+const support = @import("test_support.zig");
+const Rig = support.Rig;
+const Probe = support.Probe;
+const Web = support.Web;
+const Prefs = support.Prefs;
+const mac_starters = support.mac_starters;
+const onFirstQuicklink = support.onFirstQuicklink;
+const press = support.press;
+const retype = support.retype;
 
 test {
     _ = @import("search.zig");
@@ -53,54 +61,18 @@ test {
     }
 }
 
-pub const Probe = struct {
-    opened: [256]u8 = undefined,
-    opened_len: usize = 0,
-    hidden: bool = false,
-
-    fn open(ctx: *anyopaque, target: []const u8) void {
-        const p: *Probe = @ptrCast(@alignCast(ctx));
-        @memcpy(p.opened[0..target.len], target);
-        p.opened_len = target.len;
-    }
-    fn hide(ctx: *anyopaque) void {
-        const p: *Probe = @ptrCast(@alignCast(ctx));
-        p.hidden = true;
-    }
-};
-
-/// The Mac's starters, which these tests' apps are named after.
-const mac_starters = [_][]const u8{ "Safari", "Notes", "Calendar", "System Settings", "Finder" };
-
-/// The selected row is the first quicklink: the search for what was typed.
-pub fn onFirstQuicklink(s: *const view.Nanolight) bool {
-    const r = s.res.rows[s.sel];
-    return r.kind == .quicklink and r.ql == 0;
-}
-
-pub fn press(t: *ui.Tester, ops: []const ui.TextOp) void {
-    t.textOps(ops);
-    t.settle(1);
-}
-
 test "the panel finds, moves, answers and hands off" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    ix.starters = &mac_starters;
-    for ([_][]const u8{ "Safari", "System Settings", "Notes", "Calculator", "Finder" }) |n| {
-        var buf: [64]u8 = undefined;
-        try ix.add(n, try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n}));
-    }
     var probe: Probe = .{};
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = .{ .ctx = &probe, .open = Probe.open, .hide = Probe.hide };
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = 480, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const ix = &rig.ix;
+    const s = &rig.s;
+    const t = &rig.t;
+    ix.starters = &mac_starters;
+    try rig.apps(&.{ "Safari", "System Settings", "Notes", "Calculator", "Finder" });
+    try rig.mount(.{ .host = probe.host(), .height = 480 });
     // No query: suggestions.
     try std.testing.expect(t.hasText("Suggestions"));
     try std.testing.expect(t.hasText("Safari"));
@@ -112,46 +84,46 @@ test "the panel finds, moves, answers and hands off" {
     s.note = "";
 
     // The top app's name completes what is typed; → takes it.
-    press(&t, &.{.{ .insert = "saf" }});
+    press(t, &.{.{ .insert = "saf" }});
     try std.testing.expect(t.hasText("ari"));
-    press(&t, &.{.{ .command = .move_right }});
+    press(t, &.{.{ .command = .move_right }});
     try std.testing.expectEqualStrings("safari", s.query.text());
-    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
+    press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
 
     // An exact app name beats panes that may outrank its initials.
-    press(&t, &.{.{ .insert = "system settings" }});
+    press(t, &.{.{ .insert = "system settings" }});
     try std.testing.expect(t.hasText("System Settings"));
     try std.testing.expectEqual(@as(u32, ix.find("System Settings").?), s.res.rows[0].app);
     // Down and back up, then Return opens the first.
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.down }));
     try std.testing.expectEqual(@as(usize, 1), s.sel);
     _ = t.shortcut(.{ .key = ui.Shortcut.up });
-    press(&t, &.{.{ .command = .insert_newline }});
+    press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("/Applications/System Settings.app", probe.opened[0..probe.opened_len]);
     try std.testing.expect(probe.hidden);
     try std.testing.expectEqual(@as(u16, 1), ix.apps.items[ix.find("System Settings").?].launches);
 
     // ⌘2 opens the second row at once: Safari, under System Settings,
     // which was just opened.
-    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "s" } });
+    retype(t, "s");
     try std.testing.expect(t.hasText(results.mod ++ "2"));
     try std.testing.expect(t.shortcut(.{ .key = '2', .cmd = true }));
     try std.testing.expectEqualStrings("/Applications/Safari.app", probe.opened[0..probe.opened_len]);
 
     // Math: answered, and Return copies it.
-    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "2^10 * 3" } });
+    retype(t, "2^10 * 3");
     try std.testing.expect(t.hasText("3,072"));
     try std.testing.expect(t.hasText("Result · 0xC00"));
-    press(&t, &.{.{ .command = .insert_newline }});
+    press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("3072", t.clipboard.items);
 
     // Anything else: the quicklinks, Google first (Claude, Grok and X among them).
-    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "liquid glass" } });
+    retype(t, "liquid glass");
     try std.testing.expect(t.containsText("Search Claude for"));
     try std.testing.expect(t.containsText("Search X for"));
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
-    press(&t, &.{.{ .command = .insert_newline }});
+    press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("https://claude.ai/new?q=liquid%20glass", probe.opened[0..probe.opened_len]);
 
     // Escape closes at once, even with a query; the query waits for next time.
@@ -165,61 +137,22 @@ const suggest = @import("suggest.zig");
 const results = @import("results.zig");
 const convert = @import("convert.zig");
 
-/// A host that answers for Google and shows pages: what was asked, shown.
-pub const Web = struct {
-    probe: Probe = .{},
-    asked: [64]u8 = undefined,
-    asked_len: usize = 0,
-    page: [256]u8 = undefined,
-    page_len: ?usize = null,
-
-    pub fn host(w: *Web) view.Host {
-        return .{ .ctx = w, .open = open, .hide = hide, .suggest = ask, .preview = show };
-    }
-    fn open(ctx: *anyopaque, target: []const u8) void {
-        const w: *Web = @ptrCast(@alignCast(ctx));
-        Probe.open(&w.probe, target);
-    }
-    fn hide(ctx: *anyopaque) void {
-        const w: *Web = @ptrCast(@alignCast(ctx));
-        Probe.hide(&w.probe);
-    }
-    fn ask(ctx: *anyopaque, q: []const u8) void {
-        const w: *Web = @ptrCast(@alignCast(ctx));
-        @memcpy(w.asked[0..q.len], q);
-        w.asked_len = q.len;
-    }
-    fn show(ctx: *anyopaque, url: ?[]const u8) void {
-        const w: *Web = @ptrCast(@alignCast(ctx));
-        const u = url orelse {
-            w.page_len = null;
-            return;
-        };
-        @memcpy(w.page[0..u.len], u);
-        w.page_len = u.len;
-    }
-};
-
 test "a pending currency card is not the default row, and Return acts on the search under it" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var web: Web = .{};
-    var s: view.Nanolight = .{ .index = &ix };
     var feed: convert.Feed = .{};
     defer feed.deinit();
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
     s.feed = &feed;
-    defer s.query.deinit();
-    s.host = web.host();
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
-    press(&t, &.{.{ .insert = "100 usd to ttd" }});
+    try rig.mount(.{ .host = web.host() });
+    press(t, &.{.{ .insert = "100 usd to ttd" }});
     try std.testing.expect(s.res.pending);
     try std.testing.expectEqual(@as(usize, 1), s.sel);
-    try std.testing.expect(onFirstQuicklink(&s));
+    try std.testing.expect(onFirstQuicklink(s));
     try std.testing.expect(t.hasText("Search Google"));
     try std.testing.expect(!t.hasText("Copy Answer"));
     // Arrowing onto the card still leaves Return meaning the search.
@@ -252,61 +185,42 @@ test "a pending currency card is not the default row, and Return acts on the sea
 
 test "math being typed asks Google nothing while its card shows" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var web: Web = .{};
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = web.host();
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{
-        .width = view.width,
-        .height = view.max_height,
-        .dark = true,
-    });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = web.host() });
     // The answer so far, a conversion's, and one waiting on rates.
     for ([_][]const u8{ "2 + 3 *", "10 km to mi *", "500 usd to eur *" }) |q| {
-        retype(&t, q);
+        retype(t, q);
         try std.testing.expectEqual(results.Kind.calc, s.res.rows[0].kind);
         try std.testing.expectEqual(@as(usize, 0), web.asked_len);
     }
-    retype(&t, "2 + 3 is");
+    retype(t, "2 + 3 is");
     try std.testing.expectEqualStrings("2 + 3 is", web.asked[0..web.asked_len]);
-}
-
-fn retype(t: *ui.Tester, q: []const u8) void {
-    press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = q } });
 }
 
 test "a long paste is cut to the longest query, on a character boundary, a whole path is not" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{
-        .width = view.width,
-        .height = 480,
-        .dark = true,
-    });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .height = 480 });
     // A file path as long as any found one is kept whole.
     var path: [view.max_query_bytes]u8 = undefined;
     path[0] = '/';
     @memset(path[1..], 'a');
-    press(&t, &.{.{ .insert = &path }});
+    press(t, &.{.{ .insert = &path }});
     try std.testing.expectEqualStrings(&path, s.query.text());
-    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
+    press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
     var paste: [view.max_query_bytes + 1]u8 = undefined;
     @memset(paste[0 .. view.max_query_bytes - 1], '(');
     @memcpy(paste[view.max_query_bytes - 1 ..], "é");
-    press(&t, &.{.{ .insert = &paste }});
+    press(t, &.{.{ .insert = &paste }});
     try std.testing.expectEqual(view.max_query_bytes - 1, s.query.text().len);
     t.settle(1);
     try std.testing.expect(s.res.n > 0);
@@ -314,28 +228,24 @@ test "a long paste is cut to the longest query, on a character boundary, a whole
 
 test "Google's completions land below, and a search shows in the panel" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    ix.starters = &mac_starters;
-    try ix.add("Safari", "/Applications/Safari.app");
     var web: Web = .{};
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = web.host();
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    rig.ix.starters = &mac_starters;
+    try rig.apps(&.{"Safari"});
+    try rig.mount(.{ .host = web.host() });
     // An address is never asked about; words are.
-    press(&t, &.{.{ .insert = "ziglang.org" }});
+    press(t, &.{.{ .insert = "ziglang.org" }});
     try std.testing.expectEqual(@as(usize, 0), web.asked_len);
-    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "liquid gl" } });
+    retype(t, "liquid gl");
     try std.testing.expectEqualStrings("liquid gl", web.asked[0..web.asked_len]);
     // Return would search what was typed. The selection, moved before
     // the answer comes, stays on its row, though the completions land
     // above it, a key under the search.
-    try std.testing.expect(onFirstQuicklink(&s));
+    try std.testing.expect(onFirstQuicklink(s));
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     try std.testing.expectEqual(@as(u16, 2), s.res.rows[s.sel].ql);
@@ -352,21 +262,21 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.tab }));
     t.settle(1);
     try std.testing.expectEqualStrings("liquid glass", s.query.text());
-    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "liquid gl" } });
+    retype(t, "liquid gl");
     // Known at once this time, yet Return still searches what was typed,
     // not a completion nobody picked.
     try std.testing.expectEqual(results.Kind.suggest, s.res.rows[1].kind);
-    try std.testing.expect(onFirstQuicklink(&s));
+    try std.testing.expect(onFirstQuicklink(s));
     // ⌘2 is Google's first completion.
     try std.testing.expect(t.hasText(results.mod ++ "2"));
     // One more letter: the answer so far stands in, and nothing is asked
     // again for words already answered.
     web.asked_len = 0;
-    press(&t, &.{.{ .insert = "a" }});
+    press(t, &.{.{ .insert = "a" }});
     try std.testing.expectEqualStrings("liquid gla", web.asked[0..web.asked_len]);
     try std.testing.expect(t.hasText("liquid glass apple"));
     web.asked_len = 0;
-    press(&t, &.{.{ .command = .delete_backward }});
+    press(t, &.{.{ .command = .delete_backward }});
     try std.testing.expectEqual(@as(usize, 0), web.asked_len);
 
     // ⌘3, the second completion: its words in the field, Google's page in the panel.
@@ -386,16 +296,16 @@ test "Google's completions land below, and a search shows in the panel" {
     web.probe.hidden = false;
 
     // Return on words no app matches: Google's page; typing takes it away.
-    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "pizza" } });
-    press(&t, &.{.{ .command = .insert_newline }});
+    retype(t, "pizza");
+    press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("https://www.google.com/search?q=pizza", web.page[0..web.page_len.?]);
-    press(&t, &.{.{ .insert = "s" }});
+    press(t, &.{.{ .insert = "s" }});
     try std.testing.expect(web.page_len == null);
     try std.testing.expect(t.hasText("Search Google for “pizzas”"));
 
     // ⌘↩ in the page, and on the row: the browser, and the panel hides.
-    while (!onFirstQuicklink(&s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
-    press(&t, &.{.{ .command = .insert_newline }});
+    while (!onFirstQuicklink(s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expect(web.page_len != null);
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
     try std.testing.expectEqualStrings("https://www.google.com/search?q=pizzas", web.probe.opened[0..web.probe.opened_len]);
@@ -404,7 +314,7 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(web.page_len == null);
     web.probe = .{};
     t.settle(1);
-    while (!onFirstQuicklink(&s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    while (!onFirstQuicklink(s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
     try std.testing.expectEqualStrings("https://www.google.com/search?q=pizzas", web.probe.opened[0..web.probe.opened_len]);
 }
@@ -431,10 +341,6 @@ test "the welcome: a key, pressed for real, then a first search" {
     // Its keys and clashes are the Mac's (macOS's own shortcuts).
     if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    ix.starters = &mac_starters;
-    try ix.add("Safari", "/Applications/Safari.app");
     var o: onboard.Onboard = .{};
     // Hooks only once started: the system's shortcuts are not read in tests.
     o.start(.cmd_space);
@@ -442,12 +348,14 @@ test "the welcome: a key, pressed for real, then a first search" {
     o.system = &sys;
     var steps: Steps = .{};
     o.hooks = .{ .ctx = &steps, .apply = Steps.apply, .fix = Steps.fix, .done = Steps.finished };
-    var s: view.Nanolight = .{ .index = &ix, .onboard = &o };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = 480, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const t = &rig.t;
+    rig.ix.starters = &mac_starters;
+    try rig.apps(&.{"Safari"});
+    rig.s.onboard = &o;
+    try rig.mount(.{ .screen = .none, .height = 480 });
     try std.testing.expect(t.hasText("Welcome to Nanolight"));
     // Who holds ⌘Space, by name; going on anyway is said as such.
     try std.testing.expect(t.hasText("macOS gives ⌘ Space to Spotlight first."));
@@ -489,135 +397,19 @@ test "the welcome: a key, pressed for real, then a first search" {
     try std.testing.expectEqual(shortcut.Choice.opt_cmd_space, steps.applied.?);
 }
 
-const SettingsHost = @import("settings_host.zig").SettingsHost;
-
-/// A host that records what Settings asked it to do.
-pub const Prefs = struct {
-    probe: Probe = .{},
-    key: shortcut.Choice = .cmd_space,
-    applied: ?shortcut.Choice = null,
-    recording: bool = false,
-    /// Whether the recorder can start (an event monitor the system refused).
-    can_record: bool = true,
-    login_on: bool = false,
-    suggest_sets: u8 = 0,
-    searches_out: ?bool = null,
-    theme: ?@import("palette.zig").Theme = null,
-    menu_bar_on: bool = true,
-    clip_on: ?bool = null,
-    clip_cleared: u8 = 0,
-    /// What Clear History answers.
-    clip_clear_ok: bool = true,
-    box: SettingsHost = undefined,
-    /// The panel whose suggestions and searches the app's host would set.
-    nl: ?*view.Nanolight = null,
-
-    pub fn init(p: *Prefs) void {
-        p.box = .{
-            .ctx = p,
-            .choice = choice,
-            .apply = apply,
-            .record = record,
-            .login = login,
-            .suggest = suggestSet,
-            .searches_out = searchesOut,
-            .theme = themeSet,
-            .menu_bar = menuBar,
-            .clipboard_enabled = clipboardEnabled,
-            .clipboard_clear = clipboardClear,
-            .sync_status = syncStatus,
-            .version = ver,
-            .ready = ready,
-            .check = noop,
-            .restart = noop,
-            .welcome = noop,
-            .quit = noop,
-        };
-    }
-    pub fn host(p: *Prefs) view.Host {
-        return .{ .ctx = p, .open = open, .hide = hide, .settings = &p.box };
-    }
-    fn open(ctx: *anyopaque, target: []const u8) void {
-        Probe.open(&@as(*Prefs, @ptrCast(@alignCast(ctx))).probe, target);
-    }
-    fn hide(ctx: *anyopaque) void {
-        Probe.hide(&@as(*Prefs, @ptrCast(@alignCast(ctx))).probe);
-    }
-    fn choice(ctx: *anyopaque) shortcut.Choice {
-        return @as(*Prefs, @ptrCast(@alignCast(ctx))).key;
-    }
-    fn apply(ctx: *anyopaque, c: shortcut.Choice) void {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        p.applied = c;
-        p.key = c;
-    }
-    fn record(ctx: *anyopaque, on: bool) bool {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        p.recording = on and p.can_record;
-        return p.recording;
-    }
-    fn login(ctx: *anyopaque, set: ?bool) bool {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        if (set) |on| p.login_on = on;
-        return p.login_on;
-    }
-    fn suggestSet(ctx: *anyopaque, on: bool) void {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        p.suggest_sets += 1;
-        if (p.nl) |s| s.suggest_on = on;
-    }
-    fn searchesOut(ctx: *anyopaque, on: bool) void {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        p.searches_out = on;
-        if (p.nl) |s| s.searches_out = on;
-    }
-    fn themeSet(ctx: *anyopaque, t: @import("palette.zig").Theme) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).theme = t;
-    }
-    fn menuBar(ctx: *anyopaque, set: ?bool) bool {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        if (set) |on| p.menu_bar_on = on;
-        return p.menu_bar_on;
-    }
-    fn clipboardEnabled(ctx: *anyopaque, set: ?bool) ?bool {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        if (set) |on| p.clip_on = on;
-        return p.clip_on;
-    }
-    fn clipboardClear(ctx: *anyopaque) bool {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        p.clip_cleared += 1;
-        return p.clip_clear_ok;
-    }
-    fn syncStatus(_: *anyopaque) []const u8 {
-        return @import("account.zig").off_text;
-    }
-    fn ver(_: *anyopaque) []const u8 {
-        return "0.1.0";
-    }
-    fn ready(_: *anyopaque) ?[]const u8 {
-        return null;
-    }
-    fn noop(_: *anyopaque) void {}
-};
-
 test "settings opens from ⌘,, from typing, and from the gear" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    ix.starters = &mac_starters;
-    try ix.add("Safari", "/Applications/Safari.app");
     var prefs: Prefs = .{};
     prefs.init();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = prefs.host();
-    prefs.nl = &s;
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    rig.ix.starters = &mac_starters;
+    try rig.apps(&.{"Safari"});
+    prefs.nl = s;
+    try rig.mount(.{ .host = prefs.host() });
     // The gear is in the footer, named.
     try std.testing.expect(t.hasText("Settings"));
     try t.clickText("Settings");
@@ -642,10 +434,10 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     try std.testing.expect(t.hasText("Safari"));
 
     // Typing "settings" lists the row; Return opens it.
-    press(&t, &.{.{ .insert = "settings" }});
+    press(t, &.{.{ .insert = "settings" }});
     try std.testing.expect(t.hasText("Nanolight Settings"));
     try std.testing.expectEqual(results.Kind.settings, s.res.rows[0].kind);
-    press(&t, &.{.{ .command = .insert_newline }});
+    press(t, &.{.{ .command = .insert_newline }});
     t.settle(1);
     try std.testing.expect(s.settings_ui.open);
 
@@ -657,13 +449,13 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     // letter alone is refused, ⌥X is taken, kept, and shown as the chosen
     // one. (A PC keeps to the four.)
     if (@import("builtin").os.tag == .macos) {
-        press(&t, &.{.{ .command = .insert_newline }});
+        press(t, &.{.{ .command = .insert_newline }});
         t.settle(1);
         try std.testing.expect(prefs.recording and t.hasText("Type a shortcut"));
-        s.settings_ui.took(&s, shortcut.recorded(7, 0, 'x'));
+        s.settings_ui.took(s, shortcut.recorded(7, 0, 'x'));
         t.settle(1);
         try std.testing.expect(prefs.recording and t.hasText("Add ⌘, ⌥ or ⌃"));
-        s.settings_ui.took(&s, shortcut.recorded(7, 1 << 19, 'x'));
+        s.settings_ui.took(s, shortcut.recorded(7, 1 << 19, 'x'));
         t.settle(1);
         try std.testing.expect(!prefs.recording and t.hasText("⌥ X"));
         try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = 1 << 11 }));
@@ -679,7 +471,7 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     // ↓ onto Google Suggestions, Return flips it.
     try std.testing.expect(s.suggest_on);
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
-    press(&t, &.{.{ .command = .insert_newline }});
+    press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqual(@as(usize, 1), s.settings_ui.sel);
     try std.testing.expectEqual(true, s.settings_ui.open);
     try std.testing.expectEqual(@as(u8, 1), prefs.suggest_sets);
@@ -690,15 +482,15 @@ test "settings opens from ⌘,, from typing, and from the gear" {
 
 test "the panel never outgrows its window, which is never resized" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    ix.starters = &mac_starters;
-    for ([_][]const u8{ "Safari", "Mail", "Maps", "Music", "Notes", "Numbers", "Pages", "Photos", "Calendar", "Calculator" }) |n| {
-        var buf: [64]u8 = undefined;
-        try ix.add(n, try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n}));
-    }
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    rig.ix.starters = &mac_starters;
+    try rig.apps(&.{
+        "Safari",  "Mail",  "Maps",   "Music",    "Notes",
+        "Numbers", "Pages", "Photos", "Calendar", "Calculator",
+    });
     var tallest: f32 = 0;
     for ([_][]const u8{ "", "a", "s", "ma", "2^10 * 3", "1+a", "liquid glass" }) |q| {
         s.query.set(q);
@@ -724,22 +516,17 @@ test "the panel never outgrows its window, which is never resized" {
 test "on a PC the panel's keys are Ctrl's, and Settings says so" {
     if (@import("builtin").os.tag == .macos) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    ix.starters = &mac_starters;
-    try ix.add("Safari", "/Applications/Safari.app");
-    try ix.add("System Settings", "/Applications/System Settings.app");
     var prefs: Prefs = .{};
     prefs.init();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = prefs.host();
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
-    press(&t, &.{.{ .insert = "s" }});
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    rig.ix.starters = &mac_starters;
+    try rig.apps(&.{ "Safari", "System Settings" });
+    try rig.mount(.{ .host = prefs.host() });
+    press(t, &.{.{ .insert = "s" }});
     try std.testing.expect(t.hasText("Ctrl+2"));
     try std.testing.expect(!t.containsText("⌘"));
     try std.testing.expect(t.shortcut(.{ .key = ',', .ctrl = true }));
@@ -752,19 +539,17 @@ test "on a PC the panel's keys are Ctrl's, and Settings says so" {
 
 test "a welcome whose key is set elsewhere skips the key step, in two steps" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    ix.starters = &mac_starters;
-    try ix.add("Safari", "/Applications/Safari.app");
     var o: onboard.Onboard = .{ .skip_key = true };
     o.start(.cmd_space);
     try std.testing.expectEqual(onboard.Step.try_it, o.step);
-    var s: view.Nanolight = .{ .index = &ix, .onboard = &o };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = 480, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const t = &rig.t;
+    rig.ix.starters = &mac_starters;
+    try rig.apps(&.{"Safari"});
+    rig.s.onboard = &o;
+    try rig.mount(.{ .screen = .none, .height = 480 });
     try std.testing.expect(!t.containsText("Open it with"));
     try std.testing.expect(t.containsText("1 of 2"));
     o.pressed(true);
@@ -779,23 +564,16 @@ test "a welcome whose key is set elsewhere skips the key step, in two steps" {
 
 test "Ctrl+J and Ctrl+K move down and up, and the field never sees them" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    ix.starters = &mac_starters;
-    for ([_][]const u8{ "Safari", "System Settings", "Notes" }) |n| {
-        var buf: [64]u8 = undefined;
-        try ix.add(n, try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n}));
-    }
     var probe: Probe = .{};
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = .{ .ctx = &probe, .open = Probe.open, .hide = Probe.hide };
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = 480, .dark = true });
-    defer t.deinit();
-    t.settle(1);
-    press(&t, &.{.{ .insert = "s" }});
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    rig.ix.starters = &mac_starters;
+    try rig.apps(&.{ "Safari", "System Settings", "Notes" });
+    try rig.mount(.{ .host = probe.host(), .height = 480 });
+    press(t, &.{.{ .insert = "s" }});
     try std.testing.expect(t.shortcut(.{ .key = 'j', .ctrl = true }));
     try std.testing.expectEqual(@as(usize, 1), s.sel);
     try std.testing.expect(t.shortcut(.{ .key = 'k', .ctrl = true }));
@@ -807,10 +585,11 @@ test "Ctrl+J and Ctrl+K move down and up, and the field never sees them" {
 
 test "the panel reopens at the root only after being away longer than pop_after" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var s: view.Nanolight = .{ .index = &ix, .pop_after = 90 };
-    defer s.query.deinit();
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    s.pop_after = 90;
     // Never hidden: nothing to pop.
     try std.testing.expect(!s.popDue(1000));
     s.hid(1000);

@@ -5,8 +5,8 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const Index = @import("apps.zig").Index;
 const view = @import("view.zig");
+const support = @import("test_support.zig");
 const model = @import("raycast_model.zig");
 const rv = @import("raycast_view.zig");
 const Ext = rv.Ext;
@@ -125,11 +125,12 @@ const Answering = struct {
 /// A script's screen in a panel, its host answering as the runner does.
 /// The panel's host opens a script's row as script_live.zig does.
 const Rig = struct {
-    ix: Index,
-    s: view.Nanolight,
+    panel: support.Rig,
+    /// The panel and its Tester, as the tests name them.
+    s: *view.Nanolight,
+    t: *ui.Tester,
     ext: Ext,
     host: Answering,
-    t: ui.Tester,
     opts: Options,
     hidden: bool,
 
@@ -151,23 +152,20 @@ const Rig = struct {
 
     /// In place: the panel, the screen and the host point at each other.
     fn init(r: *Rig, gpa: std.mem.Allocator, opts: Options) !void {
-        r.ix = .init(gpa);
-        r.s = .{ .index = &r.ix };
+        r.panel.init(gpa);
+        r.s = &r.panel.s;
+        r.t = &r.panel.t;
         r.opts = opts;
         r.hidden = false;
-        r.s.host = .{ .ctx = r, .open = open, .hide = hide };
         r.ext = .{ .gpa = gpa, .back = &r.s.query };
         r.s.ext = &r.ext;
         r.host = .{ .ext = &r.ext, .backing = opts.backing };
-        try r.ix.add("Greet", row);
+        errdefer r.deinit();
+        try r.panel.ix.add("Greet", row);
+        r.s.host = .{ .ctx = r, .open = open, .hide = hide };
         r.s.reveal();
         if (!opts.rows) r.script();
-        try r.t.init(gpa, .init(&r.s, view.Nanolight.view), .{
-            .width = view.width,
-            .height = view.max_height,
-            .dark = true,
-        });
-        r.t.settle(1);
+        try r.panel.mount(.{ .screen = .none });
     }
 
     fn script(r: *Rig) void {
@@ -188,10 +186,9 @@ const Rig = struct {
     }
 
     fn deinit(r: *Rig) void {
-        r.t.deinit();
+        r.panel.unmount();
         r.ext.deinit();
-        r.s.query.deinit();
-        r.ix.deinit();
+        r.panel.deinit();
     }
 
     fn heard(r: *const Rig, what: []const u8) bool {
@@ -423,7 +420,7 @@ test "a script's icon outlives the index it came from" {
     // A window whose image cache starts empty, as after an eviction, reads
     // the icon's bytes again.
     var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&r.s, view.Nanolight.view), .{
+    try t.init(gpa, .init(r.s, view.Nanolight.view), .{
         .width = view.width,
         .height = view.max_height,
         .dark = true,

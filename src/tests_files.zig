@@ -1,21 +1,18 @@
 //! File search regression coverage.
 const std = @import("std");
-const Index = @import("apps.zig").Index;
 const view = @import("view.zig");
+const Rig = @import("test_support.zig").Rig;
 const suggest = @import("suggest.zig");
 const results = @import("results.zig");
 
 test "files share the local results' head and fit the original window" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    for ([_][]const u8{ "Safari", "Mail", "Maps", "Calendar", "Calculator", "System Settings Alpha" }) |name| {
-        var buf: [64]u8 = undefined;
-        try ix.add(name, try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{name}));
-    }
-    var s: view.Nanolight = .{ .index = &ix, .files_on = true };
-    defer s.query.deinit();
-    defer s.found.deinit();
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    s.files_on = true;
+    try rig.apps(&.{ "Safari", "Mail", "Maps", "Calendar", "Calculator", "System Settings Alpha" });
     // "settings" keeps Nanolight's Settings first; "a" matches all six apps.
     for ([_][]const u8{ "settings", "a" }) |q| {
         s.query.set(q);
@@ -144,16 +141,15 @@ test "cached path rows are filtered without directory IO" {
 test "apps, panes, files and quicklinks share the window budget" {
     if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
     const t = std.testing;
-    var ix: Index = .init(t.allocator);
-    defer ix.deinit();
+    var rig: Rig = undefined;
+    rig.init(t.allocator);
+    defer rig.deinit();
+    const s = &rig.s;
+    s.files_on = true;
     for (0..results.max_apps) |i| {
         var name: [64]u8 = undefined;
-        var path: [128]u8 = undefined;
-        try ix.add(try std.fmt.bufPrint(&name, "Login {d}", .{i}), try std.fmt.bufPrint(&path, "/Applications/Login {d}.app", .{i}));
+        try rig.apps(&.{try std.fmt.bufPrint(&name, "Login {d}", .{i})});
     }
-    var s: view.Nanolight = .{ .index = &ix, .files_on = true };
-    defer s.query.deinit();
-    defer s.found.deinit();
     s.query.set("login");
     s.rebuild();
     var found: @import("files.zig").List = .{ .allocator = t.allocator };
@@ -228,11 +224,11 @@ test "file icon allocations survive filtering, eviction and owning replacement" 
 test "file answers move icons only for the current enabled query" {
     const t = std.testing;
     const files = @import("files.zig");
-    var ix: Index = .init(t.allocator);
-    defer ix.deinit();
-    var s: view.Nanolight = .{ .index = &ix, .files_on = true };
-    defer s.query.deinit();
-    defer s.found.deinit();
+    var rig: Rig = undefined;
+    rig.init(t.allocator);
+    defer rig.deinit();
+    const s = &rig.s;
+    s.files_on = true;
     s.query.set("report");
     s.rebuild();
     var found: files.List = .{ .allocator = t.allocator };
@@ -280,11 +276,11 @@ fn rowOf(s: *const view.Nanolight, kind: results.Kind, text: []const u8) ?usize 
 test "the selection stays on its row as files and completions land in any order" {
     const t = std.testing;
     const files = @import("files.zig");
-    var ix: Index = .init(t.allocator);
-    defer ix.deinit();
-    var s: view.Nanolight = .{ .index = &ix, .files_on = true };
-    defer s.query.deinit();
-    defer s.found.deinit();
+    var rig: Rig = undefined;
+    rig.init(t.allocator);
+    defer rig.deinit();
+    const s = &rig.s;
+    s.files_on = true;
     s.query.set("report");
     s.rebuild();
     var found: files.List = .{ .allocator = t.allocator };
@@ -293,29 +289,29 @@ test "the selection stays on its row as files and completions land in any order"
     found.add("/tmp/report-b", false, .{ .score = 50 });
     s.filesAnswered("report", &found);
     // A file picked, then completions land above nothing it had.
-    s.sel = rowOf(&s, .file, "/tmp/report-b").?;
+    s.sel = rowOf(s, .file, "/tmp/report-b").?;
     var web: suggest.List = .{};
     for ([_][]const u8{ "report card", "report template" }) |q| web.push(q);
     s.answered("report", &web);
-    try t.expectEqual(rowOf(&s, .file, "/tmp/report-b").?, s.sel);
+    try t.expectEqual(rowOf(s, .file, "/tmp/report-b").?, s.sel);
     // A completion picked, then files land in another order.
-    s.sel = rowOf(&s, .suggest, "report template").?;
+    s.sel = rowOf(s, .suggest, "report template").?;
     found.add("/tmp/report-c", false, .{ .score = 300 });
     found.add("/tmp/report-b", false, .{ .score = 200 });
     found.add("/tmp/report-a", false, .{ .score = 10 });
     s.filesAnswered("report", &found);
-    try t.expectEqual(rowOf(&s, .suggest, "report template").?, s.sel);
+    try t.expectEqual(rowOf(s, .suggest, "report template").?, s.sel);
     // The picked file moved up: the selection goes with it.
-    const a_was = rowOf(&s, .file, "/tmp/report-a").?;
+    const a_was = rowOf(s, .file, "/tmp/report-a").?;
     s.sel = a_was;
     found.add("/tmp/report-a", false, .{ .score = 900 });
     found.add("/tmp/report-c", false, .{ .score = 300 });
     s.filesAnswered("report", &found);
-    const a_now = rowOf(&s, .file, "/tmp/report-a").?;
+    const a_now = rowOf(s, .file, "/tmp/report-a").?;
     try t.expect(a_now != a_was);
     try t.expectEqual(a_now, s.sel);
     // The picked completion is gone from the next answer: back to the top.
-    s.sel = rowOf(&s, .suggest, "report card").?;
+    s.sel = rowOf(s, .suggest, "report card").?;
     web = .{};
     web.push("report template");
     s.answered("report", &web);

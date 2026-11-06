@@ -4,13 +4,13 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const Index = @import("apps.zig").Index;
 const view = @import("view.zig");
 const clipboard = @import("clipboard.zig");
 const clipboard_view = @import("clipboard_view.zig");
 const settings_view = @import("settings_view.zig");
 const account = @import("account.zig");
-const tests = @import("tests.zig");
+const support = @import("test_support.zig");
+const Rig = support.Rig;
 const testing = std.testing;
 const S = ui.Shortcut;
 
@@ -70,69 +70,59 @@ const Fake = struct {
     }
 };
 
-fn rig(gpa: std.mem.Allocator, ix: *Index, f: *Fake, s: *view.Nanolight, t: *ui.Tester) !void {
-    _ = ix;
-    s.host = f.host();
-    s.reveal();
-    try t.init(gpa, .init(s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    t.settle(1);
-}
-
 fn opened(t: *ui.Tester, s: *view.Nanolight) void {
-    tests.press(t, &.{.{ .insert = "clip" }});
-    tests.press(t, &.{.{ .command = .insert_newline }});
+    support.press(t, &.{.{ .insert = "clip" }});
+    support.press(t, &.{.{ .command = .insert_newline }});
     std.debug.assert(s.clip_ui.open);
     t.settle(1);
 }
 
 test "the row appears for clip and clipboard, only with a host, and opens the screen" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var f: Fake = .{};
     f.init();
     defer f.deinit();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try rig(gpa, &ix, &f, &s, &t);
-    defer t.deinit();
-    tests.press(&t, &.{.{ .insert = "clip" }});
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = f.host() });
+    support.press(t, &.{.{ .insert = "clip" }});
     try testing.expect(t.hasText("Clipboard History"));
     try testing.expectEqual(@import("results.zig").Kind.clipboard, s.res.rows[0].kind);
-    tests.press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "clipboard" } });
+    support.retype(t, "clipboard");
     try testing.expectEqual(@import("results.zig").Kind.clipboard, s.res.rows[0].kind);
     // A letter or two of it is not enough, and neither is its middle.
     for ([_][]const u8{ "cl", "ho", "xyz" }) |q| {
-        tests.press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = q } });
+        support.retype(t, q);
         for (s.res.slice()) |r| try testing.expect(r.kind != .clipboard);
     }
-    tests.press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "clip" } });
-    tests.press(&t, &.{.{ .command = .insert_newline }});
+    support.retype(t, "clip");
+    support.press(t, &.{.{ .command = .insert_newline }});
     try testing.expect(s.clip_ui.open and !f.hidden);
     try testing.expect(t.hasText("Search Clipboard History…"));
     // Without a host for it the row is not listed.
     s.clip_ui.hide();
     s.host.?.clipboard = null;
     s.reveal();
-    tests.press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "clip" } });
+    support.retype(t, "clip");
     for (s.res.slice()) |r| try testing.expect(r.kind != .clipboard);
 }
 
 test "the screen lists newest first with type, app and time, and the selection's detail" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var f: Fake = .{};
     f.init();
     defer f.deinit();
     f.fill();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try rig(gpa, &ix, &f, &s, &t);
-    defer t.deinit();
-    opened(&t, &s);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = f.host() });
+    opened(t, s);
     try testing.expect(t.hasText("hello world"));
     try testing.expect(t.hasText("Text · Safari · 5 min ago"));
     try testing.expect(t.hasText("Image 800 × 600"));
@@ -159,25 +149,24 @@ test "the screen lists newest first with type, app and time, and the selection's
 
 test "typing searches text, file names and apps; Esc closes the screen and the panel" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var f: Fake = .{};
     f.init();
     defer f.deinit();
     f.fill();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try rig(gpa, &ix, &f, &s, &t);
-    defer t.deinit();
-    opened(&t, &s);
-    tests.press(&t, &.{.{ .insert = "report" }});
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = f.host() });
+    opened(t, s);
+    support.press(t, &.{.{ .insert = "report" }});
     try testing.expectEqual(@as(usize, 1), s.clip_ui.n);
     try testing.expect(t.hasText("report.pdf") and !t.hasText("hello world"));
-    tests.press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "preview" } });
+    support.retype(t, "preview");
     try testing.expectEqual(@as(usize, 1), s.clip_ui.n);
     try testing.expect(t.hasText("Image 800 × 600"));
-    tests.press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "nothing like it" } });
+    support.retype(t, "nothing like it");
     try testing.expect(t.hasText("No matches."));
     // Esc leaves the screen and hides the panel, the query cleared for the rows.
     try testing.expect(t.shortcut(.{ .key = S.escape }));
@@ -189,18 +178,17 @@ test "typing searches text, file names and apps; Esc closes the screen and the p
 
 test "Return pastes the selection, ⌘↩ copies it, ⌘⌫ deletes it" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var f: Fake = .{};
     f.init();
     defer f.deinit();
     f.fill();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try rig(gpa, &ix, &f, &s, &t);
-    defer t.deinit();
-    opened(&t, &s);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = f.host() });
+    opened(t, s);
     const newest = f.store.entries.items[0].hash;
     const second = f.store.entries.items[1].hash;
     // ⌘↩: written, not pasted, the panel stays.
@@ -210,7 +198,7 @@ test "Return pastes the selection, ⌘↩ copies it, ⌘⌫ deletes it" {
     try testing.expect(t.hasText("Copied"));
     // Return on the second pastes it, and the panel goes.
     _ = t.shortcut(.{ .key = S.down });
-    tests.press(&t, &.{.{ .command = .insert_newline }});
+    support.press(t, &.{.{ .command = .insert_newline }});
     try testing.expectEqual(second, f.pasted.?);
     try testing.expect(f.hidden);
     // ⌘⌫ deletes the selected entry.
@@ -226,22 +214,21 @@ test "Return pastes the selection, ⌘↩ copies it, ⌘⌫ deletes it" {
 
 test "a paste that could only copy says why in the footer, and the panel stays" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var f: Fake = .{};
     f.init();
     defer f.deinit();
     f.fill();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try rig(gpa, &ix, &f, &s, &t);
-    defer t.deinit();
-    opened(&t, &s);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = f.host() });
+    opened(t, s);
     for ([_]clipboard.PasteResult{ .copied_no_permission, .copied_unsupported, .failed }) |r| {
         f.result = r;
         f.hidden = false;
-        tests.press(&t, &.{.{ .command = .insert_newline }});
+        support.press(t, &.{.{ .command = .insert_newline }});
         try testing.expect(!f.hidden and s.clip_ui.open);
         try testing.expectEqualStrings(clipboard.pasteNote(r).?, s.clip_ui.note);
     }
@@ -250,29 +237,28 @@ test "a paste that could only copy says why in the footer, and the panel stays" 
     f.ch.copy_only = true;
     f.copied = null;
     f.pasted = null;
-    tests.press(&t, &.{.{ .command = .insert_newline }});
+    support.press(t, &.{.{ .command = .insert_newline }});
     try testing.expect(f.copied != null and f.pasted == null);
 }
 
 test "an empty history says why it is empty, and the panel reopens at the root" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var f: Fake = .{};
     f.init();
     defer f.deinit();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try rig(gpa, &ix, &f, &s, &t);
-    defer t.deinit();
-    opened(&t, &s);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = f.host() });
+    opened(t, s);
     try testing.expect(t.hasText("Nothing copied yet."));
     f.why = "Clipboard history is not available on Linux yet.";
     t.settle(1);
     try testing.expect(t.hasText("Clipboard history is not available on Linux yet."));
     // Return, delete and copy with nothing selected do nothing.
-    tests.press(&t, &.{.{ .command = .insert_newline }});
+    support.press(t, &.{.{ .command = .insert_newline }});
     _ = t.shortcut(.{ .key = S.enter, .cmd = true });
     _ = t.shortcut(.{ .key = 0x7f, .cmd = true });
     try testing.expect(f.pasted == null and f.copied == null);
@@ -285,18 +271,17 @@ test "an empty history says why it is empty, and the panel reopens at the root" 
 
 test "the screen survives a hide inside pop_to_root_seconds, search text included" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var f: Fake = .{};
     f.init();
     defer f.deinit();
     f.fill();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try rig(gpa, &ix, &f, &s, &t);
-    defer t.deinit();
-    opened(&t, &s);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = f.host() });
+    opened(t, s);
     s.query.set("acme");
     s.hid(1000);
     try testing.expect(!s.popDue(1000 + s.pop_after));
@@ -313,18 +298,17 @@ test "the screen survives a hide inside pop_to_root_seconds, search text include
 
 test "an entry added while the screen is open appears at once" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
     var f: Fake = .{};
     f.init();
     defer f.deinit();
     f.fill();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    var t: ui.Tester = undefined;
-    try rig(gpa, &ix, &f, &s, &t);
-    defer t.deinit();
-    opened(&t, &s);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = f.host() });
+    opened(t, s);
     _ = t.shortcut(.{ .key = S.down });
     const image = f.store.entries.items[1].hash;
     _ = f.store.add(.{ .kind = .text, .text = "fresh copy", .source = "org.mozilla.firefox" }, account.now());
@@ -338,19 +322,15 @@ test "an entry added while the screen is open appears at once" {
 
 test "Settings: the clipboard rows toggle recording and clear the history" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var prefs: tests.Prefs = .{};
+    var prefs: support.Prefs = .{};
     prefs.init();
     prefs.clip_on = true;
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = prefs.host();
-    s.openSettings();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try testing.expect(t.hasText("Record Copied Items"));
     try t.clickText("Record Copied Items");
     t.settle(1);
@@ -376,18 +356,14 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
 
 test "Settings: no clipboard rows where the system has no history, and a shorter screen" {
     const gpa = testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var prefs: tests.Prefs = .{};
+    var prefs: support.Prefs = .{};
     prefs.init();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = prefs.host();
-    s.openSettings();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try testing.expect(!t.hasText("Record Copied Items") and !t.hasText("Clear History"));
     try testing.expect(s.settings_ui.tall() < settings_view.height);
     const quit = t.findText("Quit Nanolight").?;

@@ -3,10 +3,10 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const Index = @import("apps.zig").Index;
 const view = @import("view.zig");
 const settings_view = @import("settings_view.zig");
-const tests = @import("tests.zig");
+const support = @import("test_support.zig");
+const Rig = support.Rig;
 const suggest = @import("suggest.zig");
 const mac = @import("builtin").os.tag == .macos;
 const placeholder = "Search apps, do math, search the web…";
@@ -14,15 +14,13 @@ const placeholder = "Search apps, do math, search the web…";
 /// Where the field's placeholder is in the first frame after the panel
 /// shows, and once it has settled.
 fn firstAndSettled(fades: bool) ![2]ui.Rect {
-    const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var s: view.Nanolight = .{ .index = &ix, .window_fades = fades, .margin = view.shadow_margin };
-    defer s.query.deinit();
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width + 2 * view.shadow_margin, .height = view.max_height, .dark = true });
-    defer t.deinit();
+    var rig: Rig = undefined;
+    rig.init(std.testing.allocator);
+    defer rig.deinit();
+    const t = &rig.t;
+    rig.s.window_fades = fades;
+    rig.s.margin = view.shadow_margin;
+    try rig.mount(.{ .width = view.width + 2 * view.shadow_margin, .settle = false });
     t.frame();
     const first = t.findText(placeholder) orelse return error.NoField;
     t.settle(1);
@@ -42,34 +40,31 @@ test "on the Mac the panel's first frame is where it settles (issue #9)" {
 }
 
 fn findRow(t: *ui.Tester, s: *view.Nanolight, words: []const u8) void {
-    tests.press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = words } });
-    while (!tests.onFirstQuicklink(s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    support.retype(t, words);
+    while (!support.onFirstQuicklink(s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
 }
 
 test "searches can open in the browser, ⌘↩ showing them in the panel (issue #10)" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    try ix.add("Safari", "/Applications/Safari.app");
-    var web: tests.Web = .{};
-    var s: view.Nanolight = .{ .index = &ix, .searches_out = true };
-    defer s.query.deinit();
-    s.host = web.host();
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var web: support.Web = .{};
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.apps(&.{"Safari"});
+    s.searches_out = true;
+    try rig.mount(.{ .host = web.host() });
     // Return: the browser, and the panel goes.
-    findRow(&t, &s, "pizza");
-    tests.press(&t, &.{.{ .command = .insert_newline }});
+    findRow(t, s, "pizza");
+    support.press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("https://www.google.com/search?q=pizza", web.probe.opened[0..web.probe.opened_len]);
     try std.testing.expect(web.probe.hidden and web.page_len == null and !s.previewing);
     // ⌘↩: the page in the panel, which stays.
     web.probe = .{};
     s.reveal();
     t.settle(1);
-    findRow(&t, &s, "pasta");
+    findRow(t, s, "pasta");
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
     try std.testing.expectEqualStrings("https://www.google.com/search?q=pasta", web.page[0..web.page_len.?]);
     try std.testing.expect(!web.probe.hidden and web.probe.opened_len == 0 and s.previewing);
@@ -78,19 +73,15 @@ test "searches can open in the browser, ⌘↩ showing them in the panel (issue 
 test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" {
     if (!mac) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var prefs: tests.Prefs = .{};
+    var prefs: support.Prefs = .{};
     prefs.init();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = prefs.host();
-    prefs.nl = &s;
-    s.openSettings();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    prefs.nl = s;
+    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try t.clickText("Show in Menu Bar");
     t.settle(1);
     try std.testing.expect(!prefs.menu_bar_on);
@@ -111,22 +102,13 @@ test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" 
 test "Settings' Open at Login flips what the system says, not a copy" {
     if (@import("build_options").nix_managed) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var prefs: tests.Prefs = .{};
+    var prefs: support.Prefs = .{};
     prefs.init();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = prefs.host();
-    s.openSettings();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{
-        .width = view.width,
-        .height = view.max_height,
-        .dark = true,
-    });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const t = &rig.t;
+    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try t.clickText("Open at Login");
     t.settle(1);
     try std.testing.expect(prefs.login_on);
@@ -142,67 +124,54 @@ test "Settings' Open at Login flips what the system says, not a copy" {
 test "recording a key: idle, recording, refused, and never without a recorder" {
     if (!mac) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var prefs: tests.Prefs = .{};
+    var prefs: support.Prefs = .{};
     prefs.init();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = prefs.host();
-    s.openSettings();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{
-        .width = view.width,
-        .height = view.max_height,
-        .dark = true,
-    });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     const ui_s = &s.settings_ui;
     const shortcut = @import("shortcut.zig");
     // Return on the shortcut row: recording, the recorder with it.
-    ui_s.activateSelected(&s);
+    ui_s.activateSelected(s);
     try std.testing.expectEqual(settings_view.KeyInput.recording, ui_s.key_input);
     try std.testing.expect(prefs.recording);
     // A letter alone is refused; it still waits.
-    ui_s.took(&s, shortcut.recorded(7, 0, 'x'));
+    ui_s.took(s, shortcut.recorded(7, 0, 'x'));
     try std.testing.expectEqual(settings_view.KeyInput.refused, ui_s.key_input);
     try std.testing.expect(prefs.recording);
     // ⌥X is taken: idle, the recorder stopped, the key applied.
-    ui_s.took(&s, shortcut.recorded(7, 1 << 19, 'x'));
+    ui_s.took(s, shortcut.recorded(7, 1 << 19, 'x'));
     try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
     try std.testing.expect(!prefs.recording);
     try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = 1 << 11 }));
     // Esc while recording: idle, nothing applied.
     prefs.applied = null;
-    ui_s.activateSelected(&s);
-    ui_s.took(&s, shortcut.recorded(53, 0, 0));
+    ui_s.activateSelected(s);
+    ui_s.took(s, shortcut.recorded(53, 0, 0));
     try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
     try std.testing.expect(prefs.applied == null and !prefs.recording);
     // A key pressed while idle is no one's.
-    ui_s.took(&s, shortcut.recorded(7, 1 << 19, 'x'));
+    ui_s.took(s, shortcut.recorded(7, 1 << 19, 'x'));
     try std.testing.expect(prefs.applied == null);
     // The recorder could not start: not recording.
     prefs.can_record = false;
-    ui_s.activateSelected(&s);
+    ui_s.activateSelected(s);
     try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
     try std.testing.expect(!prefs.recording);
 }
 
 test "Settings' header picks the panel's theme, and keeps it" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var prefs: tests.Prefs = .{};
+    var prefs: support.Prefs = .{};
     prefs.init();
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = prefs.host();
-    s.openSettings();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try std.testing.expect(t.findText("System") != null);
     // ↑ from the first row: round to the header's swatches; → twice.
     _ = t.shortcut(.{ .key = ui.Shortcut.up });
@@ -226,32 +195,25 @@ test "Settings' header picks the panel's theme, and keeps it" {
 test "System Settings' panes open from the panel, which stays in its window (#12)" {
     if (!mac) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    try ix.add("System Settings", "/System/Applications/System Settings.app");
-    for ([_][]const u8{ "Sound A", "Sound B", "Sound C", "Sound D", "Sound E", "Sound F" }) |n| {
-        var buf: [64]u8 = undefined;
-        try ix.add(n, try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n}));
-    }
-    var web: tests.Web = .{};
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = web.host();
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
-    defer t.deinit();
-    t.settle(1);
-    tests.press(&t, &.{.{ .insert = "login items" }});
+    var web: support.Web = .{};
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.ix.add("System Settings", "/System/Applications/System Settings.app");
+    try rig.apps(&.{ "Sound A", "Sound B", "Sound C", "Sound D", "Sound E", "Sound F" });
+    try rig.mount(.{ .host = web.host() });
+    support.press(t, &.{.{ .insert = "login items" }});
     try std.testing.expect(t.hasText("Login Items & Extensions"));
     try std.testing.expect(t.hasText("Open in System Settings"));
-    tests.press(&t, &.{.{ .command = .insert_newline }});
+    support.press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings("x-apple.systempreferences:com.apple.LoginItems-Settings.extension", web.probe.opened[0..web.probe.opened_len]);
     try std.testing.expect(web.probe.hidden);
     // Every app row, a pane, and Google's completions: the tallest list
     // with four sections still fits.
     s.reveal();
-    tests.press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = "sound" } });
+    support.retype(t, "sound");
     var four: @import("suggest.zig").List = .{};
     for ([_][]const u8{ "sound 1", "sound 2", "sound 3", "sound 4" }) |w| four.push(w);
     s.answered("sound", &four);
@@ -262,19 +224,17 @@ test "System Settings' panes open from the panel, which stays in its window (#12
 
 test "the panel's height lands at once, and keeps Google's room between keys" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var web: tests.Web = .{};
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
+    var web: support.Web = .{};
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
     s.host = web.host();
     s.host.?.resize = struct {
         fn f(_: *anyopaque, _: f32) void {}
     }.f;
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height });
-    defer t.deinit();
+    try rig.mount(.{ .dark = false, .settle = false });
     t.frame();
     t.textOps(&.{.{ .insert = "liq" }});
     t.frame();
@@ -311,19 +271,13 @@ test "the panel's height lands at once, and keeps Google's room between keys" {
 
 test "Google's answer landing after suggestions are turned off lists nothing" {
     const gpa = std.testing.allocator;
-    var ix: Index = .init(gpa);
-    defer ix.deinit();
-    var web: tests.Web = .{};
-    var s: view.Nanolight = .{ .index = &ix };
-    defer s.query.deinit();
-    s.host = web.host();
-    s.reveal();
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&s, view.Nanolight.view), .{
-        .width = view.width,
-        .height = view.max_height,
-    });
-    defer t.deinit();
+    var web: support.Web = .{};
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    try rig.mount(.{ .host = web.host(), .dark = false, .settle = false });
     t.frame();
     t.textOps(&.{.{ .insert = "liq" }});
     t.frame();
