@@ -372,8 +372,9 @@ pub const Index = struct {
     }
 };
 
-/// At most this many launch counts are stored: the most opened.
-pub const max_launches = 512;
+/// At most this many launch counts are stored: the most opened (the same
+/// cap as a synced record's).
+pub const max_launches = @import("settings.zig").max_launches;
 
 /// A stored launch count: an app's path (or, in older rows, its name).
 pub const Launch = struct { key: []const u8, count: u16 };
