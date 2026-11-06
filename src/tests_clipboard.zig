@@ -96,7 +96,7 @@ const Fake = struct {
 fn opened(t: *ui.Tester, s: *view.Nanolight) void {
     support.press(t, &.{.{ .insert = "clip" }});
     support.press(t, &.{.{ .command = .insert_newline }});
-    std.debug.assert(s.clip_ui.open);
+    std.debug.assert(s.screen == .clipboard);
     t.settle(1);
 }
 
@@ -123,12 +123,12 @@ test "the row appears for clip and clipboard, only with a host, and opens the sc
     }
     support.retype(t, "clip");
     support.press(t, &.{.{ .command = .insert_newline }});
-    try testing.expect(s.clip_ui.open and !f.hidden);
+    try testing.expect(s.screen == .clipboard and !f.hidden);
     try testing.expect(t.hasText("Search Clipboard History…"));
     // Without a host for it the row is not listed.
-    s.clip_ui.hide();
+    s.leave(.closed);
     s.host.?.clipboard = null;
-    s.reveal();
+    _ = s.show(0);
     support.retype(t, "clip");
     for (s.res.slice()) |r| try testing.expect(r.kind != .clipboard);
 }
@@ -193,7 +193,7 @@ test "typing searches text, file names and apps; Esc closes the screen and the p
     try testing.expect(t.hasText("No matches."));
     // Esc leaves the screen and hides the panel, the query cleared for the rows.
     try testing.expect(t.shortcut(.{ .key = S.escape }));
-    try testing.expect(!s.clip_ui.open and f.hidden);
+    try testing.expect(s.screen != .clipboard and f.hidden);
     try testing.expectEqualStrings("", s.query.text());
     t.settle(1);
     try testing.expect(t.hasText("Search apps, do math, search the web…"));
@@ -252,7 +252,7 @@ test "a paste that could only copy says why in the footer, and the panel stays" 
         f.result = r;
         f.hidden = false;
         support.press(t, &.{.{ .command = .insert_newline }});
-        try testing.expect(!f.hidden and s.clip_ui.open);
+        try testing.expect(!f.hidden and s.screen == .clipboard);
         try testing.expectEqualStrings(clipboard_view.note(r), s.clip_ui.note);
     }
     try testing.expect(t.hasText(clipboard_view.note(.failed)));
@@ -287,9 +287,8 @@ test "an empty history says why it is empty, and the panel reopens at the root" 
     try testing.expect(f.pasted == null and f.copied == null);
     // Away longer than pop_to_root_seconds: the screen is popped.
     s.hid(1000);
-    try testing.expect(s.popDue(1000 + s.pop_after + 1));
-    s.toRoot();
-    try testing.expect(!s.clip_ui.open);
+    try testing.expect(s.show(1000 + s.away.pop_after + 1));
+    try testing.expect(s.screen != .clipboard);
 }
 
 test "the screen survives a hide inside pop_to_root_seconds, search text included" {
@@ -307,9 +306,8 @@ test "the screen survives a hide inside pop_to_root_seconds, search text include
     opened(t, s);
     s.query.set("acme");
     s.hid(1000);
-    try testing.expect(!s.popDue(1000 + s.pop_after));
-    s.reveal();
-    try testing.expect(s.clip_ui.open);
+    try testing.expect(!s.show(1000 + s.away.pop_after));
+    try testing.expect(s.screen == .clipboard);
     // Other keys delete too: Ctrl+Backspace on GTK, Ctrl+D on Windows.
     const before = f.store.len();
     s.query.clear();
@@ -354,19 +352,32 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
     var prefs: support.Prefs = .{};
     prefs.init();
     prefs.clip_on = true;
+    var f: Fake = undefined;
+    f.init();
+    defer f.deinit();
+    var host = prefs.host();
+    host.clipboard = &f.ch;
     var rig: Rig = undefined;
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
+    try rig.mount(.{ .host = host, .screen = .settings });
     try testing.expect(t.hasText("Record Copied Items"));
+    // Its section is as tall as the height it adds says.
+    const head = t.findText("Clipboard History").?;
+    const next = t.findText(if (@import("builtin").os.tag == .macos)
+        "Sync Across Macs"
+    else
+        "Sync Across Computers").?;
+    try testing.expectEqual(settings_view.heading_h, head.h);
+    try testing.expectEqual(settings_view.clip_height, next.y - head.y);
     try t.clickText("Record Copied Items");
     t.settle(1);
-    try testing.expectEqual(false, prefs.clip_on.?);
+    try testing.expectEqual(false, prefs.clip_on);
     try t.clickText("Record Copied Items");
     t.settle(1);
-    try testing.expectEqual(true, prefs.clip_on.?);
+    try testing.expectEqual(true, prefs.clip_on);
     try t.clickText("Clear History");
     t.settle(1);
     try testing.expectEqual(@as(u8, 1), prefs.clip_cleared);
@@ -379,8 +390,8 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
     try testing.expect(t.hasText("Could Not Clear History"));
     // Everything fits in the window.
     const quit = t.findText("Quit Nanolight").?;
-    try testing.expect(quit.y + quit.h <= s.settings_ui.tall());
-    try testing.expect(s.settings_ui.tall() <= chrome.max_height);
+    try testing.expect(quit.y + quit.h <= s.height());
+    try testing.expect(s.height() <= chrome.max_height);
 }
 
 test "Settings: no clipboard rows where the system has no history, and a shorter screen" {
@@ -394,7 +405,7 @@ test "Settings: no clipboard rows where the system has no history, and a shorter
     const t = &rig.t;
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try testing.expect(!t.hasText("Record Copied Items") and !t.hasText("Clear History"));
-    try testing.expect(s.settings_ui.tall() < settings_view.height);
+    try testing.expect(s.height() < settings_view.height);
     const quit = t.findText("Quit Nanolight").?;
-    try testing.expect(quit.y + quit.h <= s.settings_ui.tall());
+    try testing.expect(quit.y + quit.h <= s.height());
 }

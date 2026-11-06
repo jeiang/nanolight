@@ -68,9 +68,9 @@ pub const Clip = struct {
 
     /// Settings' switch: whether history records; `set` changes it first (kept
     /// in kv, so the app's change outlasts the config file's value; see
-    /// `clipboard.Store.turn`). Null on a system with no history.
-    pub fn enabled(c: *Clip, set: ?bool) ?bool {
-        const store = if (c.store) |*s| s else return null;
+    /// `clipboard.Store.turn`). Off on a system with no history.
+    pub fn enabled(c: *Clip, set: ?bool) bool {
+        const store = if (c.store) |*s| s else return false;
         if (set) |on| {
             const was = store.on;
             store.turn(on, prefs.setFlag(c.core.kv, .clipboard, on));

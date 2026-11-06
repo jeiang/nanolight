@@ -20,6 +20,7 @@ const Target = @import("results.zig").Target;
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 const after = @import("after.zig");
+const PageKey = @import("preview.zig").Key;
 
 /// A menu's item waits for the menu: it closes first, then the panel
 /// takes the keys.
@@ -106,7 +107,7 @@ pub const App = struct {
     pub fn start(a: *App) void {
         const w = a.window.?;
         a.s.fit = panel.setup(w);
-        panel.resize(w, if (a.o.active) a.o.height() else a.s.height());
+        panel.resize(w, a.s.height());
         a.useKey(a.choice);
         a.through = .{ .window = w, .height = a.s.last_h };
         a.preview.watch(.{ .ctx = a, .func = pageKey });
@@ -162,21 +163,18 @@ pub const App = struct {
         const a = from(ctx);
         const w = a.window orelse return;
         const showing = panel.showing(w);
-        a.o.pressed(showing);
+        const welcome_up = a.s.screen == .welcome;
+        if (welcome_up) a.o.pressed(showing);
         if (showing) {
             a.s.hid(account.now());
             return w.hide();
         }
         Hook.run(a.hooks.showing);
         // Freed a key in System Settings, quit a launcher: look again.
-        if (a.o.active) a.o.refresh();
+        if (welcome_up) a.o.refresh();
         panel.place(w);
         Hook.run(a.hooks.rescan);
-        if (a.s.popDue(account.now())) {
-            Hook.run(a.hooks.popped);
-            a.s.toRoot();
-        }
-        a.s.reveal();
+        if (a.s.show(account.now())) Hook.run(a.hooks.popped);
         w.show();
         panel.shown(w);
         a.through.start();
@@ -192,16 +190,17 @@ pub const App = struct {
     }
 
     /// Escape (the page gone, the panel with it) or ⌘↩ while the page has the keys.
-    fn pageKey(ctx: *anyopaque, key: @import("preview.zig").Key) void {
+    fn pageKey(ctx: *anyopaque, key: PageKey) void {
         const a = from(ctx);
         switch (key) {
-            .escape => {
-                a.s.back();
-                hide(a);
-            },
+            .escape => a.s.escape(),
             .open_out => {
                 var buf: [2048]u8 = undefined;
-                open(a, .{ .url = a.preview.current(&buf) orelse a.s.preview_url });
+                const shown = switch (a.s.screen) {
+                    .preview => |page| page.url,
+                    else => "",
+                };
+                open(a, .{ .url = a.preview.current(&buf) orelse shown });
                 hide(a);
             },
         }
@@ -301,11 +300,14 @@ pub const App = struct {
         _ = prefs.setFlag(a.kv, .onboarded, true);
     }
 
-    /// The welcome again. Asked in Settings, it takes the panel's place at
-    /// once; from the menu, the panel comes up anew with it.
-    pub fn welcome(a: *App, asked: enum { settings, menu }) void {
+    /// The welcome, in place of the screen up. At the first run it is the
+    /// first screen; asked in Settings, it takes the panel's place at once;
+    /// from the menu, the panel comes up anew with it.
+    pub fn welcome(a: *App, asked: enum { first_run, settings, menu }) void {
         a.o.start(a.choice);
+        a.s.open(.{ .welcome = a.o });
         switch (asked) {
+            .first_run => {},
             .settings => if (a.window) |w| if (w.isVisible()) w.redraw(),
             .menu => {
                 if (a.window) |w| if (w.isVisible()) w.hide();
@@ -327,9 +329,7 @@ pub const App = struct {
     fn openSettings(a: *App) void {
         const w = a.window orelse return;
         if (!(w.isVisible() and w.isFocused())) toggle(a);
-        // Over the welcome: skipped, kept as done, its key not taken.
-        a.o.end(.drop_choice);
-        a.s.openSettings();
+        a.s.open(.settings);
         w.redraw();
     }
 };

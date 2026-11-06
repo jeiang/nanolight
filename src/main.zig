@@ -69,8 +69,7 @@ pub fn main(init: std.process.Init) !void {
     var s: Nanolight = .{
         .index = &index,
         .kv = kv,
-        .onboard = &o,
-        .pop_after = cfg.pop_to_root_seconds,
+        .away = .{ .pop_after = cfg.pop_to_root_seconds },
     };
     defer s.deinit();
     launchers.load(&s.counts, init.gpa, kv);
@@ -192,7 +191,7 @@ fn loadPreferences(s: *Nanolight, kv: nanoui.kv.Store, gpa: std.mem.Allocator) v
 /// or its menu shows it.
 fn openWindow(core: *App) !void {
     const s = core.s;
-    s.reveal();
+    _ = s.show(account.now());
     // The rows first, so a snapshot is as tall as the panel.
     s.rebuild();
     var options: nanoui.WindowOptions = .{
@@ -235,7 +234,7 @@ fn runShown(
     }
     core.start();
     // The first run: the welcome, in the panel.
-    if (!prefs.has(core.kv, .onboarded)) core.o.start(core.choice);
+    if (!prefs.has(core.kv, .onboarded)) core.welcome(.first_run);
     try menu.start();
     update.start(init);
     sync.start(sync_cfg);
@@ -260,5 +259,5 @@ fn ratesLanded(ctx: *anyopaque) void {
 fn greet(core: *App, update: *update_live.Update, note_buf: *[64]u8) void {
     if (update.greeting(note_buf)) |note| {
         core.s.note = note;
-    } else if (core.o.active) App.toggle(core);
+    } else if (core.s.screen == .welcome) App.toggle(core);
 }

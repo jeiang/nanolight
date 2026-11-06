@@ -62,6 +62,15 @@ pub const Target = union(enum) {
     folder,
     /// A pane of System Settings, its place in settings_panes.zig.
     pane: u16,
+
+    /// Whether it opens a screen in the panel, which then stays up: a
+    /// script command's runs there (its runner hides it for a silent one).
+    pub fn opensScreen(t: Target) bool {
+        return switch (t) {
+            .script => true,
+            .app, .url, .folder, .pane => false,
+        };
+    }
 };
 
 /// The header over a provider's rows.
@@ -216,8 +225,11 @@ pub const max_quicklink_rows = 5;
 pub const max_rows = max_apps + max_quicklink_rows + suggest.max_rows - 1;
 /// The heads over the tallest list: the local rows', "Search" and
 /// "Quicklinks". An answer lists no quicklinks; a card waiting on rates
-/// pays for its head with two rows (`build`).
+/// pays for its head with `pending_rows` rows (`build`).
 pub const max_heads = 3;
+/// The rows a card waiting on rates costs: its extra height and its head
+/// (view.zig asserts they fit).
+pub const pending_rows = 2;
 comptime {
     // The panel's tallest list is sized for these (chrome.max_height).
     assert(max_rows == chrome.max_rows);
@@ -448,8 +460,7 @@ pub const Results = struct {
         if (answered) return;
         const shown = @min(ql.len, max_quicklink_rows);
         // Reserve the quicklinks and one completion before filling local rows.
-        // A pending card's extra height and header cost two ordinary rows.
-        const row_limit = max_rows - @as(usize, if (r.pending) 2 else 0);
+        const row_limit = max_rows - @as(usize, if (r.pending) pending_rows else 0);
         r.n = @min(r.n, row_limit -| shown -| 1);
         // A keyword sends the rest of the words to its quicklink alone.
         if (key) |k| {

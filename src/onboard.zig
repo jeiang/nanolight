@@ -6,7 +6,9 @@
 //!      press — nothing advances on a button;
 //!   3. a first search to run, where Nanolight lives (the menu bar), and
 //!      whether it opens at login.
-//! Esc skips at any step and it stays skipped; the menu bar icon replays it.
+//! Esc skips at any step, closing the panel, and it stays skipped; the menu
+//! bar icon replays it. It is up while it is the panel's screen (view.zig
+//! `Screen.welcome`), which ends it once as it goes.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -51,7 +53,6 @@ const examples = [_]Example{
 };
 
 pub const Onboard = struct {
-    active: bool = false,
     step: Step = .key,
     choice: Choice = .cmd_space,
     /// The key in use: the one at `start`, then the one applied. Only a
@@ -69,7 +70,6 @@ pub const Onboard = struct {
     skip_key: bool = false,
 
     pub fn start(o: *Onboard, choice: Choice) void {
-        o.active = true;
         o.step = if (o.skip_key) .try_it else .key;
         o.choice = choice;
         o.kept = choice;
@@ -91,13 +91,16 @@ pub const Onboard = struct {
         return shortcut_clash.clash(o.choice, &o.holders);
     }
 
-    /// The hot key fired, the panel `visible` before it: step 2's presses.
+    /// The hot key fired while the welcome is up, the panel `visible`
+    /// before it: step 2's presses.
     pub fn pressed(o: *Onboard, visible: bool) void {
-        if (!o.active or o.step != .try_it) return;
+        if (o.step != .try_it) return;
         if (visible) o.closed = true else if (o.closed) o.reopened = true;
     }
 
-    /// Each step's height; the key step is taller by a line while the key clashes.
+    /// Each step's room, measured: its content and some air under it, into
+    /// which the page grows (tests.zig checks the content fits). The key
+    /// step is taller by a line while the key clashes.
     const key_h: f32 = 330;
     const clash_h: f32 = 30;
     const try_h: f32 = 318;
@@ -119,12 +122,10 @@ pub const Onboard = struct {
         };
     }
 
-    pub fn view(o: *Onboard, c: *ui.Context, s: *panel.Nanolight, p: Palette) void {
-        const S = ui.Shortcut;
+    pub fn draw(o: *Onboard, c: *ui.Context, s: *panel.Nanolight, p: Palette) void {
         const enter = c.input.key == .enter;
         // Return moves it on: what changed shows in this frame.
         if (enter) c.changed = true;
-        if (c.shortcut(.{ .key = S.escape })) return o.finish(s, "");
         // A step's content comes in from the right, briefly.
         ui.key(c, @tagName(o.step));
         const f = motion.frame(
@@ -366,8 +367,8 @@ pub const Onboard = struct {
     }
 
     fn doneStep(o: *Onboard, c: *ui.Context, s: *panel.Nanolight, p: Palette, enter: bool) void {
-        if (enter) return o.finish(s, "");
-        if (chrome.numberKey(c, examples.len)) |i| return o.finish(s, examples[i].q);
+        if (enter) return finish(s, "");
+        if (chrome.numberKey(c, examples.len)) |i| return finish(s, examples[i].q);
         {
             const top = ui.div(c).column().wFull().px(28).pt(26).pb(16).gap(4);
             defer top.end();
@@ -391,7 +392,7 @@ pub const Onboard = struct {
                 const r = ui.div(c).row().wFull().h(40).px(12).gap(12).itemsCenter().rounded(10)
                     .control().hover(p.sel);
                 defer r.end();
-                if (r.clicked()) return o.finish(s, e.q);
+                if (r.clicked()) return finish(s, e.q);
                 chrome.tile(c, p, e.icon);
                 ui.textf(
                     c,
@@ -472,25 +473,20 @@ pub const Onboard = struct {
     }
 
     /// How the welcome ends: with the key shown on the key step, or
-    /// without it (Settings opened from the menu bar over it).
+    /// without it (another screen opened over it).
     pub const Exit = enum { take_choice, drop_choice };
 
-    /// The welcome's one way out: done, and kept as done. Nothing when it
-    /// isn't showing.
+    /// The welcome's one way out: done, and kept as done. The panel calls
+    /// it once, as its screen goes (view.zig `Nanolight.leave`).
     pub fn end(o: *Onboard, exit: Exit) void {
-        if (!o.active) return;
         if (exit == .take_choice and o.step == .key) o.useChoice();
-        o.active = false;
         if (o.hooks) |h| h.done(h.ctx);
     }
 
     /// Over: into the launcher, with `query` typed (a first search) or not.
-    pub fn finish(o: *Onboard, s: *panel.Nanolight, query: []const u8) void {
-        o.end(.take_choice);
-        if (query.len > 0) s.query.set(query) else s.query.clear();
-        s.query.invalidate();
-        s.revealed = 0;
-        s.query.focus();
+    fn finish(s: *panel.Nanolight, query: []const u8) void {
+        s.leave(.closed);
+        if (query.len > 0) s.query.set(query);
     }
 };
 
@@ -510,7 +506,7 @@ const TestHooks = struct {
     }
 };
 
-test "Settings opened over the welcome skips it: done, and no key applied" {
+test "a welcome skipped applies no key" {
     var o: Onboard = .{};
     // Hooks only once started: the system's shortcuts are not read in tests.
     o.start(.cmd_space);
@@ -518,11 +514,6 @@ test "Settings opened over the welcome skips it: done, and no key applied" {
     o.hooks = th.hooks();
     o.choice = .opt_space;
     o.end(.drop_choice);
-    try std.testing.expect(!o.active);
-    try std.testing.expectEqual(@as(u8, 1), th.ended);
-    try std.testing.expect(th.applied == null);
-    // Already over: ending again does nothing.
-    o.end(.take_choice);
     try std.testing.expectEqual(@as(u8, 1), th.ended);
     try std.testing.expect(th.applied == null);
 }

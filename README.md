@@ -241,7 +241,7 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/app.zig` | The app around the panel: its window, shown and hidden, its key and its welcome |
 | `src/suggest_live.zig`, `src/files_live.zig`, `src/commands_live.zig` | The app's side of Google's completions, file search and system commands |
 | `src/menu_live.zig`, `src/update_live.zig`, `src/settings_bind.zig` | The menu bar icon and its menu, updates, and Settings' answers |
-| `src/view.zig`, `src/query.zig` | The panel: query, rows, footer, keys; the query's text, the words it is read as, and when the rows are built again |
+| `src/view.zig`, `src/query.zig`, `src/screen.zig` | The panel: query, rows, footer, keys; the query's text, the words it is read as, and when the rows are built again; which screen is up, the one way between them, and how long each lasts once the panel goes |
 | `src/results.zig` | What a query lists, in order: one provider per kind of row, and the target Return opens |
 | `src/launchers.zig`, `src/launch_counts.zig` | The apps and script commands side by side, in one name order, and how often each was opened |
 | `src/web.zig` | Quicklinks: the defaults, keywords, Google's, and the address a search opens |

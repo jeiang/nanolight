@@ -63,7 +63,7 @@ const Toggle = enum {
             .browser => n.searches_out,
             .login => h.login(null),
             .menu_bar => h.menu_bar(h.ctx, null),
-            .clipboard => h.clipboard_enabled(h.ctx, null) orelse false,
+            .clipboard => h.clipboard_enabled(h.ctx, null),
         };
     }
 
@@ -98,21 +98,40 @@ fn present(kind: RowKind, clip: bool) bool {
     };
 }
 
-/// As tall as its sections, never past the window. The Mac has three rows
-/// more (file search, where searches open, and the menu bar icon), and
-/// tighter spacing to fit them.
+/// The gap between Settings' parts, tighter on the Mac to fit its rows.
+const gap: f32 = if (mac) 8 else 10;
+/// A switch's or a button's row.
+const row_h: f32 = 36;
+/// A heading's line (`Palette.heading`, 11.5 points) as the font draws it:
+/// measured (tests_clipboard.zig checks it).
+pub const heading_h: f32 = 14;
+/// Without the clipboard's section: measured, not added up. The Mac has
+/// three rows more (file search, where searches open, and the menu bar
+/// icon), and tighter spacing to fit them. Outside a Nix build the rows
+/// have outgrown it: the footer shows only its top, below them.
 const base_height: f32 = if (mac) 620 else 512;
-/// The clipboard's section: a heading, a switch and a button.
-const clip_height: f32 = if (mac) 110 else 116;
+/// The clipboard's section: a heading, a switch and a button, each with
+/// the gap after it.
+pub const clip_height: f32 = heading_h + 2 * row_h + 3 * gap;
 /// The tallest it gets (with the clipboard's section).
 pub const height: f32 = base_height + clip_height;
+
+/// The height: the clipboard's section is there only where this system has
+/// clipboard history (`Nanolight.hasClipboard`).
+pub fn tall(clip: bool) f32 {
+    return if (clip) height else base_height;
+}
+
+/// The rows shown: the clipboard's only where this system has it.
+fn shown(clip: bool) []const RowKind {
+    return if (clip) visible(true) else visible(false);
+}
 comptime {
     // The window is never resized: Settings fits in it.
     @import("std").debug.assert(height <= chrome.max_height);
 }
 
 pub const Settings = struct {
-    open: bool = false,
     sel: usize = 0,
     ret: chrome.Return = .{},
     choice: Choice = .cmd_space,
@@ -121,48 +140,38 @@ pub const Settings = struct {
     /// Recording a key for the last chip, and whether the one pressed last
     /// was refused (no ⌘, ⌥ or ⌃).
     key_input: KeyInput = .idle,
-    /// Whether this system has clipboard history (its section shows).
-    clip_here: bool = false,
     cleared: enum { idle, done, failed } = .idle,
     /// The host's sync status, pulled each frame.
     sync: []const u8 = "",
     version: []const u8 = @import("build_options").version,
     ready: ?[]const u8 = null,
 
+    /// Settings opens (view.zig `Nanolight.open`).
     pub fn show(s: *Settings) void {
-        s.open = true;
         s.sel = 0;
         s.cleared = .idle;
     }
 
-    /// The height now: the clipboard's section is there only where this system has it.
-    pub fn tall(s: *const Settings) f32 {
-        return if (s.clip_here) height else base_height;
-    }
-
-    pub fn hide(s: *Settings) void {
-        s.open = false;
+    /// Settings goes: no key is waited for.
+    pub fn leave(s: *Settings) void {
         s.key_input = .idle;
-    }
-
-    /// The rows shown now: the clipboard's only where this system has it.
-    fn shown(s: *const Settings) []const RowKind {
-        return if (s.clip_here) visible(true) else visible(false);
     }
 
     fn pull(s: *Settings, n: *panel.Nanolight) void {
         const h = hooks(n);
         s.choice = h.choice(h.ctx);
         if (s.choice.preset() == null) s.custom = s.choice;
-        s.clip_here = h.clipboard_enabled(h.ctx, null) != null;
         s.sync = h.sync_status(h.ctx);
         s.version = h.version(h.ctx);
         s.ready = h.ready(h.ctx);
     }
 
-    pub fn view(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
+    /// Settings, as the screen up (view.zig `Nanolight.draw`): what the
+    /// host says, pulled once a frame, then Return, then the rows.
+    pub fn draw(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
         s.pull(n);
-        const rows = s.shown();
+        if (s.ret.once(c)) s.activateSelected(n);
+        const rows = shown(n.hasClipboard());
         if (s.sel >= rows.len) s.sel = rows.len - 1;
         s.keys(c, n, rows);
         ui.key(c, "settings");
@@ -241,8 +250,8 @@ pub const Settings = struct {
         p: Palette,
         rows: []const RowKind,
     ) void {
-        const clip = s.clip_here;
-        const col = ui.div(c).column().wFull().px(20).pt(2).pb(6).gap(if (mac) 8 else 10).grow();
+        const clip = n.hasClipboard();
+        const col = ui.div(c).column().wFull().px(20).pt(2).pb(6).gap(gap).grow();
         defer col.end();
         label(c, p, "Open Nanolight with");
         s.choices(c, n, p);
@@ -345,7 +354,8 @@ pub const Settings = struct {
         title: []const u8,
     ) void {
         const on = isSel(rows, s.sel, t.row());
-        const d = ui.div(c).row().wFull().h(36).px(4).gap(10).itemsCenter().rounded(10).control()
+        const d = ui.div(c).row().wFull().h(row_h).px(4).gap(10).itemsCenter().rounded(10)
+            .control()
             .bg(if (on) p.sel else p.fill.alpha(0));
         defer d.end();
         if (d.clicked()) flip(n, t);
@@ -398,7 +408,8 @@ pub const Settings = struct {
     ) void {
         const on = isSel(rows, s.sel, kind);
         ui.key(c, @tagName(kind));
-        const d = ui.div(c).row().wFull().h(36).px(12).gap(8).itemsCenter().rounded(10).control()
+        const d = ui.div(c).row().wFull().h(row_h).px(12).gap(8).itemsCenter().rounded(10)
+            .control()
             .bg(if (on) p.sel else p.tile.alpha(0.45)).border(p.rim);
         defer d.end();
         if (d.clicked()) s.activate(n, kind);
@@ -415,11 +426,6 @@ pub const Settings = struct {
 
     fn keys(s: *Settings, c: *ui.Context, n: *panel.Nanolight, rows: []const RowKind) void {
         const S = ui.Shortcut;
-        if (c.shortcut(.{ .key = S.escape })) {
-            s.hide();
-            n.query.focus();
-            return n.hidePanel();
-        }
         if (chrome.moveDown(c)) s.sel = (s.sel + 1) % rows.len;
         if (chrome.moveUp(c)) s.sel = (s.sel + rows.len - 1) % rows.len;
         if (c.shortcut(.{ .key = S.left })) s.nudge(n, rows, -1);
@@ -429,20 +435,9 @@ pub const Settings = struct {
         if (c.shortcut(.{ .key = ' ' })) s.activate(n, rows[s.sel]);
     }
 
-    /// Settings in place of the rows, the panel's height following them.
-    pub fn inPanel(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
-        if (s.ret.once(c)) s.activateSelected(n);
-        s.pull(n);
-        const h = n.follow(s.tall());
-        const box = ui.div(c).column().wFull().h(h).clip();
-        defer box.end();
-        s.view(c, n, p);
-    }
-
     /// Return on the selected row. The field would have taken it.
     pub fn activateSelected(s: *Settings, n: *panel.Nanolight) void {
-        s.pull(n);
-        const rows = s.shown();
+        const rows = shown(n.hasClipboard());
         if (s.sel >= rows.len) return;
         s.activate(n, rows[s.sel]);
     }
@@ -462,7 +457,7 @@ pub const Settings = struct {
             .choice => if (key_choice.any_key)
                 s.record(n, s.key_input == .idle)
             else
-                s.nudge(n, s.shown(), 1),
+                s.nudge(n, shown(n.hasClipboard()), 1),
             inline .suggest, .files, .browser, .login, .menu_bar, .clipboard => |k| {
                 flip(n, @field(Toggle, @tagName(k)));
             },
@@ -470,10 +465,8 @@ pub const Settings = struct {
                 s.cleared = if (h.clipboard_clear(h.ctx)) .done else .failed;
             },
             .updates => if (s.ready != null) h.restart(h.ctx) else h.check(h.ctx),
-            .welcome => {
-                s.hide();
-                h.welcome(h.ctx);
-            },
+            // In place of Settings (view.zig `Nanolight.open`).
+            .welcome => h.welcome(h.ctx),
             .quit => h.quit(h.ctx),
             .theme => setTheme(n, n.theme.step(1)),
         }

@@ -63,10 +63,10 @@ test "searches can open in the browser, ⌘↩ showing them in the panel (issue 
         "https://www.google.com/search?q=pizza",
         web.probe.opened[0..web.probe.opened_len],
     );
-    try std.testing.expect(web.probe.hidden and web.page_len == null and !s.previewing);
+    try std.testing.expect(web.probe.hidden and web.page_len == null and s.screen != .preview);
     // ⌘↩: the page in the panel, which stays.
     web.probe = .{};
-    s.reveal();
+    _ = s.show(0);
     t.settle(1);
     findRow(t, s, "pasta");
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
@@ -74,7 +74,8 @@ test "searches can open in the browser, ⌘↩ showing them in the panel (issue 
         "https://www.google.com/search?q=pasta",
         web.page[0..web.page_len.?],
     );
-    try std.testing.expect(!web.probe.hidden and web.probe.opened_len == 0 and s.previewing);
+    try std.testing.expect(!web.probe.hidden and web.probe.opened_len == 0);
+    try std.testing.expect(s.screen == .preview);
 }
 
 test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" {
@@ -222,7 +223,7 @@ test "System Settings' panes open from the panel, which stays in its window (#12
     try std.testing.expect(web.probe.hidden);
     // Every app row, a pane, and Google's completions: the tallest list
     // with four sections still fits.
-    s.reveal();
+    _ = s.show(0);
     support.retype(t, "sound");
     var four: @import("suggest.zig").List = .{};
     for ([_][]const u8{ "sound 1", "sound 2", "sound 3", "sound 4" }) |w| four.push(w);

@@ -26,9 +26,9 @@ pub const SettingsHost = struct {
     theme: *const fn (ctx: *anyopaque, t: Theme) void,
     /// Whether the menu bar icon shows; `set` changes it first.
     menu_bar: *const fn (ctx: *anyopaque, set: ?bool) bool,
-    /// Whether clipboard history records; `set` changes it first. Null where
-    /// this system has no clipboard history (its rows are not shown).
-    clipboard_enabled: *const fn (ctx: *anyopaque, set: ?bool) ?bool,
+    /// Whether clipboard history records; `set` changes it first. Whether
+    /// this system has it at all is the panel's (`Nanolight.hasClipboard`).
+    clipboard_enabled: *const fn (ctx: *anyopaque, set: ?bool) bool,
     /// Deletes every clipboard entry; false when something may be left on disk.
     clipboard_clear: *const fn (ctx: *anyopaque) bool,
     /// The sync line ("Sync: host, last synced 3 min ago"); valid until the next call.

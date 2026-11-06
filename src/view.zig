@@ -31,6 +31,11 @@ const Kind = results.Kind;
 const Target = results.Target;
 const commands = @import("commands.zig");
 const clipboard_view = @import("clipboard_view.zig");
+const raycast_view = @import("raycast_view.zig");
+const model = @import("raycast_model.zig");
+const Onboard = @import("onboard.zig").Onboard;
+const screen = @import("screen.zig");
+const config = @import("config.zig");
 const chrome = @import("chrome.zig");
 const calc_card = @import("calc_card.zig");
 const palette_mod = @import("palette.zig");
@@ -87,6 +92,32 @@ comptime {
     // A found path is shorter than `files.max_path`; a folder's adds a "/".
     std.debug.assert(max_query_bytes >= files.max_path);
 }
+comptime {
+    // A card waiting on rates, and its head, take the room of the rows it
+    // costs (results.zig `build`).
+    std.debug.assert(calc_card.height + chrome.section.h <=
+        (1 + results.pending_rows) * chrome.row_h);
+}
+
+/// The screen up: the launcher's rows, or one in their place. How long each
+/// lasts, and the one way between them, is `Nanolight.open` and `leave`.
+pub const Screen = union(screen.Kind) {
+    rows,
+    /// A search's page over the rows (`Host.preview`).
+    preview: Page,
+    /// Settings (`Nanolight.settings_ui`).
+    settings,
+    /// Clipboard History (`Nanolight.clip_ui`).
+    clipboard,
+    /// A script command's screen, while it runs (`Nanolight.script_ui`).
+    script,
+    /// The first-run welcome, which the app keeps.
+    welcome: *Onboard,
+};
+
+/// A search's page: its address (in `Nanolight.preview_buf`), shown for the
+/// query as it was then.
+pub const Page = struct { url: []const u8, q: u64 };
 
 const slide: motion.Spring = .{ .stiffness = 700, .damping = 52 };
 
@@ -120,8 +151,6 @@ pub const Nanolight = struct {
     revealed: u64 = 0,
     /// Said in the footer in place of the name ("Updated to 0.1.3"), if set.
     note: []const u8 = "",
-    /// The first-run welcome, drawn while it is active.
-    onboard: ?*@import("onboard.zig").Onboard = null,
     /// Local file search is opt-in on this Mac.
     files_on: bool = false,
     found: files.List = .{},
@@ -133,29 +162,25 @@ pub const Nanolight = struct {
     cache: suggest.Cache = .{},
     /// Currency rates and their fetching (rates.zig); without them none are fetched.
     rates: ?*rates.Live = null,
-    /// A search's page is in the panel, for the query as it was then.
-    previewing: bool = false,
-    preview_q: u64 = 0,
     /// A quicklink's address with the longest query, each byte escaped (3
     /// bytes), and room for the address round it; a longer one is not opened.
     preview_buf: [4 * max_query_bytes]u8 = undefined,
-    preview_url: []const u8 = "",
+    screen: Screen = .rows,
     /// Settings, drawn in the panel in place of the rows.
     settings_ui: settings_view.Settings = .{},
     /// Clipboard History, drawn in the panel in place of the rows.
     clip_ui: clipboard_view.Screen = .{},
-    ext: ?*@import("raycast_view.zig").Ext = null,
-    /// When the panel last went away (seconds), and how long it may be away
-    /// before it reopens at the root; 0 is never.
-    away_at: ?i64 = null,
-    pop_after: u32 = (@import("config.zig").Config{}).pop_to_root_seconds,
+    /// A script command's screen, drawn in place of the rows while it runs.
+    script_ui: raycast_view.Ext = .{},
+    away: screen.Away = .{ .pop_after = (config.Config{}).pop_to_root_seconds },
 
-    /// Frees what the panel holds: the files found, the counts and the
-    /// field's text.
+    /// Frees what the panel holds: the files found, the counts, the
+    /// field's text and a script's screen.
     pub fn deinit(s: *Nanolight) void {
         s.found.deinit();
         s.counts.deinit(s.index.gpa);
         s.query.deinit();
+        s.script_ui.deinit();
     }
 
     /// The apps and script commands, and how often each was opened.
@@ -187,53 +212,137 @@ pub const Nanolight = struct {
 
     /// Whether Clipboard History is up: a new copy is drawn at once.
     pub fn showsClipboard(s: *const Nanolight) bool {
-        return s.clip_ui.open;
+        return s.screen == .clipboard;
     }
 
-    /// The panel went away at `now`.
+    /// Whether this system has clipboard history: the one answer for its
+    /// row, its screen and Settings' section.
+    pub fn hasClipboard(s: *const Nanolight) bool {
+        const h = s.host orelse return false;
+        return h.clipboard != null;
+    }
+
+    /// The panel went away at `now` (seconds).
     pub fn hid(s: *Nanolight, now: i64) void {
-        s.away_at = now;
+        s.away.hid(now);
     }
 
-    /// Whether the panel, shown at `now`, was away longer than `pop_after`.
-    pub fn popDue(s: *Nanolight, now: i64) bool {
-        const t = s.away_at orelse return false;
-        s.away_at = null;
-        return s.pop_after > 0 and now - t > s.pop_after;
-    }
-
-    /// The first screen again: no query, the first row, no other screen.
-    pub fn toRoot(s: *Nanolight) void {
-        s.query.clear();
-        s.sel = 0;
-        s.leaveScreens();
-    }
-
-    /// The panel away: Escape, on any screen, closes it (and the screen)
-    /// rather than going back to the rows.
-    pub fn hidePanel(s: *Nanolight) void {
-        if (s.host) |h| h.hide(h.ctx);
-    }
-
-    /// Called as it is shown: the query selected, the keys its own.
-    pub fn reveal(s: *Nanolight) void {
-        s.back();
-        s.settings_ui.hide();
+    /// The panel shown at `now`: at the root (no query, the first row) when
+    /// it was away longer than `away.pop_after`, which is true; else as it
+    /// was left, less the screens that last only while it is up
+    /// (screen.zig). The query selected, the keys its own.
+    pub fn show(s: *Nanolight, now: i64) bool {
+        const why = s.away.shown(now);
+        if (why == .popped) {
+            s.query.clear();
+            s.sel = 0;
+        }
+        s.leave(why);
         s.shown +%= 1;
         // Suggestions follow what was opened since.
         s.query.invalidate();
         s.revealed = s.query.hash();
         s.query.field.want_selection = .{ 0, s.query.text().len };
         s.query.focus();
+        return why == .popped;
     }
 
-    /// The panel's height for the rows it lists.
+    /// `next` in place of the screen up, which goes (`.replaced`). The
+    /// screen up, opened again, stays and takes what is new (a page's
+    /// address).
+    pub fn open(s: *Nanolight, next: Screen) void {
+        if (std.meta.activeTag(s.screen) != std.meta.activeTag(next)) s.leave(.replaced);
+        s.screen = next;
+        switch (next) {
+            .rows, .welcome => {},
+            .preview => |page| if (s.host) |h| if (h.preview) |f| f(h.ctx, page.url),
+            .settings => s.settings_ui.show(),
+            .clipboard => s.clip_ui.show(s),
+            .script => s.query.clear(),
+        }
+    }
+
+    /// The screen up goes for `why`, unless its kind lasts through it
+    /// (screen.zig): the rows are up again.
+    pub fn leave(s: *Nanolight, why: screen.Why) void {
+        const was = s.screen;
+        if (screen.lasts(was, why)) return;
+        // First: a script's runner, told to end it, closes its screen
+        // through `scriptTold` while this runs.
+        s.screen = .rows;
+        switch (was) {
+            .rows => unreachable,
+            .preview => if (s.host) |h| if (h.preview) |f| f(h.ctx, null),
+            .settings => {
+                s.settings_ui.leave();
+                s.query.focus();
+            },
+            .clipboard => s.clearField(),
+            .script => {
+                s.script_ui.close();
+                s.query.focus();
+            },
+            .welcome => |o| {
+                // Another screen over it skips it, without the key it shows.
+                o.end(if (why == .replaced) .drop_choice else .take_choice);
+                s.clearField();
+                // A first search (`Onboard.finish`) completes at once.
+                s.revealed = 0;
+            },
+        }
+    }
+
+    /// Escape, on any screen: the screen goes, and the panel with it.
+    pub fn escape(s: *Nanolight) void {
+        s.leave(.closed);
+        s.hidePanel();
+    }
+
+    fn hidePanel(s: *Nanolight) void {
+        if (s.host) |h| h.hide(h.ctx);
+    }
+
+    /// The field the rows' again, empty: a screen that searched in it went.
+    fn clearField(s: *Nanolight) void {
+        s.query.clear();
+        s.query.invalidate();
+        s.query.focus();
+    }
+
+    /// Where a script command's runner tells its screen what to show
+    /// (script_run.zig): it opens and closes as the other screens do.
+    pub fn scriptScreen(s: *Nanolight) model.Screen {
+        return .{ .ctx = s, .func = scriptTold };
+    }
+
+    fn scriptTold(ctx: *anyopaque, update: model.Update) void {
+        const s: *Nanolight = @ptrCast(@alignCast(ctx));
+        switch (update) {
+            .start => |st| {
+                s.open(.script);
+                s.script_ui.start(s.index.gpa, st.command, st.to);
+            },
+            .show => |sh| s.script_ui.show(sh.arena, sh.view),
+            .note => |n| s.script_ui.note(n.text, n.bad),
+            // Closed from its side (its back button, a silent script),
+            // or as it is left.
+            .stop => {
+                s.script_ui.stop();
+                if (s.screen == .script) s.leave(.closed);
+            },
+        }
+    }
+
+    /// The panel's height for the screen up.
     pub fn height(s: *const Nanolight) f32 {
-        if (s.settings_ui.open) return s.settings_ui.tall();
-        if (s.clip_ui.open) return clipboard_view.height;
-        if (s.ext) |e| if (e.open) return e.height();
-        if (s.previewing) return chrome.max_height;
-        return @max(s.rowsHeight(), s.held_h);
+        return switch (s.screen) {
+            .rows => @max(s.rowsHeight(), s.held_h),
+            .preview => chrome.max_height,
+            .settings => settings_view.tall(s.hasClipboard()),
+            .clipboard => clipboard_view.height,
+            .script => s.script_ui.height(),
+            .welcome => |o| o.height(),
+        };
     }
 
     fn rowsHeight(s: *const Nanolight) f32 {
@@ -274,18 +383,29 @@ pub const Nanolight = struct {
             .{ .color = .{ .a = 0.24 }, .blur = 28, .y = 12, .knockout = true },
         });
         defer shell.end();
-        if (s.onboard) |o| if (o.active) {
-            const h = s.follow(o.height());
-            const body = ui.div(c).column().wFull().h(h).clip();
-            defer body.end();
-            o.view(c, s, p);
-            return;
-        };
-        if (s.settings_ui.open) return s.settings_ui.inPanel(c, s, p);
-        if (s.clip_ui.open) return s.clip_ui.inPanel(c, s, p);
-        // A script command's output, while it runs (raycast_view.zig).
-        if (s.ext) |e| if (e.open) return e.panel(c, s, p);
+        // Escape is the panel's on every screen (`escape`), before any of
+        // them reads the keys.
+        if (c.shortcut(.{ .key = ui.Shortcut.escape })) s.escape();
+        s.draw(c, p);
+    }
 
+    /// The screen up. The launcher is as tall as the rows it builds as it
+    /// draws; every other screen as tall as it says (`height`).
+    fn draw(s: *Nanolight, c: *ui.Context, p: Palette) void {
+        if (s.screen == .rows or s.screen == .preview) return s.launcher(c, p);
+        const body = ui.div(c).column().wFull().h(s.follow(s.height())).clip();
+        defer body.end();
+        switch (s.screen) {
+            .rows, .preview => unreachable,
+            .settings => s.settings_ui.draw(c, s, p),
+            .clipboard => s.clip_ui.draw(c, s, p),
+            .script => s.script_ui.draw(c, p),
+            .welcome => |o| o.draw(c, s, p),
+        }
+    }
+
+    /// The rows, or a search's page over them.
+    fn launcher(s: *Nanolight, c: *ui.Context, p: Palette) void {
         // The rows for the query as it is, before anything reads them. A
         // key or an edit that changes it has the frame built again (nanoui
         // passes until nothing changes), so the rows follow it at once.
@@ -293,13 +413,13 @@ pub const Nanolight = struct {
         s.keys(c);
         const submitted = s.header(c, p);
         // Typing takes the page away: the rows are for the new words.
-        if (s.previewing and s.query.hash() != s.preview_q) s.back();
+        if (s.screen == .preview and s.query.hash() != s.screen.preview.q) s.leave(.closed);
         if (submitted) s.activate(c);
         const h = s.follow(s.height());
         {
             const body = ui.div(c).column().wFull().h(h - chrome.header_h).clip();
             defer body.end();
-            if (s.previewing) {
+            if (s.screen == .preview) {
                 // Under the page, until it draws.
                 ui.div(c).wFull().h(1).bg(p.hair).end();
                 const wait = ui.div(c).wFull().h(chrome.webArea(h).h).center();
@@ -325,19 +445,16 @@ pub const Nanolight = struct {
         return h;
     }
 
-    /// Arrows, ^N/^P, ^J/^K and Escape, before the field sees them.
+    /// Arrows, ^N/^P and ^J/^K, before the field sees them.
     fn keys(s: *Nanolight, c: *ui.Context) void {
         const S = ui.Shortcut;
-        if (s.previewing) {
-            if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.go(.{ .url = s.preview_url });
-            if (c.shortcut(.{ .key = S.escape })) {
-                s.back();
-                s.hidePanel();
-            }
+        if (s.screen == .preview) {
+            const page = s.screen.preview;
+            if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.go(.{ .url = page.url });
             return;
         }
         // ⌘,: Settings, as on the Mac. The comma never reaches the field.
-        if (c.shortcut(.{ .key = ',', .cmd = true })) return s.openSettings();
+        if (c.shortcut(.{ .key = ',', .cmd = true })) return s.open(.settings);
         // ⌘↩: a search in the browser rather than in the panel.
         if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.activateOut(c);
         // Tab takes the selected file's path while a path is typed, else
@@ -358,7 +475,6 @@ pub const Nanolight = struct {
             s.sel = k;
             s.activate(c);
         }
-        if (c.shortcut(.{ .key = S.escape })) s.hidePanel();
     }
 
     fn header(s: *Nanolight, c: *ui.Context, p: Palette) bool {
@@ -425,7 +541,7 @@ pub const Nanolight = struct {
 
     /// The rows for the query, built once each time it changes or is
     /// invalidated (`Query.changed`); Google is asked for completions not
-    /// in hand. `panel` calls it once a frame, before anything reads them.
+    /// in hand. `launcher` calls it once a frame, before anything reads them.
     pub fn rebuild(s: *Nanolight) void {
         if (!s.query.changed()) return;
         files_view.rebuild(s);
@@ -493,7 +609,7 @@ pub const Nanolight = struct {
             .quicklinks = s.quicklinks,
             .completions = s.web.slices(&said),
             .rates = status,
-            .clip_on = if (s.host) |h| h.clipboard != null else false,
+            .clip_on = s.hasClipboard(),
             .found = &s.found,
             .commands = if (s.host) |h| if (h.command) |run| run.installed else null else null,
         });
@@ -608,11 +724,10 @@ pub const Nanolight = struct {
             ui.key(c, "settings-gear");
             const g = ui.div(c).size(26, 26).rounded(7).center().control().hover(p.sel);
             defer g.end();
-            if (g.clicked()) s.openSettings();
+            if (g.clicked()) s.open(.settings);
             ui.icon(c, "gearshape", .{ .size = 13, .weight = .medium, .color = p.sub });
-            ui.text(c, "Settings", .{ .size = 1, .color = p.sub.alpha(0) });
         }
-        if (s.previewing) {
+        if (s.screen == .preview) {
             chrome.footerKey(c, p, "Open in Browser", platform.mod ++ "↩", true);
             chrome.keySep(c, p);
             chrome.footerKey(c, p, "Close", "esc", false);
@@ -652,48 +767,14 @@ pub const Nanolight = struct {
             std.log.warn("nanolight: the address of {s} for these words is too long", .{link.name});
             return;
         };
-        const show = (if (in_panel) h.preview else null) orelse return s.go(.{ .url = u });
-        s.preview_url = u;
-        s.previewing = true;
-        s.preview_q = s.query.hash();
-        show(h.ctx, u);
-    }
-
-    /// Settings in place of the rows, the screen that was up closed.
-    pub fn openSettings(s: *Nanolight) void {
-        s.leaveScreens();
-        s.settings_ui.show();
-    }
-
-    /// Clipboard History in place of the rows, the screen that was up closed.
-    pub fn openClipboard(s: *Nanolight) void {
-        s.leaveScreens();
-        s.clip_ui.show(s);
-    }
-
-    /// The rows again: the page, Settings, Clipboard History and a script's
-    /// screen (its script ended) all go, so one screen is up at a time. The
-    /// welcome is not a screen here: onboard.zig ends it.
-    fn leaveScreens(s: *Nanolight) void {
-        s.back();
-        s.settings_ui.hide();
-        s.clip_ui.hide();
-        if (s.ext) |e| e.close();
-    }
-
-    /// The rows again, the page gone.
-    pub fn back(s: *Nanolight) void {
-        if (!s.previewing) return;
-        s.previewing = false;
-        if (s.host) |h| if (h.preview) |f| f(h.ctx, null);
+        if (!in_panel or h.preview == null) return s.go(.{ .url = u });
+        s.open(.{ .preview = .{ .url = u, .q = s.query.hash() } });
     }
 
     fn go(s: *Nanolight, target: Target) void {
         const h = s.host orelse return;
         h.open(h.ctx, target);
-        // A script's row opened its screen in the panel, which stays.
-        if (s.ext) |e| if (e.open) return;
-        h.hide(h.ctx);
+        if (!target.opensScreen()) h.hide(h.ctx);
     }
 };
 
@@ -885,11 +966,11 @@ fn runCommand(s: *Nanolight, _: *ui.Context, r: Row) void {
 }
 
 fn openSettingsRow(s: *Nanolight, _: *ui.Context, _: Row) void {
-    s.openSettings();
+    s.open(.settings);
 }
 
 fn openClipboardRow(s: *Nanolight, _: *ui.Context, _: Row) void {
-    s.openClipboard();
+    s.open(.clipboard);
 }
 
 fn searchQuicklink(s: *Nanolight, _: *ui.Context, r: Row) void {

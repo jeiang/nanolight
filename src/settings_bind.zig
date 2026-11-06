@@ -90,7 +90,7 @@ fn menuBar(ctx: *anyopaque, set: ?bool) bool {
     return from(ctx).menu.bar(set);
 }
 
-fn clipboardEnabled(ctx: *anyopaque, set: ?bool) ?bool {
+fn clipboardEnabled(ctx: *anyopaque, set: ?bool) bool {
     return from(ctx).clip.enabled(set);
 }
 

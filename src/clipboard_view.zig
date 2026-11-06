@@ -39,7 +39,6 @@ const list_h: f32 = visible_rows * chrome.row_h + chrome.list_pad * 2;
 pub const height: f32 = chrome.header_h + 1 + list_h + 1 + detail_h + 1 + chrome.footer_h;
 
 pub const Screen = struct {
-    open: bool = false,
     sel: usize = 0,
     /// The entries found: places in the store's list.
     found: [max_found]search.Ranked = undefined,
@@ -54,26 +53,14 @@ pub const Screen = struct {
     /// Said in the footer until the next key.
     note: []const u8 = "",
 
-    /// The screen opens; it uses the panel's own field, cleared.
+    /// The screen opens (view.zig `Nanolight.open`); it uses the panel's
+    /// own field, cleared, which is the rows' again once it goes.
     pub fn show(s: *Screen, n: *panel.Nanolight) void {
-        s.open = true;
         s.sel = 0;
         s.stale = true;
         s.note = "";
         n.query.clear();
         n.query.focus();
-    }
-
-    pub fn hide(s: *Screen) void {
-        s.open = false;
-    }
-
-    /// Back to the rows, the field theirs again.
-    fn back(s: *Screen, n: *panel.Nanolight) void {
-        s.hide();
-        n.query.clear();
-        n.query.focus();
-        n.query.invalidate();
     }
 
     fn host(n: *const panel.Nanolight) ?*const Host {
@@ -103,11 +90,8 @@ pub const Screen = struct {
         return h.store.at(s.found[s.sel].index);
     }
 
-    /// The screen in place of the rows, the panel's height following it.
-    pub fn inPanel(s: *Screen, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
-        const h = n.follow(height);
-        const box = ui.div(c).column().wFull().h(h).clip();
-        defer box.end();
+    /// The screen, as the screen up (view.zig `Nanolight.draw`).
+    pub fn draw(s: *Screen, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
         const hh = host(n);
         if (hh) |x| s.refresh(n, x);
         s.keys(c, n, hh);
@@ -128,10 +112,6 @@ pub const Screen = struct {
 
     fn keys(s: *Screen, c: *ui.Context, n: *panel.Nanolight, hh: ?*const Host) void {
         const S = ui.Shortcut;
-        if (c.shortcut(.{ .key = S.escape })) {
-            s.back(n);
-            return n.hidePanel();
-        }
         const h = hh orelse return;
         if (chrome.moveDown(c)) {
             s.note = "";
@@ -169,7 +149,7 @@ pub const Screen = struct {
         const bar = ui.div(c).row().wFull().h(chrome.header_h).px(18).gap(12).itemsCenter();
         defer bar.end();
         const chevron = ui.div(c).size(26, 26).center().rounded(7).bg(p.tile).control();
-        if (chevron.clicked()) s.back(n);
+        if (chevron.clicked()) n.leave(.closed);
         ui.icon(c, "chevron.left", .{ .size = 13, .weight = .semibold, .color = p.sub });
         chevron.end();
         const before = n.query.hash();

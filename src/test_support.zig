@@ -23,7 +23,7 @@ pub const Rig = struct {
 
     /// What the panel shows when it is mounted.
     pub const Screen = enum {
-        /// Its rows, as a hotkey shows them (`reveal`).
+        /// Its rows, as a hotkey shows them (`Nanolight.show`).
         rows,
         /// Settings, as the tray's Settings… opens it.
         settings,
@@ -65,8 +65,8 @@ pub const Rig = struct {
         assert(r.s.index == &r.ix);
         if (options.host) |host| r.s.host = host;
         switch (options.screen) {
-            .rows => r.s.reveal(),
-            .settings => r.s.openSettings(),
+            .rows => _ = r.s.show(0),
+            .settings => r.s.open(.settings),
             .none => {},
         }
         try r.t.init(r.ix.gpa, .init(&r.s, view.Nanolight.view), .{
@@ -140,6 +140,20 @@ pub fn retype(t: *ui.Tester, q: []const u8) void {
     press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = q } });
 }
 
+/// Clicks the button the panel names `label` for assistive apps: its text,
+/// or its icon's words ("Settings" for the gear).
+pub fn clickButton(t: *ui.Tester, label: []const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var list: std.ArrayList(ui.access.Element) = .empty;
+    try ui.access.tree(&t.ctx, arena.allocator(), &list);
+    for (list.items) |e| if (e.role == .button and std.mem.eql(u8, e.label, label)) {
+        t.click(e.rect.x + e.rect.w / 2, e.rect.y + e.rect.h / 2);
+        return;
+    };
+    return error.NoSuchButton;
+}
+
 /// A host that answers for Google and shows pages: what was asked, shown.
 pub const Web = struct {
     probe: Probe = .{},
@@ -194,7 +208,7 @@ pub const Prefs = struct {
     files: ?bool = null,
     theme: ?@import("palette.zig").Theme = null,
     menu_bar_on: bool = true,
-    clip_on: ?bool = null,
+    clip_on: bool = false,
     clip_cleared: u8 = 0,
     /// What Clear History answers.
     clip_clear_ok: bool = true,
@@ -278,7 +292,7 @@ pub const Prefs = struct {
         if (set) |on| p.menu_bar_on = on;
         return p.menu_bar_on;
     }
-    fn clipboardEnabled(ctx: *anyopaque, set: ?bool) ?bool {
+    fn clipboardEnabled(ctx: *anyopaque, set: ?bool) bool {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
         if (set) |on| p.clip_on = on;
         return p.clip_on;

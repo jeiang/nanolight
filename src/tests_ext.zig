@@ -12,7 +12,6 @@ const model = @import("raycast_model.zig");
 const rv = @import("raycast_view.zig");
 const script_commands = @import("script_commands.zig");
 const Target = @import("results.zig").Target;
-const Ext = rv.Ext;
 
 /// What a host was told, a line each: "pop", "run", "field 1 Rach".
 const Heard = struct {
@@ -46,23 +45,33 @@ const Heard = struct {
 /// actions are in the arena too (the runner's are static) for the same
 /// reason.
 const Answering = struct {
-    ext: *Ext,
+    /// The panel's script screen (`Nanolight.scriptScreen`).
+    screen: model.Screen,
     backing: std.mem.Allocator,
     heard: Heard = .{},
 
     const First = enum { confirm, output, form };
 
+    fn tell(h: *Answering, update: model.Update) void {
+        h.screen.func(h.screen.ctx, update);
+    }
+
+    /// `v`, in `arena`, the screen's.
+    fn put(h: *Answering, arena: std.heap.ArenaAllocator, v: model.View) void {
+        h.tell(.{ .show = .{ .arena = arena, .view = v } });
+    }
+
     fn said(ctx: *anyopaque, event: model.Event) void {
         const h: *Answering = @ptrCast(@alignCast(ctx));
         h.heard.add(event);
         switch (event) {
-            .pop => h.ext.stop(),
+            .pop => h.tell(.stop),
             // A dropdown's pick is shown; a typed name stays in its field.
             .field => |f| if (f.slot == 0) h.form(std.mem.eql(u8, f.value, "fr")),
             .action => |a| switch (a) {
                 .run => h.output(),
                 .again => h.confirm(),
-                .copy => h.ext.note("Copied to the clipboard", false),
+                .copy => h.tell(.{ .note = .{ .text = "Copied to the clipboard", .bad = false } }),
             },
         }
     }
@@ -80,7 +89,7 @@ const Answering = struct {
         var arena: std.heap.ArenaAllocator = .init(h.backing);
         const a = arena.allocator();
         const md = a.dupe(u8, "# Run Greet?\nSays hello.") catch @panic("OOM");
-        h.ext.show(arena, .{ .detail = .{
+        h.put(arena, .{ .detail = .{
             .title = a.dupe(u8, "Greet") catch @panic("OOM"),
             .body = .{ .markdown = md },
             .actions = a.dupe(model.Action, &.{.run}) catch @panic("OOM"),
@@ -92,7 +101,7 @@ const Answering = struct {
         var arena: std.heap.ArenaAllocator = .init(h.backing);
         const a = arena.allocator();
         const out = a.dupe(u8, "Hello, Rach\nfrom a script") catch @panic("OOM");
-        h.ext.show(arena, .{ .detail = .{
+        h.put(arena, .{ .detail = .{
             .title = a.dupe(u8, "Greet") catch @panic("OOM"),
             .body = .{ .output = out },
             .actions = a.dupe(model.Action, &.{ .copy, .again }) catch @panic("OOM"),
@@ -117,7 +126,7 @@ const Answering = struct {
             },
             .{ .slot = 1, .title = "Name", .placeholder = "Optional" },
         }) catch @panic("OOM");
-        h.ext.show(arena, .{ .form = .{
+        h.put(arena, .{ .form = .{
             .title = a.dupe(u8, "Greet") catch @panic("OOM"),
             .fields = fields,
             .actions = a.dupe(model.Action, &.{.run}) catch @panic("OOM"),
@@ -132,7 +141,6 @@ const Rig = struct {
     /// The panel and its Tester, as the tests name them.
     s: *view.Nanolight,
     t: *ui.Tester,
-    ext: Ext,
     host: Answering,
     /// Settings' answers, for the tests that open it.
     prefs: support.Prefs,
@@ -162,9 +170,7 @@ const Rig = struct {
         r.t = &r.panel.t;
         r.opts = opts;
         r.hidden = false;
-        r.ext = .{ .gpa = gpa, .back = &r.s.query.field };
-        r.s.ext = &r.ext;
-        r.host = .{ .ext = &r.ext, .backing = opts.backing };
+        r.host = .{ .screen = r.s.scriptScreen(), .backing = opts.backing };
         r.prefs = .{};
         r.prefs.init();
         r.scripts = .init(gpa);
@@ -173,15 +179,22 @@ const Rig = struct {
         r.scripts.finish();
         r.s.scripts = &r.scripts;
         r.s.host = .{ .ctx = r, .open = open, .hide = hide, .settings = &r.prefs.box };
-        r.s.reveal();
+        _ = r.s.show(0);
         if (!opts.rows) r.script();
         try r.panel.mount(.{ .screen = .none });
     }
 
     fn script(r: *Rig) void {
         const command: model.Command = .{ .name = "Greet", .icon = r.opts.icon };
-        r.ext.start(command, .{ .ctx = &r.host, .func = Answering.said });
-        if (r.opts.silent) return r.ext.stop();
+        r.host.tell(.{ .start = .{
+            .command = command,
+            .to = .{ .ctx = &r.host, .func = Answering.said },
+        } });
+        // A silent one closes its screen and hides the panel, as the runner does.
+        if (r.opts.silent) {
+            r.host.tell(.stop);
+            return hide(r);
+        }
         if (r.opts.first) |first| r.host.show(first);
     }
 
@@ -197,7 +210,6 @@ const Rig = struct {
 
     fn deinit(r: *Rig) void {
         r.panel.unmount();
-        r.ext.deinit();
         r.panel.deinit();
         r.scripts.deinit();
     }
@@ -221,7 +233,7 @@ test "a script's output shows every line, and Escape closes it and the panel" {
     }) |sofar| {
         var arena: std.heap.ArenaAllocator = .init(gpa);
         const out = try arena.allocator().dupe(u8, sofar);
-        r.ext.show(arena, .{ .detail = .{
+        r.host.put(arena, .{ .detail = .{
             .title = "System Info",
             .body = .{ .output = out },
             .loading = sofar.len < 40,
@@ -234,8 +246,10 @@ test "a script's output shows every line, and Escape closes it and the panel" {
     try std.testing.expect(r.t.hasText("Linux 6.17 on x86_64"));
     try std.testing.expect(r.t.hasText("Up: 3 min"));
     try std.testing.expect(r.t.hasText("/dev/vda1 10G 2G"));
+    // Its lines are as tall as its height says.
+    try std.testing.expectEqual(rv.output_line_h, r.t.findText("Up: 3 min").?.h);
     _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(r.heard("pop") and r.hidden and !r.ext.open);
+    try std.testing.expect(r.heard("pop") and r.hidden and r.s.screen != .script);
     // The search has the keys again.
     r.t.settle(1);
     r.t.typeText("gre");
@@ -259,9 +273,9 @@ test "a script's actions on ⌘K: Return runs the one chosen, Escape closes even
     // With the actions open, one Escape pops and hides.
     try std.testing.expect(r.t.shortcut(rv.actions_key));
     r.t.settle(1);
-    try std.testing.expect(r.ext.actions_open);
+    try std.testing.expect(r.s.script_ui.actions_open);
     _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(r.heard("pop") and r.hidden and !r.ext.open);
+    try std.testing.expect(r.heard("pop") and r.hidden and r.s.screen != .script);
 }
 
 test "a script's arguments: typed at once, Return runs it" {
@@ -284,7 +298,7 @@ test "a compact script's last line, as the detail's heading" {
     defer r.deinit();
     var arena: std.heap.ArenaAllocator = .init(gpa);
     const md = try arena.allocator().dupe(u8, "# Hello, Rach - from a script");
-    r.ext.show(arena, .{ .detail = .{ .title = "Greet", .body = .{ .markdown = md } } });
+    r.host.put(arena, .{ .detail = .{ .title = "Greet", .body = .{ .markdown = md } } });
     r.t.settle(1);
     if (std.c.getenv("NANOLIGHT_SHOT2")) |p| try r.t.screenshot(std.mem.span(p));
     try std.testing.expect(r.t.hasText("Hello, Rach - from a script"));
@@ -296,7 +310,7 @@ test "Escape closes a script's screen in the frame that drew it" {
     defer r.deinit();
     try std.testing.expect(r.t.hasText("Run Greet?"));
     _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(r.heard("pop") and r.hidden and !r.ext.open);
+    try std.testing.expect(r.heard("pop") and r.hidden and r.s.screen != .script);
     r.t.settle(1);
     try std.testing.expect(!r.t.hasText("Run Greet?"));
 }
@@ -308,7 +322,7 @@ test "the back button closes a script's screen in the frame that drew it" {
     try std.testing.expect(r.t.hasText("from a script"));
     // The chevron, first in the header.
     r.t.click(18 + 13, chrome.header_h / 2);
-    try std.testing.expect(r.heard("pop") and !r.hidden and !r.ext.open);
+    try std.testing.expect(r.heard("pop") and !r.hidden and r.s.screen != .script);
     r.t.settle(1);
     try std.testing.expect(!r.t.hasText("from a script"));
 }
@@ -341,8 +355,8 @@ test "a dropdown pick shows the form again in the frame that drew it" {
     try r.t.clickText("French");
     try std.testing.expect(r.heard("field 0 fr\n"));
     r.t.settle(1);
-    try std.testing.expect(r.t.hasText("French") and r.ext.open);
-    try std.testing.expectEqualStrings("fr", r.ext.view.?.form.fields[0].value);
+    try std.testing.expect(r.t.hasText("French") and r.s.screen == .script);
+    try std.testing.expectEqualStrings("fr", r.s.script_ui.view.?.form.fields[0].value);
 }
 
 test "every view replaced under a frame is freed, the last ones at deinit" {
@@ -356,7 +370,7 @@ test "every view replaced under a frame is freed, the last ones at deinit" {
     try std.testing.expect(r.t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
     try std.testing.expect(r.t.hasText("Run Greet?"));
     _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(!r.ext.open);
+    try std.testing.expect(r.s.screen != .script);
 }
 
 test "a script's row opens its screen, and the panel stays" {
@@ -365,9 +379,9 @@ test "a script's row opens its screen, and the panel stays" {
     defer r.deinit();
     r.t.typeText("greet");
     r.t.settle(1);
-    try std.testing.expect(r.t.hasText("Greet") and !r.ext.open);
+    try std.testing.expect(r.t.hasText("Greet") and r.s.screen != .script);
     r.t.textOps(&.{.{ .command = .insert_newline }});
-    try std.testing.expect(r.ext.open and !r.hidden);
+    try std.testing.expect(r.s.screen == .script and !r.hidden);
     r.t.settle(1);
     try std.testing.expect(r.t.hasText("Run Greet?"));
 }
@@ -379,24 +393,24 @@ test "a silent script's row hides the panel as it runs" {
     r.t.typeText("greet");
     r.t.settle(1);
     r.t.textOps(&.{.{ .command = .insert_newline }});
-    try std.testing.expect(!r.ext.open and r.hidden);
+    try std.testing.expect(r.s.screen != .script and r.hidden);
 }
 
 test "Settings opened over Clipboard History closes it, so Escape leaves the rows for next time" {
     var r: Rig = undefined;
     try r.init(std.testing.allocator, .{ .rows = true });
     defer r.deinit();
-    r.s.openClipboard();
+    r.s.open(.clipboard);
     r.t.settle(1);
     // As the tray's Settings… opens it.
-    r.s.openSettings();
-    try std.testing.expect(r.s.settings_ui.open and !r.s.clip_ui.open);
+    r.s.open(.settings);
+    try std.testing.expect(r.s.screen == .settings);
     r.t.settle(1);
     _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(r.hidden and !r.s.settings_ui.open);
-    r.s.reveal();
+    try std.testing.expect(r.hidden and r.s.screen != .settings);
+    _ = r.s.show(0);
     r.t.settle(1);
-    try std.testing.expect(!r.s.clip_ui.open and r.t.hasText("Nanolight · 1 apps"));
+    try std.testing.expect(r.s.screen != .clipboard and r.t.hasText("Nanolight · 1 apps"));
 }
 
 test "Settings or Clipboard History opened over a script's screen end the script and close it" {
@@ -404,14 +418,14 @@ test "Settings or Clipboard History opened over a script's screen end the script
     try r.init(std.testing.allocator, .{ .first = .output });
     defer r.deinit();
     // A hide and a reveal keep it.
-    r.s.reveal();
-    try std.testing.expect(r.ext.open);
-    r.s.openSettings();
-    try std.testing.expect(r.heard("pop") and !r.ext.open and r.s.settings_ui.open);
+    _ = r.s.show(0);
+    try std.testing.expect(r.s.screen == .script);
+    r.s.open(.settings);
+    try std.testing.expect(r.heard("pop") and r.s.screen == .settings);
     r.t.settle(1);
     try std.testing.expect(!r.t.containsText("from a script"));
-    r.s.openClipboard();
-    try std.testing.expect(r.s.clip_ui.open and !r.s.settings_ui.open);
+    r.s.open(.clipboard);
+    try std.testing.expect(r.s.screen == .clipboard);
 }
 
 test "a script's icon outlives the index it came from" {
@@ -441,6 +455,6 @@ test "a script's icon outlives the index it came from" {
     try std.testing.expect(t.hasText("from a script"));
     // Escape stops the screen while a frame is drawn: its icon goes after.
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(!r.ext.open and r.ext.icon == null);
+    try std.testing.expect(r.s.screen != .script and r.s.script_ui.icon == null);
     t.settle(1);
 }

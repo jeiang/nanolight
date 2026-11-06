@@ -11,17 +11,17 @@ const Target = @import("results.zig").Target;
 const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
 const Opens = @import("app.zig").Opens;
+const Runner = @import("script_run.zig").Runner;
 
-/// Pinned once initialized: the runner and the panel point at its screen.
+/// Pinned once initialized: the runner's hooks point at it.
 pub const Scripts = struct {
     core: *App,
     env: *const std.process.Environ.Map,
     /// Where apps and script commands are looked for, besides the usual places.
     cfg: *const config.Config,
-    /// The script command running in the panel (raycast_view.zig).
-    screen: @import("raycast_view.zig").Ext,
-    /// Raycast script commands, run by Nanolight itself (script_run.zig).
-    runner: @import("script_run.zig").Runner,
+    /// Raycast script commands, run by Nanolight itself (script_run.zig), on
+    /// the panel's script screen (view.zig `Nanolight.scriptScreen`).
+    runner: Runner,
     /// The script commands found, listed among the apps (the panel's `scripts`).
     list: sc.List,
 
@@ -35,21 +35,18 @@ pub const Scripts = struct {
         sx.core = core;
         sx.env = env;
         sx.cfg = cfg;
-        sx.screen = .{ .gpa = gpa, .back = &core.s.query.field };
         sx.runner = .{
             .gpa = gpa,
             .io = core.app.io,
-            .screen = sx.screen.asScreen(),
+            .screen = core.s.scriptScreen(),
             .hooks = .{ .ctx = sx, .hide = hide, .redraw = redraw, .copy = copy, .footer = footer },
         };
         sx.list = .init(gpa);
-        core.s.ext = &sx.screen;
         core.s.scripts = &sx.list;
     }
 
     pub fn deinit(sx: *Scripts) void {
         sx.runner.deinit();
-        sx.screen.deinit();
         sx.core.s.scripts = null;
         sx.list.deinit();
     }
@@ -69,8 +66,8 @@ pub const Scripts = struct {
         return .{ .ctx = sx, .func = pop };
     }
 
-    /// A command's row was chosen: it runs in the panel, which stays up while
-    /// its screen is open (view.zig `go`).
+    /// A command's row was chosen: it runs in the panel, which stays up
+    /// (results.zig `Target.opensScreen`).
     fn start(sx: *Scripts, target: Target) void {
         const gpa = sx.core.app.gpa;
         switch (target) {
@@ -81,7 +78,6 @@ pub const Scripts = struct {
             },
             .script => |i| {
                 const x = sx.list.items.items[i];
-                sx.core.s.query.clear();
                 sx.runner.start(.{ .file = x.file.?, .title = x.title, .icon = sx.list.icon(i) });
             },
             .app, .url, .pane => unreachable, // The core opens these itself.
@@ -161,8 +157,10 @@ fn copy(_: *anyopaque, text: []const u8) void {
     nanoui.clipboard.writeText(text);
 }
 
+/// A silent script runs on without its screen: the panel goes, and its
+/// going is noted (`App.hide`).
 fn hide(ctx: *anyopaque) void {
-    if (from(ctx).core.window) |w| w.hide();
+    App.hide(from(ctx).core);
 }
 
 fn redraw(ctx: *anyopaque) void {

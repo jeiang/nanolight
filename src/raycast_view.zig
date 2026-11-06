@@ -2,13 +2,13 @@
 //! it runs: its arguments' form, or a detail (its output, or "Run X?"), with
 //! its actions in the footer (in key order, raycast_model.zig `return_at`;
 //! ⌘K/Ctrl+O all of them). What it shows comes from the runner
-//! (script_run.zig) as `Update`s; keys and choices go back to it as `Event`s.
+//! (script_run.zig) as `Update`s, through view.zig's `Nanolight.scriptScreen`;
+//! keys and choices go back to it as `Event`s.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const assert = std.debug.assert;
 const model = @import("raycast_model.zig");
-const pview = @import("view.zig");
 const platform = @import("platform.zig");
 
 /// ⌘K on the Mac; Ctrl+K moves up on a PC, so the actions are on Ctrl+O.
@@ -23,6 +23,27 @@ const Palette = @import("palette.zig").Palette;
 const max_options = 4;
 /// An output's lines shown: its last ones.
 const max_lines = 200;
+
+// The screen's layout, which `Ext.height` adds up.
+/// "Starting…", before the first view.
+const starting_h = 80;
+/// A row of the actions (⌘K).
+const action_row_h = 38;
+/// A form's padding, a text field's box (a dropdown's row is shorter) and
+/// the gap after each.
+const form_py = 16;
+const field_h = 32;
+const field_gap = 12;
+/// A detail's padding, and the gap between its parts.
+const detail_py = 18;
+const detail_gap = 10;
+/// An output line (12.5-point monospace) as the font draws it, measured,
+/// and the gap after it.
+pub const output_line_h = 15;
+const output_gap = 4;
+/// A Markdown line and its gap, as estimated: how its words wrap is not.
+const markdown_line_h = 24;
+const min_detail_h = 150;
 
 /// An arena whose contents frames draw. Replaced after a frame drew from
 /// it, it is kept until the next frame starts (`frame`): that frame's nodes
@@ -72,19 +93,17 @@ const Held = struct {
 };
 
 pub const Ext = struct {
-    gpa: std.mem.Allocator,
-    open: bool = false,
     name_buf: [96]u8 = undefined,
     name_len: usize = 0,
     /// The command's icon, in `screen`, which lives as long as the screen.
     icon: ?[]const u8 = null,
     screen: Held = .{},
     /// The top view, in `held` (one arena per render). A frame reads
-    /// `view` once, at the top of `panel`: an event sent while it draws can
+    /// `view` once, at the top of `draw`: an event sent while it draws can
     /// replace it.
     view: ?model.View = null,
     held: Held = .{},
-    /// `panel` is building a frame.
+    /// `draw` is building a frame.
     rendering: bool = false,
     actions_open: bool = false,
     act_sel: usize = 0,
@@ -94,32 +113,29 @@ pub const Ext = struct {
     note_len: usize = 0,
     note_at: f64 = -10,
     note_bad: bool = false,
-    /// What the host is told; set while `open`.
+    /// What the host is told; set while the screen is up.
     to: ?model.Sender = null,
     /// A form's text fields, by the field's place.
     fields: [model.max_args]ui.TextBuffer = @splat(.{}),
     form_key: u64 = 0,
-    /// The field that has the keys once the command's screen goes (the
-    /// panel's search).
-    back: ?*ui.TextBuffer = null,
 
-    pub fn start(e: *Ext, command: model.Command, to: model.Sender) void {
+    /// `command` runs, telling `to`; its screen's things are in `gpa`.
+    pub fn start(e: *Ext, gpa: std.mem.Allocator, command: model.Command, to: model.Sender) void {
         // A command starts from the rows, never from its own screen.
         assert(!e.rendering);
         e.stop();
         const n = @min(command.name.len, e.name_buf.len);
         @memcpy(e.name_buf[0..n], command.name[0..n]);
         e.name_len = n;
-        var arena: std.heap.ArenaAllocator = .init(e.gpa);
+        var arena: std.heap.ArenaAllocator = .init(gpa);
         // Out of memory: the screen goes without its icon.
         e.icon = if (command.icon) |png| arena.allocator().dupe(u8, png) catch null else null;
         e.screen.set(arena);
         e.to = to;
-        e.open = true;
     }
 
     pub fn stop(e: *Ext) void {
-        e.open = false;
+        e.to = null;
         e.view = null;
         e.held.release();
         e.icon = null;
@@ -127,29 +143,13 @@ pub const Ext = struct {
         e.actions_open = false;
         e.note_len = 0;
         e.form_key = 0;
-        if (e.back) |b| b.focus();
-    }
-
-    /// Where a runner sends its updates.
-    pub fn asScreen(e: *Ext) model.Screen {
-        return .{ .ctx = e, .func = updated };
-    }
-
-    fn updated(ctx: *anyopaque, update: model.Update) void {
-        const e: *Ext = @ptrCast(@alignCast(ctx));
-        switch (update) {
-            .start => |s| e.start(s.command, s.to),
-            .show => |s| e.show(s.arena, s.view),
-            .note => |n| e.note(n.text, n.bad),
-            .stop => e.stop(),
-        }
     }
 
     /// Closes the screen as its back button does: the host ends the
-    /// script and stops the screen. The panel stays.
+    /// script and stops the screen.
     pub fn close(e: *Ext) void {
         e.send(.pop);
-        assert(!e.open);
+        assert(e.to == null);
     }
 
     pub fn deinit(e: *Ext) void {
@@ -162,7 +162,7 @@ pub const Ext = struct {
 
     /// The host's new top view; `arena` holds it and is now this one's.
     pub fn show(e: *Ext, arena: std.heap.ArenaAllocator, v: model.View) void {
-        assert(e.open);
+        assert(e.to != null);
         e.held.set(arena);
         e.view = v;
         switch (v) {
@@ -180,11 +180,10 @@ pub const Ext = struct {
         e.note_at = -1;
     }
 
-    /// Tells the host, while the screen is open: a pop sent earlier in the
+    /// Tells the host, while the screen is up: a pop sent earlier in the
     /// frame closed it, and what follows was aimed at the old view.
     fn send(e: *Ext, event: model.Event) void {
-        if (!e.open) return;
-        const to = e.to.?;
+        const to = e.to orelse return;
         to.func(to.ctx, event);
     }
 
@@ -193,52 +192,53 @@ pub const Ext = struct {
         e.send(.{ .action = a });
     }
 
+    /// As tall as what is shown, no taller: the layout above added up.
     pub fn height(e: *const Ext) f32 {
-        const v = e.view orelse return chrome.header_h + chrome.footer_h + 80;
+        const v = e.view orelse return chrome.header_h + chrome.footer_h + starting_h;
+        // With the hairlines under the header and over the footer.
         const bars: f32 = chrome.header_h + chrome.footer_h + 2;
-        // As tall as what is shown, no taller.
         if (e.actions_open) {
             const n: f32 = @floatFromInt(v.actions().len);
-            const list = chrome.list_pad * 2 + chrome.actions_section.h + n * 38;
+            const list = chrome.list_pad * 2 + chrome.actions_section.h + n * action_row_h;
             return @min(bars + list, chrome.max_height);
         }
         switch (v) {
             .form => |f| {
                 const rows: f32 = @floatFromInt(@max(f.fields.len, 1));
-                return @min(bars + 32 + rows * 44, chrome.max_height);
+                const form_h = form_py * 2 + rows * (field_h + field_gap);
+                return @min(bars + form_h, chrome.max_height);
             },
             .detail => |d| switch (d.body) {
                 .output => |out| {
                     const shown = std.mem.trimEnd(u8, out, "\n");
                     const n = @min(std.mem.count(u8, shown, "\n") + 1, max_lines);
                     const lines: f32 = @floatFromInt(n);
-                    return @min(@max(bars + 36 + lines * 19, 150), chrome.max_height);
+                    const out_h = detail_py * 2 + lines * (output_line_h + output_gap);
+                    return @min(@max(bars + out_h, min_detail_h), chrome.max_height);
                 },
                 .markdown => |md| {
                     var lines: f32 = @floatFromInt(std.mem.count(u8, md, "\n") + 1);
                     // Long paragraphs wrap: about 80 characters a line.
                     lines += @floatFromInt(md.len / 80);
-                    return @min(@max(bars + 46 + lines * 24, 150), chrome.max_height);
+                    const md_h = detail_py * 2 + detail_gap + lines * markdown_line_h;
+                    return @min(@max(bars + md_h, min_detail_h), chrome.max_height);
                 },
             },
         }
     }
 
-    /// The command in the panel (Nanolight.panel calls it while `open`).
-    pub fn panel(e: *Ext, c: *ui.Context, n: *pview.Nanolight, p: Palette) void {
+    /// The command, as the screen up (view.zig `Nanolight.draw`).
+    pub fn draw(e: *Ext, c: *ui.Context, p: Palette) void {
         // Nodes of the last frame are gone: what it drew from can go too.
         assert(!e.rendering);
         e.held.frame();
         e.screen.frame();
         e.rendering = true;
         defer e.rendering = false;
-        const h = n.follow(e.height());
-        const body = ui.div(c).column().wFull().h(h).clip();
-        defer body.end();
         // Read once: the host may answer an event below with a new view.
         const v = e.view;
         const acts: []const model.Action = if (v) |vv| vv.actions() else &.{};
-        e.keys(c, n, v, acts);
+        e.keys(c, v, acts);
         e.header(c, p, v);
         ui.div(c).wFull().h(1).bg(p.hair).end();
         const mid = ui.div(c).column().wFull().grow().clip();
@@ -248,7 +248,7 @@ pub const Ext = struct {
             .form => |f| e.form(c, p, f),
             .detail => |d| detail(c, p, d),
         } else {
-            const w = ui.div(c).wFull().h(80).center();
+            const w = ui.div(c).wFull().h(starting_h).center();
             ui.text(c, "Starting…", p.waiting());
             w.end();
         }
@@ -256,13 +256,7 @@ pub const Ext = struct {
         e.footer(c, p, acts);
     }
 
-    fn keys(
-        e: *Ext,
-        c: *ui.Context,
-        nl: *pview.Nanolight,
-        v: ?model.View,
-        acts: []const model.Action,
-    ) void {
+    fn keys(e: *Ext, c: *ui.Context, v: ?model.View, acts: []const model.Action) void {
         const S = ui.Shortcut;
         // The arrows move in the actions, and never reach a field.
         const n = if (e.actions_open) acts.len else 0;
@@ -281,10 +275,6 @@ pub const Ext = struct {
             if (e.actions_open) {
                 if (e.act_sel < acts.len) e.run(acts[e.act_sel]);
             } else if (acts.len > model.return_at) e.run(acts[model.return_at]);
-        }
-        if (c.shortcut(.{ .key = S.escape })) {
-            e.send(.pop);
-            nl.hidePanel();
         }
     }
 
@@ -308,7 +298,8 @@ pub const Ext = struct {
     }
 
     fn detail(c: *ui.Context, p: Palette, d: model.Detail) void {
-        const col = ui.div(c).column().wFull().px(26).py(18).gap(10).grow().scrollY();
+        const col = ui.div(c).column().wFull().px(26).py(detail_py).gap(detail_gap).grow()
+            .scrollY();
         defer col.end();
         switch (d.body) {
             .output => |out| output(c, p, out),
@@ -327,7 +318,7 @@ pub const Ext = struct {
         }
         const shown = std.mem.trimEnd(u8, out[@min(from, out.len)..], "\n");
         var rest = std.mem.splitScalar(u8, shown, '\n');
-        const lines_box = ui.div(c).column().wFull().gap(4);
+        const lines_box = ui.div(c).column().wFull().gap(output_gap);
         defer lines_box.end();
         const style: ui.TextStyle = .{ .size = 12.5, .mono = true, .color = p.text };
         while (rest.next()) |line| ui.text(c, if (line.len == 0) " " else line, style);
@@ -371,7 +362,8 @@ pub const Ext = struct {
     }
 
     fn form(e: *Ext, c: *ui.Context, p: Palette, f: model.Form) void {
-        const col = ui.div(c).column().wFull().px(26).py(16).gap(12).grow().scrollY();
+        const col = ui.div(c).column().wFull().px(26).py(form_py).gap(field_gap).grow()
+            .scrollY();
         defer col.end();
         for (f.fields, 0..) |field, i| {
             ui.key(c, c.print("rc-field-{d}", .{i}));
@@ -406,7 +398,7 @@ pub const Ext = struct {
     }
 
     fn textBox(e: *Ext, c: *ui.Context, p: Palette, f: model.Field, buf: *ui.TextBuffer) void {
-        const box = ui.div(c).grow().h(32).px(10).itemsCenter().row().rounded(8).bg(p.tile)
+        const box = ui.div(c).grow().h(field_h).px(10).itemsCenter().row().rounded(8).bg(p.tile)
             .border(p.rim);
         defer box.end();
         const before = std.hash.Wyhash.hash(0, buf.text());
@@ -429,8 +421,8 @@ pub const Ext = struct {
         chrome.sectionHead(c, p, "Actions", chrome.actions_section);
         for (acts, 0..) |a, i| {
             ui.key(c, c.print("rc-act-{d}", .{i}));
-            const r = ui.div(c).row().wFull().h(38).px(12).gap(10).itemsCenter().rounded(9)
-                .control();
+            const r = ui.div(c).row().wFull().h(action_row_h).px(12).gap(10).itemsCenter()
+                .rounded(9).control();
             if (i == e.act_sel) _ = r.bg(p.sel).border(p.rim);
             if (r.clicked()) e.run(a);
             ui.text(c, a.title(), .{ .size = 13.5, .weight = .medium, .color = p.text });
