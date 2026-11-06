@@ -12,10 +12,10 @@ const file_bytes_max = 1 << 20;
 const files_max = 1024;
 const path_bytes_max = 1024;
 const reason_marker = "// best effort:";
-/// These are spelled in pieces, so that this file does not match itself.
+/// Spelled in two pieces, so that this file does not match itself.
 const swallow_marker = "catch " ++ "{}";
-const unformatted_start = "// zig fmt: " ++ "off";
-const unformatted_end = "// zig fmt: " ++ "on";
+const unformatted_start = "// zig fmt: off";
+const unformatted_end = "// zig fmt: on";
 
 comptime {
     // A reason must fit on the line above the catch it explains.
@@ -54,8 +54,10 @@ pub const Linter = struct {
         while (linter.lines.next()) |line| {
             linter.line_number += 1;
             defer linter.line_previous = line;
-            if (std.mem.indexOf(u8, line, unformatted_start) != null) linter.unformatted = true;
-            if (std.mem.indexOf(u8, line, unformatted_end) != null) linter.unformatted = false;
+            // zig fmt obeys the directive only as a comment alone on its line.
+            const trimmed = std.mem.trim(u8, line, " \t");
+            if (std.mem.eql(u8, trimmed, unformatted_start)) linter.unformatted = true;
+            if (std.mem.eql(u8, trimmed, unformatted_end)) linter.unformatted = false;
             var width = widthProblem(line, linter.line_number);
             if (linter.unformatted) {
                 if (width) |problem| {
@@ -146,7 +148,9 @@ fn lintFile(init: std.process.Init, path: []const u8, totals: *Totals) !void {
             .too_wide => std.debug.print("{s}:{d}: {d} columns (limit {d})\n", .{
                 path, problem.line_number, problem.columns, columns_max,
             }),
-            .invalid_utf8 => std.debug.print("{s}:{d}: not UTF-8\n", .{ path, problem.line_number }),
+            .invalid_utf8 => std.debug.print("{s}:{d}: not UTF-8\n", .{
+                path, problem.line_number,
+            }),
             .unexplained_catch => std.debug.print("{s}:{d}: {s} without \"{s} <why>\"\n", .{
                 path, problem.line_number, swallow_marker, reason_marker,
             }),
@@ -199,6 +203,17 @@ test "a zig fmt: off table may run past the limit until zig fmt: on, and still n
     try testing.expectEqual(3, problems[0].line_number);
     try testing.expectEqual(Problem.Kind.too_wide, problems[1].kind);
     try testing.expectEqual(5, problems[1].line_number);
+}
+
+test "a zig fmt: off inside a string or a doc comment exempts nothing" {
+    var buffer: [4]Problem = undefined;
+    const wide = comptime repeated("x", columns_max + 1);
+    const in_string = "const text = \"" ++ unformatted_start ++ "\";\n" ++ wide;
+    const in_doc = "/// Write " ++ unformatted_start ++ " above a table.\n" ++ wide;
+    const indented = "    " ++ unformatted_start ++ "\n" ++ wide;
+    try testing.expectEqual(1, problemsOf(in_string, &buffer).len);
+    try testing.expectEqual(1, problemsOf(in_doc, &buffer).len);
+    try testing.expectEqual(0, problemsOf(indented, &buffer).len);
 }
 
 test "an empty catch needs a reason on its line or the line above, not further up" {
