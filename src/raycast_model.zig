@@ -8,7 +8,6 @@ const std = @import("std");
 /// `@raycast.argument3`), and its form has a field for each.
 pub const max_args = 3;
 
-/// What the screen's actions do.
 pub const Action = enum {
     run,
     again,
@@ -121,7 +120,6 @@ pub const Update = union(enum) {
     show: struct { arena: std.heap.ArenaAllocator, view: View },
     /// Said in the footer for a while.
     note: struct { text: []const u8, bad: bool },
-    /// Closes the screen.
     stop,
 };
 

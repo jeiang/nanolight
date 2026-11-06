@@ -21,7 +21,6 @@ pub const Key = enum {
     files,
     /// Clipboard history records; the config's `[clipboard] enabled` seeds it.
     clipboard,
-    /// The welcome was done.
     onboarded,
     /// The key that opens the panel: keys.Choice's name.
     hotkey,
@@ -33,12 +32,11 @@ pub const Key = enum {
     sync_at,
     /// The server this machine last synced with: a different one is a first sync again.
     account_synced,
-    /// Each app's launch count: "<path>\t<count>" lines (apps.zig).
+    /// Each app's launch count: "<path>\t<count>" lines (launchers.zig).
     launches,
-    /// Where file search looks, and what it leaves out (files.zig).
+    /// Where file search looks, and what it leaves out (files_live.zig).
     files_locations,
     files_exclusions,
-    /// When the currency rates were last fetched (rates.zig).
     rates_at,
     /// Left by a restart into an update off the Mac, and by 0.1.6 and before
     /// on the Mac: the version it was.

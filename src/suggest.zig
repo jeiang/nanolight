@@ -16,7 +16,6 @@ const search = @import("search.zig");
 pub const max_rows = 4;
 /// A query or a completion longer than this is left out.
 pub const max_len = 120;
-/// A longer answer is not read.
 pub const max_bytes = 32 * 1024;
 /// How long typing pauses before asking: long enough for a burst of keys
 /// to pass, short enough to land while the words are still being read.
@@ -71,7 +70,6 @@ pub fn plain(buf: *[max_len]u8, s: []const u8) []const u8 {
     return buf[0..n];
 }
 
-/// Whether `a` and `b` are the same words.
 pub fn same(a: []const u8, b: []const u8) bool {
     var ba: [max_len]u8 = undefined;
     var bb: [max_len]u8 = undefined;
@@ -95,7 +93,6 @@ pub const List = struct {
         l.n += 1;
     }
 
-    /// Its completions as slices, into `out`.
     pub fn slices(l: *const List, out: *[max_rows][]const u8) []const []const u8 {
         for (0..l.n) |i| out[i] = l.get(i);
         return out[0..l.n];
@@ -230,7 +227,6 @@ test "an answer counts only for the words it answers" {
     try std.testing.expect(!decode(arena.allocator(), body, "liquid", &l));
     try std.testing.expect(!decode(arena.allocator(), "<html>", "liquid gl", &l));
     try std.testing.expect(!decode(arena.allocator(), "[\"x\"]", "x", &l));
-    // Escapes are read: "caf\u00e9".
     try std.testing.expect(decode(arena.allocator(), "[\"caf\",[\"caf\\u00e9\"]]", "caf", &l));
     try std.testing.expectEqualStrings("café", l.get(0));
 }

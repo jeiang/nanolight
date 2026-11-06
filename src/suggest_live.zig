@@ -16,7 +16,6 @@ pub const Suggest = struct {
     asking_len: usize = 0,
     pause: after.Debounce = .{},
 
-    /// What the panel asks for completions with.
     pub fn entry(sg: *Suggest) view.Host.Ask {
         return .{ .ctx = sg, .func = ask };
     }

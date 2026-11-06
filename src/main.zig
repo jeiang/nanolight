@@ -233,7 +233,6 @@ fn runShown(
         ),
     }
     core.start();
-    // The first run: the welcome, in the panel.
     if (!prefs.has(core.kv, .onboarded)) core.welcome(.first_run);
     try menu.start();
     update.start(init);

@@ -104,7 +104,6 @@ test "queries are escaped into the address" {
         "https://example.com/",
         url(&buf, "https://example.com/", "ignored").?,
     );
-    // An address that does not fit is none, not one cut short.
     var tiny: [8]u8 = undefined;
     try std.testing.expect(url(&tiny, "https://x.com/?q={argument}", "q") == null);
     var short: [20]u8 = undefined;

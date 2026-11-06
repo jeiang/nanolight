@@ -47,10 +47,8 @@ const Theme = palette_mod.Theme;
 /// window's answers share `ctx`; each feature's carries its own.
 pub const Host = struct {
     ctx: *anyopaque,
-    /// Opens what a row opens.
     open: *const fn (ctx: *anyopaque, target: Target) void,
     hide: *const fn (ctx: *anyopaque) void,
-    /// The panel's height changed: a window follows it.
     resize: ?*const fn (ctx: *anyopaque, h: f32) void = null,
     /// Shows a search's page in the panel, over `chrome.webArea`; null takes it
     /// away. Without it, searches open in the browser.
@@ -166,16 +164,12 @@ pub const Nanolight = struct {
     /// bytes), and room for the address round it; a longer one is not opened.
     preview_buf: [4 * max_query_bytes]u8 = undefined,
     screen: Screen = .rows,
-    /// Settings, drawn in the panel in place of the rows.
     settings_ui: settings_view.Settings = .{},
-    /// Clipboard History, drawn in the panel in place of the rows.
     clip_ui: clipboard_view.Screen = .{},
     /// A script command's screen, drawn in place of the rows while it runs.
     script_ui: raycast_view.Ext = .{},
     away: screen.Away = .{ .pop_after = (config.Config{}).pop_to_root_seconds },
 
-    /// Frees what the panel holds: the files found, the counts, the
-    /// field's text and a script's screen.
     pub fn deinit(s: *Nanolight) void {
         s.found.deinit();
         s.counts.deinit(s.index.gpa);
@@ -192,19 +186,16 @@ pub const Nanolight = struct {
         return if (s.scripts) |l| l.items.items else &.{};
     }
 
-    /// One more opening of what `key` counts, kept.
     fn opened(s: *Nanolight, key: []const u8) void {
         s.counts.bump(s.index.gpa, key);
         if (s.kv) |kv| launchers.save(&s.counts, s.index.gpa, kv);
     }
 
-    /// Google's completions on or off: the rows again, with or without them.
     pub fn setSuggest(s: *Nanolight, on: bool) void {
         s.suggest_on = on;
         s.query.invalidate();
     }
 
-    /// File search on or off: the rows again, with or without files.
     pub fn setFiles(s: *Nanolight, on: bool) void {
         s.files_on = on;
         s.query.invalidate();
@@ -222,7 +213,6 @@ pub const Nanolight = struct {
         return h.clipboard != null;
     }
 
-    /// The panel went away at `now` (seconds).
     pub fn hid(s: *Nanolight, now: i64) void {
         s.away.hid(now);
     }
@@ -333,7 +323,6 @@ pub const Nanolight = struct {
         }
     }
 
-    /// The panel's height for the screen up.
     pub fn height(s: *const Nanolight) f32 {
         return switch (s.screen) {
             .rows => @max(s.rowsHeight(), s.held_h),
@@ -455,7 +444,6 @@ pub const Nanolight = struct {
         }
         // ⌘,: Settings, as on the Mac. The comma never reaches the field.
         if (c.shortcut(.{ .key = ',', .cmd = true })) return s.open(.settings);
-        // ⌘↩: a search in the browser rather than in the panel.
         if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.activateOut(c);
         // Tab takes the selected file's path while a path is typed, else
         // the faint completion, as → does.
@@ -470,7 +458,6 @@ pub const Nanolight = struct {
         if (chrome.moveUp(c)) {
             if (n > 0) s.sel = (s.sel + n - 1) % n;
         }
-        // ⌘1…⌘9: the row of that number, at once.
         if (chrome.numberKey(c, n)) |k| {
             s.sel = k;
             s.activate(c);
@@ -570,7 +557,6 @@ pub const Nanolight = struct {
 
     /// What lands for the query a moment after its rows.
     pub const Landed = union(enum) {
-        /// Google's completions of the words.
         completions: *const suggest.List,
         /// Files found for the words, moved into `found`.
         files: *files.List,

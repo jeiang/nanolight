@@ -34,7 +34,7 @@ pub const Kind = enum {
     /// A script command, or the row that opens their folder (`Row.item` its
     /// place in `script_commands.List`).
     script,
-    /// A file or folder found (`Row.item` its place in `Results.found`).
+    /// A file or folder found (`Row.item` its place in `Input.found`).
     file,
     /// A pane of System Settings (`Row.item` its place in settings_panes.zig).
     pane,
@@ -54,11 +54,9 @@ pub const Kind = enum {
 pub const Target = union(enum) {
     /// An app, a file or a folder: its path.
     app: []const u8,
-    /// An address for the browser.
     url: []const u8,
     /// A script command, its place in `script_commands.List`.
     script: u32,
-    /// The script commands' folder.
     folder,
     /// A pane of System Settings, its place in settings_panes.zig.
     pane: u16,
@@ -115,7 +113,7 @@ pub const Provider = struct {
     with_card: bool = false,
     /// Listed when a keyword sends the query to one quicklink.
     with_keyword: bool = true,
-    /// Nanolight's own row: when one is listed, those that `yield` are not.
+    /// Nanolight's own row: when one is listed, those that `yields` are not.
     own: bool = false,
     yields: bool = false,
     /// The query that puts its row first, past a much-opened app's.
@@ -358,7 +356,6 @@ pub const Input = struct {
     from: Launchers,
     /// The quicklinks, the first a search for exactly the words.
     quicklinks: []const Quicklink,
-    /// Google's completions of the words.
     completions: []const []const u8 = &.{},
     /// Currency rates, when in hand, and whether fetching them failed.
     rates: rates_table.Status = .{},
@@ -399,7 +396,6 @@ pub const Results = struct {
     google: ?u16 = null,
     /// The words went to one quicklink by its keyword.
     keyed: ?web.Keyed = null,
-    /// Which panes of System Settings this Mac has.
     panes: panes.Present = .{},
 
     /// What a quicklink row searches for: the query's `words`, past any
@@ -671,7 +667,6 @@ test "math first, then apps; quicklinks only without an answer" {
     try t.expectEqual(@as(u32, 1), r.rows[3].item);
     try t.expect(r.section(1) == null and r.section(2) == null);
     try t.expectEqualStrings("Quicklinks", r.section(3).?);
-    // The explicit Settings shortcut stays first, ahead of System Settings.
     r.build(input(&ix, "settings", &.{}));
     try t.expectEqual(Kind.settings, r.rows[0].kind);
     try t.expectEqual(Kind.app, r.rows[1].kind);
@@ -724,7 +719,6 @@ test "Google's completions go with the quicklink that is Google, wherever it is"
     try t.expectEqual(Kind.suggest, r.rows[3].kind);
     try t.expectEqual(@as(usize, 5), r.n);
     try t.expectEqualStrings("Quicklinks", r.section(3) orelse "Quicklinks");
-    // Without Google, none are listed.
     r.build(.{ .words = "pizza", .from = only(&ix), .quicklinks = ql[0..2], .completions = words });
     try t.expect(r.google == null);
     try t.expectEqual(@as(usize, 2), r.n);
@@ -749,7 +743,6 @@ test "System Settings' panes share the local results header and keep the panel's
     // not every pane with "settings" in a word for it.
     r.build(input(&ix, "settings", &.{}));
     for (r.slice()) |row| try t.expect(row.kind != .pane);
-    // Math lists no panes.
     r.build(input(&ix, "2+2", &.{}));
     try t.expectEqual(@as(usize, 1), r.n);
 }
@@ -804,7 +797,6 @@ test "a full list of apps, panes and files still fits, with every quicklink" {
     heads = 0;
     for (0..r.n) |i| heads += @intFromBool(r.section(i) != null);
     try t.expectEqual(@as(usize, 3), heads);
-    // Math lists no files.
     r.build(input(&ix, "2+2", &.{}));
     try t.expectEqual(@as(usize, 1), r.n);
 }
@@ -822,7 +814,6 @@ test "a conversion is answered like math, with the rate under a currency's" {
     try t.expect(!r.need_rates);
     r.build(input(&ix, "10 m to min", &.{}));
     try t.expect(r.n == 0 or r.rows[0].kind != .calc);
-    // No rates yet: it says so, and asks for them.
     var in = input(&ix, "100 usd to ttd", &.{});
     r.build(in);
     try t.expectEqualStrings("Loading rates…", r.answer);
@@ -831,7 +822,6 @@ test "a conversion is answered like math, with the rate under a currency's" {
     in.rates.failed = true;
     r.build(in);
     try t.expectEqualStrings("Rates unavailable", r.answer);
-    // The pending card does not drop the web search under it.
     var web_row = false;
     for (r.slice()) |row| web_row = web_row or row.kind == .quicklink;
     try t.expect(web_row);
@@ -891,7 +881,6 @@ test "math around a conversion: the card shows the amount worked out and copies 
     try t.expectEqual(Kind.calc, r.rows[0].kind);
     try t.expectEqualStrings("2 + 3", r.expr);
     try t.expectEqualStrings("5", r.copy);
-    // No rates yet: still pending, nothing to copy.
     in.words = "12 ttd to usd * 12";
     r.build(in);
     try t.expectEqual(Kind.calc, r.rows[0].kind);
@@ -964,7 +953,6 @@ test "system commands compete by match without taking a quicklink's row" {
     try t.expect(cmds <= max_commands);
     try t.expectEqual(@as(usize, 5), links);
     try t.expect(r.n <= max_rows);
-    // Alone, the command still uses the shared Results section.
     var few = try testIndex(t.allocator, &.{"Safari"});
     defer few.deinit();
     in = .{ .words = "sleep", .from = only(&few), .quicklinks = defaults, .commands = &every };

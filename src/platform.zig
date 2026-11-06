@@ -40,7 +40,6 @@ pub const Single = switch (os) {
     .windows => @import("single_win.zig"),
     else => @import("single_unix.zig"),
 };
-/// Opening at login.
 pub const Login = switch (os) {
     .macos => login.Mac,
     .windows => login.Windows,

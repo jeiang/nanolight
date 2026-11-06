@@ -48,7 +48,6 @@ pub fn quicklinkProblem(i: usize, q: Quicklink) ?[]const u8 {
 
 /// 2 added `quicklinks`.
 pub const schema_version = 2;
-/// The oldest record that still decodes.
 const schema_version_oldest = 1;
 
 pub const Settings = struct {
@@ -287,7 +286,6 @@ test "two Macs merge: the later choice wins, and each app keeps its higher count
     try std.testing.expectEqualStrings("Mail", m.launches[0].name);
     try std.testing.expectEqual(@as(u16, 4), m.launches[1].count);
     try std.testing.expectEqual(@as(u16, 5), m.launches[2].count);
-    // Merged either way round, the same.
     try std.testing.expect(same(m, try merge(a, there, here, false)));
     // This Mac changed its key last: it stays.
     const later: Settings = .{ .hotkey = "ctrl_space", .suggest = true, .at = 300 };
@@ -470,6 +468,5 @@ test "a record keeps the most opened apps, at most the cap" {
     const got = decode(a, try encode(a, s)).?;
     try std.testing.expectEqual(@as(usize, counts.max), got.launches.len);
     for (got.launches) |l| try std.testing.expect(l.count > 50);
-    // Merged with itself, no more than the cap either.
     try std.testing.expectEqual(@as(usize, counts.max), (try merge(a, s, s, false)).launches.len);
 }

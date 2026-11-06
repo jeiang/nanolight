@@ -92,7 +92,6 @@ pub const Launchers = struct {
         return null;
     }
 
-    /// The one named `item_name`, case-insensitively.
     pub fn findName(l: Launchers, item_name: []const u8) ?Item {
         if (l.apps.find(item_name)) |i| return .{ .app = i };
         for (l.scripts, 0..) |s, i| {
@@ -179,7 +178,6 @@ pub const Launchers = struct {
     }
 };
 
-/// The counts the store keeps.
 pub fn load(counts: *Counts, gpa: std.mem.Allocator, kv: nanoui.kv.Store) void {
     const text = prefs.text(kv, gpa, .launches) orelse return;
     defer gpa.free(text);
@@ -249,7 +247,6 @@ test "apps and scripts take turns by name, and opening one suggests it" {
     try t.expectEqual(@as(usize, 3), l.suggestions(&out));
     try t.expect(out[0].eql(.{ .script = 0 }));
     try t.expectEqualStrings("Calculator", l.name(out[1]));
-    // A record lists them by name, a script by its key.
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
     defer arena.deinit();
     const record = l.launches(arena.allocator());
@@ -277,7 +274,6 @@ test "rank keeps the best, best first, and opening often lifts a name" {
     counts.bump(t.allocator, "Notes Helper");
     try t.expectEqual(@as(usize, 3), l.rank("no", &out));
     try t.expectEqual(@as(u32, 0), out[0].index);
-    // Only as many as there's room for: the worst one is the one dropped.
     const none: Counts = .{};
     const fresh: Launchers = .{ .apps = &ix, .counts = &none };
     var two: [2]search.Ranked = undefined;

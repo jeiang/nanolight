@@ -54,7 +54,6 @@ pub const Meta = struct {
         return n;
     }
 
-    /// A known header key's value.
     fn set(m: *Meta, key: HeaderKey, value: []const u8) void {
         switch (key) {
             .schemaVersion => m.schema = true,
@@ -242,7 +241,6 @@ pub const List = struct {
         std.sort.pdq(Script, l.items.items, Ctx{}, Ctx.lessThan);
     }
 
-    /// The script titled `title`, case-insensitively.
     pub fn find(l: *const List, title: []const u8) ?u32 {
         for (l.items.items, 0..) |s, i| {
             if (std.ascii.eqlIgnoreCase(s.title, title)) return @intCast(i);
@@ -395,7 +393,6 @@ test "a script command's header" {
     try std.testing.expectEqual(model.Field.Kind.dropdown, m.args[1].?.kind());
     const secret: Argument = .{ .type = "password" };
     try std.testing.expectEqual(model.Field.Kind.password, secret.kind());
-    // A type not known is text.
     const other: Argument = .{ .type = "number" };
     try std.testing.expectEqual(model.Field.Kind.text, other.kind());
     try std.testing.expect(parse(arena.allocator(), "#!/bin/sh\necho hi\n") == null);

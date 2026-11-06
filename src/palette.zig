@@ -49,7 +49,6 @@ pub const Palette = struct {
         return .{ .size = 13, .color = p.sub.alpha(0.8) };
     }
 
-    /// A search field's placeholder.
     pub fn placeholder(p: Palette) ui.Color {
         return p.sub.alpha(0.75);
     }

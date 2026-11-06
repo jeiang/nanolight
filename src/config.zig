@@ -15,7 +15,6 @@ const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 const Quicklink = @import("web.zig").Quicklink;
 
-/// The most a config may hold: `load` reads no more.
 pub const max_bytes = 1 << 20;
 
 /// The file's keys: each field is the key of its name, a struct a table of
@@ -68,7 +67,6 @@ const seeds = [_]Seed{
     .{ .key = "clipboard.enabled", .rule = .{ .flag = .clipboard } },
 };
 
-/// What `load` found.
 pub const Loaded = union(enum) {
     /// No file, and none was applied before: the defaults, which seed nothing.
     defaults,
@@ -555,7 +553,6 @@ test "bad files say what and where" {
         try testing.expectEqual(@as(usize, 0), p.line);
         try testing.expect(p.msg.len > 0);
     }
-    // An unknown key is ignored, the rest read.
     p = .{};
     const c = try parse(arena.allocator(), "colour = 1\nsuggestions = false\n", &p);
     try testing.expectEqual(false, c.suggestions.?);
@@ -629,7 +626,6 @@ test "the file seeds once, then the app's own change wins" {
         .show_in_menu_bar = false,
     };
 
-    // First start: everything is new.
     seed(store, testing.allocator, file, 1000);
     try testing.expect(prefs.hotkey(store, testing.allocator).eql(.ctrl_space));
     try expectKv(store, suggest_key, "0");
@@ -643,14 +639,12 @@ test "the file seeds once, then the app's own change wins" {
     try store.set(menu_bar_key, "1");
     try store.set(sync_at_key, "1500");
 
-    // The same file on the next start leaves all of it alone.
     seed(store, testing.allocator, file, 2000);
     try testing.expect(prefs.hotkey(store, testing.allocator).eql(.opt_space));
     try expectKv(store, suggest_key, "1");
     try expectKv(store, menu_bar_key, "1");
     try expectKv(store, sync_at_key, "1500");
 
-    // A key that changes in the file is applied, and counts as a change now.
     var edited = file;
     edited.suggestions = true;
     edited.hotkey = "cmd_space";
@@ -658,7 +652,6 @@ test "the file seeds once, then the app's own change wins" {
     try testing.expect(prefs.hotkey(store, testing.allocator).eql(.cmd_space));
     try expectKv(store, suggest_key, "1");
     try expectKv(store, sync_at_key, "3000");
-    // The ones it did not touch are still the app's.
     try expectKv(store, menu_bar_key, "1");
 }
 
@@ -701,7 +694,6 @@ test "clipboard history's switch: the file seeds it, the app's choice wins, and 
     try store.set(clipboard_key, "1");
     seed(store, a, .{ .clipboard = .{ .enabled = false } }, 8);
     try testing.expect(prefs.flagOr(store, a, .clipboard, false));
-    // The file changes its mind: that applies.
     seed(store, a, .{ .clipboard = .{ .enabled = true } }, 9);
     try expectKv(store, clipboard_key, "1");
     seed(store, a, .{ .clipboard = .{ .enabled = false } }, 10);
@@ -805,7 +797,6 @@ test "quicklinks: a changed list is a local change now, an unchanged one leaves 
     try testing.expectEqualStrings("Kagi", prefs.quicklinks(a, store)[0].name);
     try expectKv(store, sync_at_key, "150");
 
-    // An edited file wins again, as a change now.
     const edited: []const Quicklink = &.{
         .{ .name = "Bing", .url = "https://bing.com/search?q={argument}" },
     };

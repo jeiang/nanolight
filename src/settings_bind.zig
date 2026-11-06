@@ -22,7 +22,6 @@ pub const Bind = struct {
     sync: *account_live.Sync,
     update: *update_live.Update,
 
-    /// Settings' host, answering from `b`.
     pub fn host(b: *Bind) SettingsHost {
         return .{
             .ctx = b,

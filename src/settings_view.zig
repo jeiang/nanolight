@@ -122,7 +122,6 @@ pub fn tall(clip: bool) f32 {
     return if (clip) height else base_height;
 }
 
-/// The rows shown: the clipboard's only where this system has it.
 fn shown(clip: bool) []const RowKind {
     return if (clip) visible(true) else visible(false);
 }

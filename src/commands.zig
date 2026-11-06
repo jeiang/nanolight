@@ -132,7 +132,6 @@ pub const windows_table = [_]Command{
     },
 };
 
-/// This OS's commands.
 pub const all: []const Command = switch (builtin.os.tag) {
     .macos => &mac_table,
     .windows => &windows_table,
@@ -213,7 +212,6 @@ pub const Runner = struct {
     /// The app's (processes need a real one).
     io: std.Io,
     hooks: Hooks,
-    /// What it can run.
     installed: Installed,
     index: usize = 0,
     proc: proc.Runner = .{},
@@ -326,7 +324,6 @@ test "tables hold what the spec lists for each OS" {
     try t.expectEqualStrings("pactl", linux_table[2].runs[1][0]);
     try t.expectEqualStrings("50%", linux_table[2].runs[1][3]);
     try t.expectEqualStrings("set volume output volume 75", mac_table[3].runs[0][2]);
-    // Windows lists no volume.
     try t.expect(!names(&windows_table, "Mute") and !names(&windows_table, "Set Volume to 50%"));
     try t.expectEqualStrings("user32.dll,LockWorkStation", windows_table[1].runs[0][1]);
 }

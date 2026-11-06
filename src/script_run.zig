@@ -54,7 +54,6 @@ pub const Runner = struct {
     io: std.Io,
     screen: model.Screen,
     hooks: Hooks,
-    /// The screen is open.
     open: bool = false,
     /// The screen shows a view, not "Starting…".
     shown: bool = false,
@@ -85,7 +84,6 @@ pub const Runner = struct {
         r.title = "";
     }
 
-    /// Opens a row's script.
     pub fn start(r: *Runner, row: Row) void {
         r.stop();
         r.drop();
@@ -174,7 +172,6 @@ pub const Runner = struct {
         return .{ .detail = .{ .title = title, .body = .{ .markdown = md }, .actions = actions } };
     }
 
-    /// Starts the script with its arguments.
     fn run(r: *Runner) void {
         r.stop();
         r.out.clearRetainingCapacity();
@@ -300,7 +297,6 @@ pub const Runner = struct {
         }
     }
 
-    /// Argument `slot`'s new value.
     fn field(r: *Runner, slot: usize, value: []const u8) void {
         // The form's fields are the header's arguments (`question`).
         const arg = r.meta.args[slot].?;
@@ -319,7 +315,6 @@ pub const Runner = struct {
         r.close();
     }
 
-    /// Ends a script still running.
     pub fn stop(r: *Runner) void {
         r.proc.stop();
     }
@@ -502,7 +497,6 @@ test "a dropdown's pick is kept and shown in the form; a typed value is only kep
     const dir = ".zig-cache/tmp/";
     const path = try std.fmt.bufPrint(&buf, "{s}{s}/hi.sh", .{ dir, tmp.sub_path });
     r.start(.{ .file = path, .title = "Greet" });
-    // Three fields, the password's masked, the third for argument 3 on its first choice.
     const asked = kept.view.?.form.fields;
     try t.expectEqual(@as(usize, 3), asked.len);
     try t.expectEqual(model.Field.Kind.password, asked[1].kind);

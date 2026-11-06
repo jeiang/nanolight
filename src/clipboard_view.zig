@@ -330,7 +330,7 @@ fn appName(source: []const u8) []const u8 {
     return s;
 }
 
-/// "now", "5 min ago", "3 h ago", "2 d ago".
+/// "just now", "5 min ago", "3 h ago", "2 d ago".
 fn relative(buf: []u8, now: i64, at: i64) []const u8 {
     const d = @max(now - at, 0);
     const r = if (d < 60)

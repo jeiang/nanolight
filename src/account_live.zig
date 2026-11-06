@@ -193,7 +193,6 @@ const Take = struct {
     }
 };
 
-/// The sync status changed: the menu shows it.
 fn changed(ctx: *anyopaque) void {
     from(ctx).core.menuChanged();
 }
