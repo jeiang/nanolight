@@ -8,6 +8,7 @@
 //!
 //! No source app is known here, so `exclude_apps` cannot apply on Wayland.
 const std = @import("std");
+const assert = std.debug.assert;
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
 const lx = @import("clipboard_linux.zig");
@@ -47,6 +48,25 @@ fn msg(comptime name: [:0]const u8, comptime sig: [:0]const u8, comptime types: 
     return .{ .name = name, .signature = sig, .types = types };
 }
 
+/// `name`'s description, its counts taken from its own messages.
+fn described(
+    name: [*:0]const u8,
+    version: c_int,
+    methods: []const Message,
+    events: []const Message,
+) Interface {
+    assert(methods.len <= std.math.maxInt(c_int));
+    assert(events.len <= std.math.maxInt(c_int));
+    return .{
+        .name = name,
+        .version = version,
+        .method_count = @intCast(methods.len),
+        .methods = methods.ptr,
+        .event_count = @intCast(events.len),
+        .events = events.ptr,
+    };
+}
+
 const none0 = [0]?*const Interface{};
 const none1 = [1]?*const Interface{null};
 const none2 = [2]?*const Interface{ null, null };
@@ -63,28 +83,14 @@ fn DataControl(comptime ns: []const u8, comptime version: c_int) type {
         const source_type = [1]?*const Interface{&source};
         const offer_type = [1]?*const Interface{&offer};
 
-        pub const manager: Interface = .{
-            .name = name("manager"),
-            .version = version,
-            .method_count = 3,
-            .methods = &manager_methods,
-            .event_count = 0,
-            .events = &none_messages,
-        };
+        pub const manager = described(name("manager"), version, &manager_methods, &none_messages);
         const manager_methods = [_]Message{
             msg("create_data_source", "n", &source_type),
             msg("get_data_device", "no", &get_device_types),
             msg("destroy", "", &none0),
         };
 
-        pub const device: Interface = .{
-            .name = name("device"),
-            .version = version,
-            .method_count = 3,
-            .methods = &device_methods,
-            .event_count = 4,
-            .events = &device_events,
-        };
+        pub const device = described(name("device"), version, &device_methods, &device_events);
         const device_methods = [_]Message{
             msg("set_selection", "?o", &source_type),
             msg("destroy", "", &none0),
@@ -97,25 +103,11 @@ fn DataControl(comptime ns: []const u8, comptime version: c_int) type {
             msg("primary_selection", "?o", &offer_type),
         };
 
-        pub const source: Interface = .{
-            .name = name("source"),
-            .version = version,
-            .method_count = 2,
-            .methods = &source_methods,
-            .event_count = 2,
-            .events = &source_events,
-        };
+        pub const source = described(name("source"), version, &source_methods, &source_events);
         const source_methods = [_]Message{ msg("offer", "s", &none1), msg("destroy", "", &none0) };
         const source_events = [_]Message{ msg("send", "sh", &none2), msg("cancelled", "", &none0) };
 
-        pub const offer: Interface = .{
-            .name = name("offer"),
-            .version = version,
-            .method_count = 2,
-            .methods = &offer_methods,
-            .event_count = 1,
-            .events = &offer_events,
-        };
+        pub const offer = described(name("offer"), version, &offer_methods, &offer_events);
         const offer_methods = [_]Message{ msg("receive", "sh", &none2), msg("destroy", "", &none0) };
         const offer_events = [_]Message{msg("offer", "s", &none1)};
 
@@ -149,7 +141,12 @@ const wlr_proto = Proto.of(Wlr);
 
 var vk_create_types = [2]?*const Interface{ null, &vk_interface };
 const vk_manager_methods = [_]Message{msg("create_virtual_keyboard", "on", &vk_create_types)};
-const vk_manager_interface: Interface = .{ .name = "zwp_virtual_keyboard_manager_v1", .version = 1, .method_count = 1, .methods = &vk_manager_methods, .event_count = 0, .events = &none_messages };
+const vk_manager_interface = described(
+    "zwp_virtual_keyboard_manager_v1",
+    1,
+    &vk_manager_methods,
+    &none_messages,
+);
 const vk_three = [3]?*const Interface{ null, null, null };
 const vk_four = [4]?*const Interface{ null, null, null, null };
 const vk_keymap_types = [3]?*const Interface{ null, null, null };
@@ -159,7 +156,7 @@ const vk_methods = [_]Message{
     msg("modifiers", "uuuu", &vk_four),
     msg("destroy", "", &none0),
 };
-const vk_interface: Interface = .{ .name = "zwp_virtual_keyboard_v1", .version = 1, .method_count = 4, .methods = &vk_methods, .event_count = 0, .events = &none_messages };
+const vk_interface = described("zwp_virtual_keyboard_v1", 1, &vk_methods, &none_messages);
 
 const Lib = struct {
     wl_display_connect: *const fn (?[*:0]const u8) callconv(.c) ?*Display,

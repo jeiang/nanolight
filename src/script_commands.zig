@@ -54,7 +54,37 @@ pub const Meta = struct {
         };
         return n;
     }
+
+    /// A known header key's value.
+    fn set(m: *Meta, key: HeaderKey, value: []const u8) void {
+        switch (key) {
+            .schemaVersion => m.schema = true,
+            .title => m.title = value,
+            .packageName => m.package = value,
+            .icon => m.icon = value,
+            .description => m.description = value,
+            .currentDirectoryPath => m.cwd = value,
+            .needsConfirmation => m.confirm = std.mem.eql(u8, value, "true"),
+            .mode => m.mode = parseMode(value),
+        }
+    }
 };
+
+/// The `@raycast.` keys read, besides `argument1` to `argument3`.
+const HeaderKey = enum {
+    schemaVersion,
+    title,
+    packageName,
+    icon,
+    description,
+    currentDirectoryPath,
+    needsConfirmation,
+    mode,
+};
+const key_marker = "@raycast.";
+const comment_starts = [_][]const u8{ "#", "//", "--", ";" };
+/// Header lines read at most: the header sits at the top.
+const header_lines_max = 200;
 
 /// The `@raycast.` keys in a script's comments (`#`, `//`, `--`), values
 /// pointing into `bytes`; arguments parsed into `arena`. Null when it isn't
@@ -65,24 +95,51 @@ pub fn parse(arena: std.mem.Allocator, bytes: []const u8) ?Meta {
     var seen: usize = 0;
     while (lines.next()) |raw| {
         seen += 1;
-        if (seen > 200) break;
+        if (seen > header_lines_max) break;
         const line = std.mem.trim(u8, raw, " \t\r");
-        const body = for ([_][]const u8{ "#", "//", "--", ";" }) |c| {
-            if (std.mem.startsWith(u8, line, c)) break std.mem.trimStart(u8, line[c.len..], " \t#/-;");
+        const body = for (comment_starts) |c| {
+            if (std.mem.startsWith(u8, line, c)) {
+                break std.mem.trimStart(u8, line[c.len..], " \t#/-;");
+            }
         } else continue;
-        const key_at = std.mem.indexOf(u8, body, "@raycast.") orelse continue;
-        const kv = body[key_at + "@raycast.".len ..];
+        const key_at = std.mem.indexOf(u8, body, key_marker) orelse continue;
+        const kv = body[key_at + key_marker.len ..];
         const sp = std.mem.indexOfAny(u8, kv, " \t") orelse kv.len;
         const key = kv[0..sp];
         const value = std.mem.trim(u8, kv[sp..], " \t");
-        if (std.mem.eql(u8, key, "schemaVersion")) m.schema = true else if (std.mem.eql(u8, key, "title")) m.title = value else if (std.mem.eql(u8, key, "packageName")) m.package = value else if (std.mem.eql(u8, key, "icon")) m.icon = value else if (std.mem.eql(u8, key, "description")) m.description = value else if (std.mem.eql(u8, key, "currentDirectoryPath")) m.cwd = value else if (std.mem.eql(u8, key, "needsConfirmation")) m.confirm = std.mem.eql(u8, value, "true") else if (std.mem.eql(u8, key, "mode")) {
-            m.mode = if (std.mem.eql(u8, value, "silent")) .silent else if (std.mem.eql(u8, value, "compact")) .compact else if (std.mem.eql(u8, value, "inline")) .inline_ else .full_output;
-        } else if (std.mem.startsWith(u8, key, "argument") and key.len == 9 and key[8] >= '1' and key[8] <= '3') {
-            m.args[key[8] - '1'] = std.json.parseFromSliceLeaky(Argument, arena, value, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch null;
+        if (std.meta.stringToEnum(HeaderKey, key)) |known| {
+            m.set(known, value);
+        } else if (argumentSlot(key)) |slot| {
+            const options: std.json.ParseOptions = .{
+                .ignore_unknown_fields = true,
+                .allocate = .alloc_always,
+            };
+            m.args[slot] = std.json.parseFromSliceLeaky(Argument, arena, value, options) catch null;
         }
     }
     if (!m.schema or m.title.len == 0) return null;
     return m;
+}
+
+/// `argumentN`'s slot in `Meta.args`: N from 1 to `max_args`.
+fn argumentSlot(key: []const u8) ?usize {
+    // One digit names every slot.
+    comptime std.debug.assert(max_args <= 9);
+    const argument = "argument";
+    if (!std.mem.startsWith(u8, key, argument)) return null;
+    const digits = key[argument.len..];
+    if (digits.len != 1) return null;
+    const n = std.fmt.charToDigit(digits[0], 10) catch return null;
+    if (n < 1) return null;
+    if (n > max_args) return null;
+    return n - 1;
+}
+
+fn parseMode(value: []const u8) Mode {
+    if (std.mem.eql(u8, value, "silent")) return .silent;
+    if (std.mem.eql(u8, value, "compact")) return .compact;
+    if (std.mem.eql(u8, value, "inline")) return .inline_;
+    return .full_output;
 }
 
 fn io() std.Io {
