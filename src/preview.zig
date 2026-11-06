@@ -9,6 +9,7 @@ const nanoui = @import("nanoui");
 const keys = @import("keys.zig");
 const objc = nanoui.objc;
 const chrome = @import("chrome.zig");
+const monitor = @import("event_monitor.zig");
 
 pub const Key = enum { escape, open_out };
 
@@ -153,13 +154,7 @@ pub const Preview = struct {
     pub fn watch(p: *Preview, w: Watch) void {
         p.watcher = w;
         var block = objc.BlockRet(Preview, &.{objc.Object}, ?objc.Object).init(p, keyDown);
-        const key_down_mask: u64 = 1 << 10;
-        _ = objc.msg(
-            ?objc.Object,
-            objc.class("NSEvent"),
-            "addLocalMonitorForEventsMatchingMask:handler:",
-            .{ key_down_mask, @as(*anyopaque, @ptrCast(&block)) },
-        );
+        _ = monitor.add(.local, monitor.key_down, @ptrCast(&block));
     }
 
     fn keyDown(p: *Preview, ev: objc.Object) ?objc.Object {

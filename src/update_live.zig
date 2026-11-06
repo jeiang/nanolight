@@ -16,6 +16,7 @@ const prefs = @import("prefs.zig");
 const platform = @import("platform.zig");
 const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
+const after = @import("after.zig");
 const build = @import("build_options");
 
 const idle_ms = 10 * 1000;
@@ -28,7 +29,7 @@ pub const Update = struct {
     updater: ?*nanoui.Updater = null,
     label: [64]u8 = undefined,
     /// The panel's absences still being waited out (only the last one acts).
-    waits: u32 = 0,
+    away_wait: after.Debounce = .{},
 
     /// The updater, unless this build never updates itself.
     pub fn start(u: *Update, init: std.process.Init) void {
@@ -111,13 +112,9 @@ pub const Update = struct {
     }
 };
 
-fn from(ctx: *anyopaque) *Update {
-    return @ptrCast(@alignCast(ctx));
-}
-
 /// An update became ready, or the updater's state moved: the menu follows.
 fn changed(ctx: *anyopaque) void {
-    const u = from(ctx);
+    const u = after.cast(*Update, ctx);
     u.core.menuChanged();
     away(u);
 }
@@ -126,17 +123,10 @@ fn changed(ctx: *anyopaque) void {
 /// panel has been away `idle_ms`, it restarts into the update.
 fn away(ctx: *anyopaque) void {
     if (platform.native_autorestart) return;
-    const u = from(ctx);
+    const u = after.cast(*Update, ctx);
     const updater = u.updater orelse return;
     if (updater.ready() == null) return;
-    u.waits += 1;
-    nanoui.App.after(idle_ms, u, struct {
-        fn f(c: ?*anyopaque) callconv(.c) void {
-            const it = from(c.?);
-            it.waits -= 1;
-            if (it.waits == 0) restartUnseen(it);
-        }
-    }.f);
+    u.away_wait.poke(idle_ms, Update, "away_wait", restartUnseen);
 }
 
 fn restartUnseen(u: *Update) void {

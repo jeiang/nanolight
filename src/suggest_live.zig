@@ -5,15 +5,16 @@ const nanoui = @import("nanoui");
 const suggest = @import("suggest.zig");
 const prefs = @import("prefs.zig");
 const view = @import("view.zig");
+const after = @import("after.zig");
 const App = @import("app.zig").App;
 
 pub const Suggest = struct {
     core: *App,
-    /// The words Google is to be asked about once typing pauses, and how
-    /// many pauses are still being waited out (only the last one asks).
+    /// The words Google is to be asked about once typing pauses (only the
+    /// last pause asks).
     asking: [suggest.max_len]u8 = undefined,
     asking_len: usize = 0,
-    waiting: u32 = 0,
+    pause: after.Debounce = .{},
 
     /// What the panel asks for completions with.
     pub fn entry(sg: *Suggest) view.Host.Ask {
@@ -22,19 +23,12 @@ pub const Suggest = struct {
 
     /// Google is asked once typing pauses (`suggest.pause_ms`).
     fn ask(ctx: *anyopaque, query: []const u8) void {
-        const sg: *Suggest = @ptrCast(@alignCast(ctx));
+        const sg = after.cast(*Suggest, ctx);
         const q = std.mem.trim(u8, query, " ");
         if (q.len > suggest.max_len) return sg.core.s.unanswered(q);
         @memcpy(sg.asking[0..q.len], q);
         sg.asking_len = q.len;
-        sg.waiting += 1;
-        nanoui.App.after(suggest.pause_ms, sg, struct {
-            fn f(c: ?*anyopaque) callconv(.c) void {
-                const it: *Suggest = @ptrCast(@alignCast(c.?));
-                it.waiting -= 1;
-                if (it.waiting == 0) it.send();
-            }
-        }.f);
+        sg.pause.poke(suggest.pause_ms, Suggest, "pause", send);
     }
 
     fn send(sg: *Suggest) void {
@@ -92,9 +86,5 @@ pub fn set(core: *App, on: bool, origin: Origin) void {
     if (origin == .here) core.touched();
     core.redraw();
     // The menu's checkbox follows; never rebuilt inside its own click.
-    nanoui.App.after(0, core, struct {
-        fn f(c: ?*anyopaque) callconv(.c) void {
-            App.from(c.?).menuChanged();
-        }
-    }.f);
+    after.oneShot(0, core, App.menuChanged);
 }

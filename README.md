@@ -250,7 +250,9 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/preview.zig` | The results page in the panel (WKWebView, the Mac) |
 | `src/platform.zig` | Each OS's parts, picked once, and what it can do; `src/pc_stubs.zig` stands in for the Mac's, checked against them |
 | `src/panel_mac.zig`, `src/panel_pc.zig` | The panel's window on the Mac, and on Windows and Linux (with X11's focus) |
-| `src/hotkey*.zig`, `src/apps_*.zig`, `src/single*.zig`, `src/login.zig` | Each platform's key, apps, single copy and login item |
+| `src/hotkey*.zig`, `src/apps_*.zig`, `src/single*.zig`, `src/login.zig` | Each platform's key, apps, single copy and login item; `src/single.zig` holds the command wire and the wait for an older copy to quit, `src/win_msg.zig` the Windows message window |
+| `src/after.zig` | Timers on the UI thread: once later, or once calls pause (debounce) |
+| `src/event_monitor.zig`, `src/clickthrough.zig` | AppKit's event monitors; clicks round the Mac's panel reaching what is under it |
 | `src/account.zig`, `src/account_live.zig` | The sync client: `[sync]`, the PUT and merge, the status line; the app's side (snapshot, merge, quicklinks) |
 | `src/sync_protocol.zig` | The sync wire both sides share: the path, headers, bearer prefix, account rule and size limits |
 | `src/server.zig`, `src/server_protocol.zig`, `src/server_transport.zig`, `src/settings.zig` | `nanolight-server`: its command line; the protocol as a pure function, tokens, atomic records; the socket and its deadline; and the record both sides merge |

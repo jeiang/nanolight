@@ -53,6 +53,7 @@ test {
     _ = @import("tests_prefs.zig");
     _ = @import("tests_files.zig");
     _ = @import("platform.zig");
+    _ = @import("single.zig");
     switch (@import("builtin").os.tag) {
         .macos => {
             _ = @import("apps_mac.zig");

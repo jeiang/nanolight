@@ -12,10 +12,9 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const chrome = @import("chrome.zig");
+const monitor = @import("event_monitor.zig");
 
-const mouse_moved: u64 = 1 << 5;
-const left_dragged: u64 = 1 << 6;
-const mask = mouse_moved | left_dragged;
+const mask = monitor.mouse_moved | monitor.left_dragged;
 
 pub const ClickThrough = struct {
     window: ?*nanoui.Window = null,
@@ -30,35 +29,18 @@ pub const ClickThrough = struct {
         const w = c.window orelse return;
         if (c.global == null) {
             objc.msg(void, w.nswindow, "setAcceptsMouseMovedEvents:", .{objc.YES});
-            const cls = objc.class("NSEvent");
             var g = objc.Block(ClickThrough, &.{objc.Object}).init(c, seen);
-            c.global = keep(
-                objc.msg(
-                    ?objc.Object,
-                    cls,
-                    "addGlobalMonitorForEventsMatchingMask:handler:",
-                    .{ mask, @as(*anyopaque, @ptrCast(&g)) },
-                ),
-            );
+            c.global = monitor.add(.global, mask, @ptrCast(&g));
             var l = objc.BlockRet(ClickThrough, &.{objc.Object}, ?objc.Object).init(c, seenHere);
-            c.local = keep(
-                objc.msg(
-                    ?objc.Object,
-                    cls,
-                    "addLocalMonitorForEventsMatchingMask:handler:",
-                    .{ mask, @as(*anyopaque, @ptrCast(&l)) },
-                ),
-            );
+            c.local = monitor.add(.local, mask, @ptrCast(&l));
         }
         c.update();
     }
 
     /// As the panel hides: stop following, and take the mouse again.
     pub fn stop(c: *ClickThrough) void {
-        const cls = objc.class("NSEvent");
         for ([_]*?objc.Object{ &c.global, &c.local }) |m| if (m.*) |obj| {
-            objc.msg(void, cls, "removeMonitor:", .{obj});
-            objc.release(obj);
+            monitor.remove(obj);
             m.* = null;
         };
         c.set(false);
@@ -91,12 +73,6 @@ pub const ClickThrough = struct {
         return ev;
     }
 };
-
-fn keep(obj: ?objc.Object) ?objc.Object {
-    const o = obj orelse return null;
-    objc.msg(void, o, "retain", .{});
-    return o;
-}
 
 /// Whether screen point `at` (AppKit's: from the bottom left) is over the
 /// panel in a window at `frame`: `margin` in from its left and top,

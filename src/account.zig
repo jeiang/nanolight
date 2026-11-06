@@ -11,6 +11,7 @@ const nanoui = @import("nanoui");
 const prefs = @import("prefs.zig");
 const protocol = @import("sync_protocol.zig");
 const settings = @import("settings.zig");
+const after = @import("after.zig");
 const Settings = settings.Settings;
 
 const pull_every_s = 5 * 60;
@@ -83,7 +84,7 @@ pub const Account = struct {
     /// Asked to sync while a request was out: synced once more when it
     /// succeeds. A failure drops it (no retry; the next change or pull asks).
     dirty: bool = false,
-    pushes_waiting: u32 = 0,
+    push_pause: after.Debounce = .{},
     send: Send = fetch,
 
     /// At launch: reads the token and syncs, if `[sync]` is set.
@@ -144,14 +145,7 @@ pub const Account = struct {
     /// This machine's settings changed: sent once changes pause.
     pub fn changed(a: *Account) void {
         if (a.token == null) return;
-        a.pushes_waiting += 1;
-        nanoui.App.after(push_after_ms, a, struct {
-            fn f(ctx: ?*anyopaque) callconv(.c) void {
-                const acc: *Account = @ptrCast(@alignCast(ctx.?));
-                acc.pushes_waiting -= 1;
-                if (acc.pushes_waiting == 0) acc.sync();
-            }
-        }.f);
+        a.push_pause.poke(push_after_ms, Account, "push_pause", sync);
     }
 
     fn firstHere(a: *Account) bool {
