@@ -1,6 +1,7 @@
 //! A script command's screen in the panel (raycast_view.zig), driven
-//! through a Tester: its output, its actions, its arguments' form. No
-//! process runs; a host answers as script_run.zig's runner does.
+//! through a Tester: its output, its actions, its arguments' form, opening
+//! it from its row, and one screen up at a time. No process runs; a host
+//! answers as script_run.zig's runner does.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -368,4 +369,36 @@ test "a silent script's row hides the panel as it runs" {
     r.t.settle(1);
     r.t.textOps(&.{.{ .command = .insert_newline }});
     try std.testing.expect(!r.ext.open and r.hidden);
+}
+
+test "Settings opened over Clipboard History closes it, so Escape leaves the rows for next time" {
+    var r: Rig = undefined;
+    try r.init(std.testing.allocator, .{ .rows = true });
+    defer r.deinit();
+    r.s.openClipboard();
+    r.t.settle(1);
+    // As the tray's Settings… opens it.
+    r.s.openSettings();
+    try std.testing.expect(r.s.settings_ui.open and !r.s.clip_ui.open);
+    r.t.settle(1);
+    _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
+    try std.testing.expect(r.hidden and !r.s.settings_ui.open);
+    r.s.reveal();
+    r.t.settle(1);
+    try std.testing.expect(!r.s.clip_ui.open and r.t.hasText("Nanolight · 1 apps"));
+}
+
+test "Settings or Clipboard History opened over a script's screen end the script and close it" {
+    var r: Rig = undefined;
+    try r.init(std.testing.allocator, .{ .first = .output });
+    defer r.deinit();
+    // A hide and a reveal keep it.
+    r.s.reveal();
+    try std.testing.expect(r.ext.open);
+    r.s.openSettings();
+    try std.testing.expect(r.heard("pop") and !r.ext.open and r.s.settings_ui.open);
+    r.t.settle(1);
+    try std.testing.expect(!r.t.containsText("from a script"));
+    r.s.openClipboard();
+    try std.testing.expect(r.s.clip_ui.open and !r.s.settings_ui.open);
 }
