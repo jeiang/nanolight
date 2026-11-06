@@ -277,7 +277,7 @@ pub const Prefs = struct {
         return p.clip_clear_ok;
     }
     fn syncStatus(_: *anyopaque) []const u8 {
-        return @import("account.zig").off_text;
+        return @import("account_live.zig").off_text;
     }
     fn ver(_: *anyopaque) []const u8 {
         return @import("build_options").version;

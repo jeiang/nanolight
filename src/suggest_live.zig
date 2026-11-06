@@ -89,7 +89,7 @@ pub fn set(core: *App, on: bool, origin: Origin) void {
     core.s.setSuggest(on);
     // A failure is logged; the choice holds for this run, the next launch falls back to on.
     _ = prefs.setFlag(core.kv, .suggest, on);
-    if (origin == .here) core.touched();
+    if (origin == .here) core.touched(.suggest);
     core.redraw();
     // The menu's checkbox follows; never rebuilt inside its own click.
     nanoui.App.after(0, core, struct {

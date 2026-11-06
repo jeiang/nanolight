@@ -461,7 +461,7 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     try std.testing.expect(s.settings_ui.open);
     try std.testing.expect(t.hasText("Google Suggestions"));
     try std.testing.expect(t.hasText("Open at Login") != nix);
-    try std.testing.expect(t.hasText(@import("account.zig").off_text));
+    try std.testing.expect(t.hasText(@import("account_live.zig").off_text));
     try std.testing.expect(t.hasText("Check for Updates") != nix);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     t.settle(1);

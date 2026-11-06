@@ -93,6 +93,11 @@ pub const Field = std.meta.FieldEnum(Settings);
 /// setting is a field of `Settings` and a name here; `launches` merge by count.
 pub const choices = [_]Field{ .hotkey, .suggest, .quicklinks };
 
+/// Whether `f` is one of the `choices`: changed here, it syncs at that time.
+pub fn isChoice(f: Field) bool {
+    return std.mem.indexOfScalar(Field, &choices, f) != null;
+}
+
 /// The fields that cross between machines: every one but `v`.
 pub const synced = blk: {
     var out: [std.enums.values(Field).len - 1]Field = undefined;
@@ -139,8 +144,8 @@ comptime {
         assert(std.mem.indexOf(u8, quicklink_shell, "\"" ++ name ++ "\":") != null);
     }
     for (std.enums.values(Field)) |f| switch (f) {
-        .v, .at, .launches => assert(std.mem.indexOfScalar(Field, &choices, f) == null),
-        else => assert(std.mem.indexOfScalar(Field, &choices, f) != null),
+        .v, .at, .launches => assert(!isChoice(f)),
+        else => assert(isChoice(f)),
     };
 }
 
