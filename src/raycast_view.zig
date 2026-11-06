@@ -17,10 +17,8 @@ pub const actions_key: ui.Shortcut = if (@import("builtin").os.tag == .macos)
 else
     .{ .key = 'o', .ctrl = true };
 const actions_hint = if (@import("builtin").os.tag == .macos) "⌘K" else "Ctrl+O";
-const Palette = pview.Palette;
-
-const section_h: f32 = 26;
-const pad: f32 = 6;
+const chrome = @import("chrome.zig");
+const Palette = @import("palette.zig").Palette;
 /// A dropdown's choices shown, as buttons in its row.
 const max_options = 4;
 /// An output's lines shown: its last ones.
@@ -90,7 +88,7 @@ pub const Ext = struct {
     rendering: bool = false,
     actions_open: bool = false,
     act_sel: usize = 0,
-    took_return: bool = false,
+    ret: chrome.Return = .{},
     /// A toast or HUD, said in the footer for a while.
     note_buf: [200]u8 = undefined,
     note_len: usize = 0,
@@ -196,30 +194,31 @@ pub const Ext = struct {
     }
 
     pub fn height(e: *const Ext) f32 {
-        const v = e.view orelse return pview.header_h + pview.footer_h + 80;
-        const chrome: f32 = pview.header_h + pview.footer_h + 2;
+        const v = e.view orelse return chrome.header_h + chrome.footer_h + 80;
+        const bars: f32 = chrome.header_h + chrome.footer_h + 2;
         // As tall as what is shown, no taller.
         if (e.actions_open) {
             const n: f32 = @floatFromInt(v.actions().len);
-            return @min(chrome + pad * 2 + section_h + n * 38, pview.max_height);
+            const list = chrome.list_pad * 2 + chrome.actions_section.h + n * 38;
+            return @min(bars + list, chrome.max_height);
         }
         switch (v) {
             .form => |f| {
                 const rows: f32 = @floatFromInt(@max(f.fields.len, 1));
-                return @min(chrome + 32 + rows * 44, pview.max_height);
+                return @min(bars + 32 + rows * 44, chrome.max_height);
             },
             .detail => |d| switch (d.body) {
                 .output => |out| {
                     const shown = std.mem.trimEnd(u8, out, "\n");
                     const n = @min(std.mem.count(u8, shown, "\n") + 1, max_lines);
                     const lines: f32 = @floatFromInt(n);
-                    return @min(@max(chrome + 36 + lines * 19, 150), pview.max_height);
+                    return @min(@max(bars + 36 + lines * 19, 150), chrome.max_height);
                 },
                 .markdown => |md| {
                     var lines: f32 = @floatFromInt(std.mem.count(u8, md, "\n") + 1);
                     // Long paragraphs wrap: about 80 characters a line.
                     lines += @floatFromInt(md.len / 80);
-                    return @min(@max(chrome + 46 + lines * 24, 150), pview.max_height);
+                    return @min(@max(bars + 46 + lines * 24, 150), chrome.max_height);
                 },
             },
         }
@@ -250,7 +249,7 @@ pub const Ext = struct {
             .detail => |d| detail(c, p, d),
         } else {
             const w = ui.div(c).wFull().h(80).center();
-            ui.text(c, "Starting…", .{ .size = 13, .color = p.sub.alpha(0.8) });
+            ui.text(c, "Starting…", p.waiting());
             w.end();
         }
         mid.end();
@@ -267,8 +266,8 @@ pub const Ext = struct {
         const S = ui.Shortcut;
         // The arrows move in the actions, and never reach a field.
         const n = if (e.actions_open) acts.len else 0;
-        if (pview.Nanolight.moveDown(c) and n > 0) e.act_sel = (e.act_sel + 1) % n;
-        if (pview.Nanolight.moveUp(c) and n > 0) e.act_sel = (e.act_sel + n - 1) % n;
+        if (chrome.moveDown(c) and n > 0) e.act_sel = (e.act_sel + 1) % n;
+        if (chrome.moveUp(c) and n > 0) e.act_sel = (e.act_sel + n - 1) % n;
         if (c.shortcut(actions_key)) {
             e.actions_open = !e.actions_open and acts.len > 0;
             e.act_sel = 0;
@@ -278,12 +277,7 @@ pub const Ext = struct {
             const k: usize = if (form_shown) model.return_at else model.cmd_return_at;
             if (acts.len > k) e.run(acts[k]);
         }
-        const ret = c.input.key == .enter or for (c.input.ops) |op| {
-            if (op == .command and op.command == .insert_newline) break true;
-        } else false;
-        if (!ret) e.took_return = false;
-        if (ret and !e.took_return) {
-            e.took_return = true;
+        if (e.ret.once(c)) {
             if (e.actions_open) {
                 if (e.act_sel < acts.len) e.run(acts[e.act_sel]);
             } else if (acts.len > model.return_at) e.run(acts[model.return_at]);
@@ -295,7 +289,7 @@ pub const Ext = struct {
     }
 
     fn header(e: *Ext, c: *ui.Context, p: Palette, v: ?model.View) void {
-        const bar = ui.div(c).row().wFull().h(pview.header_h).px(18).gap(12).itemsCenter();
+        const bar = ui.div(c).row().wFull().h(chrome.header_h).px(18).gap(12).itemsCenter();
         defer bar.end();
         const back = ui.div(c).size(26, 26).center().rounded(7).bg(p.tile).control();
         if (back.clicked()) e.send(.pop);
@@ -430,11 +424,9 @@ pub const Ext = struct {
     }
 
     fn actionList(e: *Ext, c: *ui.Context, p: Palette, acts: []const model.Action) void {
-        const col = ui.div(c).column().wFull().px(8).py(pad).grow().scrollY();
+        const col = ui.div(c).column().wFull().px(8).py(chrome.list_pad).grow().scrollY();
         defer col.end();
-        const t = ui.div(c).row().wFull().h(section_h).px(12).itemsEnd().pb(4);
-        ui.text(c, "Actions", .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) });
-        t.end();
+        chrome.sectionHead(c, p, "Actions", chrome.actions_section);
         for (acts, 0..) |a, i| {
             ui.key(c, c.print("rc-act-{d}", .{i}));
             const r = ui.div(c).row().wFull().h(38).px(12).gap(10).itemsCenter().rounded(9)
@@ -450,8 +442,7 @@ pub const Ext = struct {
     }
 
     fn footer(e: *Ext, c: *ui.Context, p: Palette, acts: []const model.Action) void {
-        ui.div(c).wFull().h(1).bg(p.hair).end();
-        const bar = ui.div(c).row().wFull().h(pview.footer_h).px(16).gap(8).itemsCenter();
+        const bar = chrome.footer(c, p);
         defer bar.end();
         const name = e.name_buf[0..e.name_len];
         if (e.icon) |png| _ = ui.image(c, .{
@@ -471,16 +462,17 @@ pub const Ext = struct {
                 .truncate = .ellipsis,
             });
             c.animationFrame();
-        } else ui.text(c, name, .{ .size = 12, .color = p.sub.alpha(0.8), .truncate = .ellipsis });
+        } else {
+            var cut = p.detail();
+            cut.truncate = .ellipsis;
+            ui.text(c, name, cut);
+        }
         ui.spacer(c);
         if (acts.len <= model.return_at) return;
-        const first: ui.TextStyle = .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) };
-        ui.text(c, acts[model.return_at].title(), first);
-        ui.kbd(c, "↩");
+        chrome.footerKey(c, p, acts[model.return_at].title(), "↩", true);
         if (acts.len > 1) {
-            ui.div(c).w(1).h(14).bg(p.hair).end();
-            ui.text(c, "Actions", .{ .size = 12, .color = p.sub.alpha(0.8) });
-            ui.kbd(c, actions_hint);
+            chrome.keySep(c, p);
+            chrome.footerKey(c, p, "Actions", actions_hint, false);
         }
     }
 };

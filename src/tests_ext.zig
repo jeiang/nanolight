@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const chrome = @import("chrome.zig");
 const support = @import("test_support.zig");
 const model = @import("raycast_model.zig");
 const rv = @import("raycast_view.zig");
@@ -296,7 +297,7 @@ test "the back button closes a script's screen in the frame that drew it" {
     defer r.deinit();
     try std.testing.expect(r.t.hasText("from a script"));
     // The chevron, first in the header.
-    r.t.click(18 + 13, view.header_h / 2);
+    r.t.click(18 + 13, chrome.header_h / 2);
     try std.testing.expect(r.heard("pop") and !r.hidden and !r.ext.open);
     r.t.settle(1);
     try std.testing.expect(!r.t.hasText("from a script"));
@@ -407,7 +408,7 @@ test "a script's icon outlives the index it came from" {
     const gpa = std.testing.allocator;
     // The index's icon, in page memory: handed back to the system when the
     // index is replaced, so a read of it afterwards faults.
-    const png = try std.heap.page_allocator.dupe(u8, view.icon_png);
+    const png = try std.heap.page_allocator.dupe(u8, chrome.icon_png);
     var r: Rig = undefined;
     r.init(gpa, .{ .first = .output, .icon = png }) catch |err| {
         std.heap.page_allocator.free(png);
@@ -421,8 +422,8 @@ test "a script's icon outlives the index it came from" {
     // the icon's bytes again.
     var t: ui.Tester = undefined;
     try t.init(gpa, .init(r.s, view.Nanolight.view), .{
-        .width = view.width,
-        .height = view.max_height,
+        .width = chrome.width,
+        .height = chrome.max_height,
         .dark = true,
     });
     defer t.deinit();

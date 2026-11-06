@@ -12,7 +12,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const nanoui = @import("nanoui");
-const view = @import("view.zig");
+const chrome = @import("chrome.zig");
 const x11 = @import("hotkey_x11.zig");
 const windows = builtin.os.tag == .windows;
 
@@ -33,11 +33,13 @@ pub fn adjust(o: *nanoui.WindowOptions) void {
     o.transparent = true;
 }
 
-pub fn setup(w: *nanoui.Window, s: *view.Nanolight) void {
-    s.margin = 0;
-    if (windows or !x11.onX11()) return;
-    window = w;
-    follow();
+/// The panel fills the window: no margin, and an entrance of its own.
+pub fn setup(w: *nanoui.Window) chrome.Fit {
+    if (!windows and x11.onX11()) {
+        window = w;
+        follow();
+    }
+    return .{};
 }
 
 /// Whether the panel shows and has the keys: on X11 by the window
@@ -59,8 +61,8 @@ pub fn place(w: *nanoui.Window) void {
     // A fifth of the way down, but high enough that the panel at its
     // tallest (a command's screen) stays on a small screen.
     w.setPosition(
-        @max(0, (m[0] - view.width) / 2),
-        @max(0, @min(m[1] * 0.2, m[1] - view.max_height - 16)),
+        @max(0, (m[0] - chrome.width) / 2),
+        @max(0, @min(m[1] * 0.2, m[1] - chrome.max_height - 16)),
     );
     // X11: the panel's user time is the hot key's, set before it maps, so a
     // window manager that prevents focus stealing (Xfce, KDE) lets it take
@@ -78,8 +80,8 @@ pub fn resize(w: *nanoui.Window, h: f32) void {
     // Linux: GTK 3 under Wayland can keep a borderless window at its old
     // size after `gtk_window_resize`, and the bottom of the panel is cut
     // off. A size request of the new height makes it take it.
-    if (!windows) w.setMinSize(view.width, height);
-    w.setSize(view.width, height);
+    if (!windows) w.setMinSize(chrome.width, height);
+    w.setSize(chrome.width, height);
 }
 
 /// After `show`: on X11 the window manager is given the hot key's time, or

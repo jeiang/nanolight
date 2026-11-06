@@ -4,6 +4,8 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const chrome = @import("chrome.zig");
+const Theme = @import("palette.zig").Theme;
 const settings_view = @import("settings_view.zig");
 const support = @import("test_support.zig");
 const Rig = support.Rig;
@@ -18,9 +20,8 @@ fn firstAndSettled(fades: bool) ![2]ui.Rect {
     rig.init(std.testing.allocator);
     defer rig.deinit();
     const t = &rig.t;
-    rig.s.window_fades = fades;
-    rig.s.margin = view.shadow_margin;
-    try rig.mount(.{ .width = view.width + 2 * view.shadow_margin, .settle = false });
+    rig.s.fit = .{ .margin = chrome.shadow_margin, .window_fades = fades };
+    try rig.mount(.{ .width = chrome.width + 2 * chrome.shadow_margin, .settle = false });
     t.frame();
     const first = t.findText(placeholder) orelse return error.NoField;
     t.settle(1);
@@ -102,7 +103,7 @@ test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" 
     // The rows fit: the last one is inside Settings, Settings in the window.
     const quit = t.findText("Quit Nanolight").?;
     try std.testing.expect(quit.y + quit.h <= settings_view.height);
-    try std.testing.expect(settings_view.height <= view.max_height);
+    try std.testing.expect(settings_view.height <= chrome.max_height);
 }
 
 test "Settings' Open at Login flips what the system says, not a copy" {
@@ -184,18 +185,18 @@ test "Settings' header picks the panel's theme, and keeps it" {
     _ = t.shortcut(.{ .key = ui.Shortcut.right });
     _ = t.shortcut(.{ .key = ui.Shortcut.right });
     t.settle(1);
-    try std.testing.expectEqual(view.Theme.forest, s.theme);
-    try std.testing.expectEqual(view.Theme.forest, prefs.theme.?);
+    try std.testing.expectEqual(Theme.forest, s.theme);
+    try std.testing.expectEqual(Theme.forest, prefs.theme.?);
     try std.testing.expect(t.findText("Forest") != null);
     // ← past the first: round to the last.
     _ = t.shortcut(.{ .key = ui.Shortcut.left });
     _ = t.shortcut(.{ .key = ui.Shortcut.left });
     _ = t.shortcut(.{ .key = ui.Shortcut.left });
     t.settle(1);
-    try std.testing.expectEqual(view.Theme.violet, prefs.theme.?);
+    try std.testing.expectEqual(Theme.violet, prefs.theme.?);
     // In the header, which the rows can't push out of sight.
     const name = t.findText("Violet").?;
-    try std.testing.expect(name.y + name.h <= view.header_h);
+    try std.testing.expect(name.y + name.h <= chrome.header_h);
 }
 
 test "System Settings' panes open from the panel, which stays in its window (#12)" {
@@ -228,7 +229,7 @@ test "System Settings' panes open from the panel, which stays in its window (#12
     s.answered("sound", &four);
     t.settle(1);
     try std.testing.expect(t.hasText("System Settings"));
-    try std.testing.expect(s.height() <= view.max_height);
+    try std.testing.expect(s.height() <= chrome.max_height);
 }
 
 test "the panel's height lands at once, and keeps Google's room between keys" {

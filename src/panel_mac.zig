@@ -6,7 +6,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
-const view = @import("view.zig");
+const chrome = @import("chrome.zig");
 
 /// The system's glass under the panel, which the window's views keep.
 var glass: ?objc.Object = null;
@@ -17,22 +17,22 @@ pub fn prepare() void {}
 /// The window, from the panel's size: a shadow's margin bigger, as tall as
 /// the panel can be.
 pub fn adjust(o: *nanoui.WindowOptions) void {
-    o.width = view.width + 2 * view.shadow_margin;
-    o.height = view.max_height + 2 * view.shadow_margin;
+    o.width = chrome.width + 2 * chrome.shadow_margin;
+    o.height = chrome.max_height + 2 * chrome.shadow_margin;
     o.title_bar = .popover;
 }
 
-/// The glass goes to the panel's height at the first `resize`.
-pub fn setup(w: *nanoui.Window, s: *view.Nanolight) void {
+/// The glass goes to the panel's height at the first `resize`. The panel
+/// keeps a shadow's margin, and lets the window fade it in (`shown`).
+pub fn setup(w: *nanoui.Window) chrome.Fit {
     // A menu bar app: no Dock icon, no menu bar of its own.
     const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     _ = objc.msg(objc.BOOL, app, "setActivationPolicy:", .{@as(objc.NSInteger, 1)});
     // The panel's own shadow, not the system's: a shadowed window in dark
     // mode gets a hard black outline round its pixels.
-    s.margin = view.shadow_margin;
-    s.window_fades = true;
     objc.msg(void, w.nswindow, "setHasShadow:", .{objc.NO});
     glass = backdrop(w, 18);
+    return .{ .margin = chrome.shadow_margin, .window_fades = true };
 }
 
 /// A fifth of the way down the main screen, centered.
@@ -45,8 +45,8 @@ pub fn place(w: *nanoui.Window) void {
     const top = ph - (f.origin.y + f.size.height);
     // The panel there; the window is the shadow's margin bigger.
     w.setPosition(
-        f.origin.x + (f.size.width - view.width) / 2 - view.shadow_margin,
-        top + f.size.height * 0.2 - view.shadow_margin,
+        f.origin.x + (f.size.width - chrome.width) / 2 - chrome.shadow_margin,
+        top + f.size.height * 0.2 - chrome.shadow_margin,
     );
     // Unseen as it orders in: it still holds the frame it hid with, until
     // the next one is drawn (issue #9). `shown` fades it in.
@@ -127,6 +127,6 @@ fn backdrop(w: *nanoui.Window, radius: f64) ?objc.Object {
 
 /// Where the glass goes: under the panel, the shadow's margin in.
 fn glassFrame(h: f32) objc.CGRect {
-    const m = view.shadow_margin;
-    return .{ .origin = .{ .x = m, .y = m }, .size = .{ .width = view.width, .height = h } };
+    const m = chrome.shadow_margin;
+    return .{ .origin = .{ .x = m, .y = m }, .size = .{ .width = chrome.width, .height = h } };
 }

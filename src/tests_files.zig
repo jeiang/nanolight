@@ -1,6 +1,7 @@
 //! File search regression coverage.
 const std = @import("std");
 const view = @import("view.zig");
+const chrome = @import("chrome.zig");
 const Rig = @import("test_support.zig").Rig;
 const suggest = @import("suggest.zig");
 const results = @import("results.zig");
@@ -37,7 +38,7 @@ test "files share the local results' head and fit the original window" {
             }
             s.filesAnswered(q, &found);
             s.answered(q, &four);
-            try std.testing.expect(s.height() <= view.max_height);
+            try std.testing.expect(s.height() <= chrome.max_height);
             const settings = std.mem.eql(u8, q, "settings");
             var apps: usize = 0;
             var file_rows: usize = 0;
@@ -224,7 +225,7 @@ test "apps, panes, files and quicklinks share the window budget" {
     try t.expectEqual(results.max_quicklink_rows, links);
     try t.expectEqual(@as(usize, 3), heads);
     try t.expectEqual(results.max_rows, s.res.n);
-    try t.expect(s.height() <= view.max_height);
+    try t.expect(s.height() <= chrome.max_height);
 }
 
 test "file icon allocations survive filtering, eviction and owning replacement" {

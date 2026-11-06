@@ -7,6 +7,7 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const Index = @import("apps.zig").Index;
 const view = @import("view.zig");
+const chrome = @import("chrome.zig");
 const Choice = @import("keys.zig").Choice;
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 
@@ -33,8 +34,8 @@ pub const Rig = struct {
         /// The panel's host; none keeps the one the test set, if any.
         host: ?view.Host = null,
         screen: Screen = .rows,
-        width: f32 = view.width,
-        height: f32 = view.max_height,
+        width: f32 = chrome.width,
+        height: f32 = chrome.max_height,
         dark: bool = true,
         /// A second of frames before the test goes on; off, the test draws
         /// its first frames itself.

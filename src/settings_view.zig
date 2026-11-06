@@ -13,7 +13,9 @@ const key_choice = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Choice = key_choice.Choice;
-const Palette = panel.Palette;
+const chrome = @import("chrome.zig");
+const Palette = @import("palette.zig").Palette;
+const Theme = @import("palette.zig").Theme;
 const mac = @import("builtin").os.tag == .macos;
 const platform = @import("platform.zig");
 /// A Nix build: the Nix modules own startup and updates.
@@ -107,7 +109,6 @@ fn present(kind: RowKind, clip: bool) bool {
         .choice, .suggest, .welcome, .quit, .theme => true,
     };
 }
-const Theme = @import("palette.zig").Theme;
 
 /// As tall as its sections, never past the window. The Mac has three rows
 /// more (file search, where searches open, and the menu bar icon), and
@@ -119,14 +120,13 @@ const clip_height: f32 = if (mac) 110 else 116;
 pub const height: f32 = base_height + clip_height;
 comptime {
     // The window is never resized: Settings fits in it.
-    @import("std").debug.assert(height <= panel.max_height);
+    @import("std").debug.assert(height <= chrome.max_height);
 }
 
 pub const Settings = struct {
     open: bool = false,
     sel: usize = 0,
-    /// Return already handled for this key event (a frame may draw twice).
-    took_return: bool = false,
+    ret: chrome.Return = .{},
     choice: Choice = .cmd_space,
     /// The last chip's key, recorded (this run or before), if any.
     custom: ?Choice = null,
@@ -185,7 +185,7 @@ pub const Settings = struct {
         ui.key(c, "settings");
         const f = motion.frame(
             c,
-            .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = panel.spring } },
+            .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = chrome.spring } },
         );
         const page = ui.div(c).column().wFull().grow().motion(f);
         defer page.end();
@@ -201,7 +201,7 @@ pub const Settings = struct {
         p: Palette,
         rows: []const RowKind,
     ) void {
-        const bar = ui.div(c).row().wFull().h(panel.header_h).px(16).gap(10).itemsCenter();
+        const bar = ui.div(c).row().wFull().h(chrome.header_h).px(16).gap(10).itemsCenter();
         defer bar.end();
         const badge = ui.div(c).size(28, 28).rounded(8).center().bg(p.tile);
         ui.icon(c, "gearshape", .{ .size = 15, .weight = .medium, .color = p.text });
@@ -294,7 +294,7 @@ pub const Settings = struct {
     }
 
     fn label(c: *ui.Context, p: Palette, name: []const u8) void {
-        ui.text(c, name, .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) });
+        ui.text(c, name, p.heading());
     }
 
     fn choices(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
@@ -303,37 +303,24 @@ pub const Settings = struct {
         for (Choice.all) |ch| {
             ui.key(c, c.print("key-{d}-{d}", .{ ch.code, ch.mods }));
             const on = ch.eql(s.choice) and s.key_input == .idle;
-            const b = ui.div(c).row().h(36).px(14).itemsCenter().rounded(10).control()
-                .bg(if (on) p.sel else p.tile.alpha(0.5))
-                .border(if (on) p.text.alpha(0.35) else p.rim);
+            const label_text = c.print("{f}", .{shortcut.text(ch)});
+            const b = chrome.shortcutChip(c, p, label_text, on, chrome.settings_chip);
             defer b.end();
             if (b.clicked()) s.pick(n, ch);
-            ui.text(
-                c,
-                c.print("{f}", .{shortcut.text(ch)}),
-                .{
-                    .size = 13.5,
-                    .weight = if (on) .semibold else .medium,
-                    .color = if (on) p.text else p.sub,
-                },
-            );
         }
         // One's own: the key recorded, or a press away (`keys.any_key`).
         if (!key_choice.any_key) return;
         ui.key(c, "key-own");
         const recording = s.key_input != .idle;
         const on = recording or (s.custom != null and s.custom.?.eql(s.choice));
-        const b = ui.div(c).row().h(36).px(14).gap(6).itemsCenter().rounded(10).control()
-            .bg(if (on) p.sel else p.tile.alpha(0.5)).border(if (on) p.text.alpha(0.35) else p.rim);
-        defer b.end();
-        if (b.clicked()) s.record(n, !recording);
         const text = switch (s.key_input) {
             .refused => "Add ⌘, ⌥ or ⌃",
             .recording => "Type a shortcut",
             .idle => if (s.custom) |k| c.print("{f}", .{shortcut.text(k)}) else "Record…",
         };
-        const weight: ui.Weight = if (on) .semibold else .medium;
-        ui.text(c, text, .{ .size = 13.5, .weight = weight, .color = if (on) p.text else p.sub });
+        const b = chrome.shortcutChip(c, p, text, on, chrome.settings_chip);
+        defer b.end();
+        if (b.clicked()) s.record(n, !recording);
         if (recording) ui.kbd(c, "esc");
     }
 
@@ -441,11 +428,9 @@ pub const Settings = struct {
     }
 
     fn foot(c: *ui.Context, p: Palette) void {
-        ui.div(c).wFull().h(1).bg(p.hair).end();
-        const bar = ui.div(c).row().wFull().h(panel.footer_h).px(16).gap(8).itemsCenter();
+        const bar = chrome.footer(c, p);
         defer bar.end();
-        ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
-        ui.kbd(c, "esc");
+        chrome.footerKey(c, p, "Close", "esc", false);
     }
 
     fn keys(s: *Settings, c: *ui.Context, n: *panel.Nanolight, rows: []const RowKind) void {
@@ -455,9 +440,8 @@ pub const Settings = struct {
             n.query.focus();
             return n.hidePanel();
         }
-        if (!s.returned(c)) s.took_return = false;
-        if (panel.Nanolight.moveDown(c)) s.sel = (s.sel + 1) % rows.len;
-        if (panel.Nanolight.moveUp(c)) s.sel = (s.sel + rows.len - 1) % rows.len;
+        if (chrome.moveDown(c)) s.sel = (s.sel + 1) % rows.len;
+        if (chrome.moveUp(c)) s.sel = (s.sel + rows.len - 1) % rows.len;
         if (c.shortcut(.{ .key = S.left })) s.nudge(n, rows, -1);
         if (c.shortcut(.{ .key = S.right })) s.nudge(n, rows, 1);
         // Space is also typed into the field once Settings closes; only
@@ -465,26 +449,14 @@ pub const Settings = struct {
         if (c.shortcut(.{ .key = ' ' })) s.activate(n, rows[s.sel]);
     }
 
-    /// Return, as a key or as the field's newline command.
     /// Settings in place of the rows, the panel's height following them.
     pub fn inPanel(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
-        // Return is the field's command, or a key. One event, one act.
-        if (s.returned(c) and !s.took_return) {
-            s.took_return = true;
-            s.activateSelected(n);
-        }
+        if (s.ret.once(c)) s.activateSelected(n);
         s.pull(n);
         const h = n.follow(s.tall());
         const box = ui.div(c).column().wFull().h(h).clip();
         defer box.end();
         s.view(c, n, p);
-    }
-
-    pub fn returned(s: *Settings, c: *ui.Context) bool {
-        _ = s;
-        if (c.input.key == .enter) return true;
-        for (c.input.ops) |op| if (op == .command and op.command == .insert_newline) return true;
-        return false;
     }
 
     /// Return on the selected row. The field would have taken it.

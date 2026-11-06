@@ -5,6 +5,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const chrome = @import("chrome.zig");
 const clipboard = @import("clipboard.zig");
 const clipboard_view = @import("clipboard_view.zig");
 const settings_view = @import("settings_view.zig");
@@ -166,7 +167,7 @@ test "the screen lists newest first with type, app and time, and the selection's
     try testing.expect(t.shortcut(.{ .key = 'k', .ctrl = true }));
     try testing.expectEqual(@as(usize, 1), s.clip_ui.sel);
     // The screen fits the panel.
-    try testing.expect(s.height() <= view.max_height);
+    try testing.expect(s.height() <= chrome.max_height);
 }
 
 test "typing searches text, file names and apps; Esc closes the screen and the panel" {
@@ -379,7 +380,7 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
     // Everything fits in the window.
     const quit = t.findText("Quit Nanolight").?;
     try testing.expect(quit.y + quit.h <= s.settings_ui.tall());
-    try testing.expect(s.settings_ui.tall() <= view.max_height);
+    try testing.expect(s.settings_ui.tall() <= chrome.max_height);
 }
 
 test "Settings: no clipboard rows where the system has no history, and a shorter screen" {

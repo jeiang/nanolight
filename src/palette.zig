@@ -1,6 +1,7 @@
 //! The panel's colors, light and dark: text, rows, hairlines, tiles. A
 //! theme other than `system` tints them with its hue, light or dark still
-//! as the system is (nanoui's own controls follow the system too).
+//! as the system is (nanoui's own controls follow the system too). And the
+//! roles text plays on every screen, each one style.
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 
@@ -12,6 +13,46 @@ pub const Palette = struct {
     rim: ui.Color,
     tile: ui.Color,
     fill: ui.Color,
+
+    /// A row's name.
+    pub fn name(p: Palette) ui.TextStyle {
+        return .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) };
+    }
+
+    /// What a row is, and the footer's lesser keys.
+    pub fn detail(p: Palette) ui.TextStyle {
+        return .{ .size = 12, .color = p.sub.alpha(0.8) };
+    }
+
+    /// The footer's main act: what Return does.
+    pub fn action(p: Palette) ui.TextStyle {
+        return .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) };
+    }
+
+    /// The footer's own words: the app's name, or the screen's.
+    pub fn caption(p: Palette) ui.TextStyle {
+        return .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8) };
+    }
+
+    /// A section's name.
+    pub fn heading(p: Palette) ui.TextStyle {
+        return .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) };
+    }
+
+    /// A row's ⌘1…⌘9.
+    pub fn hint(p: Palette) ui.TextStyle {
+        return .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.5), .tabular = true };
+    }
+
+    /// Said in place of what is still to come ("Searching Google…").
+    pub fn waiting(p: Palette) ui.TextStyle {
+        return .{ .size = 13, .color = p.sub.alpha(0.8) };
+    }
+
+    /// A search field's placeholder.
+    pub fn placeholder(p: Palette) ui.Color {
+        return p.sub.alpha(0.75);
+    }
 };
 
 const pc = @import("builtin").os.tag != .macos;

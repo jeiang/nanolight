@@ -1,5 +1,5 @@
 //! A search's page in the panel: a WKWebView over the panel's body
-//! (`view.webArea`), made the first time one shows and kept, hidden,
+//! (`chrome.webArea`), made the first time one shows and kept, hidden,
 //! after. It tells sites it is Safari, as browse does, so Google serves
 //! its own page, and a link that asks for a new window opens in it.
 //! Escape and ⌘↩ reach the panel even while the page has the keys
@@ -8,7 +8,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const keys = @import("keys.zig");
 const objc = nanoui.objc;
-const view = @import("view.zig");
+const chrome = @import("chrome.zig");
 
 pub const Key = enum { escape, open_out };
 
@@ -70,8 +70,8 @@ pub const Preview = struct {
     pub fn fit(p: *Preview, h: f32) void {
         const web = p.web orelse return;
         const host = objc.msg(?objc.Object, web, "superview", .{}) orelse return;
-        const area = view.webArea(h);
-        const m = view.shadow_margin;
+        const area = chrome.webArea(h);
+        const m = chrome.shadow_margin;
         var y: f64 = m + area.y;
         if (objc.msg(objc.BOOL, host, "isFlipped", .{}) == objc.NO)
             y = objc.msg(objc.CGRect, host, "bounds", .{}).size.height - y - area.h;
@@ -82,7 +82,7 @@ pub const Preview = struct {
             .{
                 objc.CGRect{
                     .origin = .{ .x = m, .y = y },
-                    .size = .{ .width = view.width, .height = area.h },
+                    .size = .{ .width = chrome.width, .height = area.h },
                 },
             },
         );

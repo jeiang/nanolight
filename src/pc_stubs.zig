@@ -20,7 +20,7 @@ pub const Preview = struct {
 
 pub const ClickThrough = struct {
     window: ?*nanoui.Window = null,
-    height: ?*const f32 = null,
+    height: f32 = 0,
     pub fn start(_: *ClickThrough) void {}
     pub fn stop(_: *ClickThrough) void {}
     pub fn update(_: *ClickThrough) void {}

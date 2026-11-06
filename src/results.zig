@@ -107,6 +107,10 @@ pub const max_web = 4;
 pub const max_quicklink_rows = 5;
 /// Every app and the quicklink rows leave room for three completions.
 pub const max_rows = max_apps + max_quicklink_rows + 3;
+comptime {
+    // The panel's tallest list is sized for this many (chrome.max_height).
+    std.debug.assert(max_rows == @import("chrome.zig").max_rows);
+}
 /// Every local candidate, and a card, fit before ranking keeps the best of
 /// them and trims the list to `max_rows`.
 const max_candidates = 1 + max_apps + files.max_rows + max_panes + max_commands;

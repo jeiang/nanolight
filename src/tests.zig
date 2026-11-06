@@ -4,6 +4,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const chrome = @import("chrome.zig");
 const support = @import("test_support.zig");
 const Rig = support.Rig;
 const Probe = support.Probe;
@@ -303,7 +304,7 @@ test "Google's completions land below, and a search shows in the panel" {
     );
     t.settle(2);
     try std.testing.expect(t.hasText("Open in Browser"));
-    try std.testing.expectEqual(view.max_height, s.height());
+    try std.testing.expectEqual(chrome.max_height, s.height());
     try std.testing.expect(!web.probe.hidden);
     // Escape: the page gone, and the panel with it.
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
@@ -506,7 +507,7 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     try std.testing.expectEqual(@as(u8, 1), prefs.suggest_sets);
     try std.testing.expect(!s.suggest_on);
     try std.testing.expectEqual(@as(u8, 1), prefs.suggest_sets);
-    try std.testing.expect(s.height() <= view.max_height);
+    try std.testing.expect(s.height() <= chrome.max_height);
 }
 
 test "the panel never outgrows its window, which is never resized" {
@@ -526,7 +527,7 @@ test "the panel never outgrows its window, which is never resized" {
         s.rebuild();
         tallest = @max(tallest, s.height());
     }
-    try std.testing.expect(tallest <= view.max_height);
+    try std.testing.expect(tallest <= chrome.max_height);
     // "a" fills every app row there is, and Google's completions the
     // rest: the bound is the real one.
     s.query.set("a");
@@ -534,11 +535,11 @@ test "the panel never outgrows its window, which is never resized" {
     var four: @import("suggest.zig").List = .{};
     for ([_][]const u8{ "a1", "a2", "a3", "a4" }) |w| four.push(w);
     s.answered("a", &four);
-    try std.testing.expectEqual(view.max_height, s.height());
+    try std.testing.expectEqual(chrome.max_height, s.height());
     var o: onboard.Onboard = .{};
     for ([_]onboard.Step{ .key, .try_it, .done }) |step| {
         o.step = step;
-        try std.testing.expect(o.height() <= view.max_height);
+        try std.testing.expect(o.height() <= chrome.max_height);
     }
 }
 

@@ -7,6 +7,7 @@ const Palette = @import("palette.zig").Palette;
 const Row = @import("results.zig").Row;
 const Anchor = @import("anchor.zig").Anchor;
 const platform = @import("platform.zig");
+const chrome = @import("chrome.zig");
 
 pub fn takeFile(s: *Nanolight, i: usize) void {
     const e = &s.found.entries[i];
@@ -32,46 +33,16 @@ pub fn filesAnswered(s: *Nanolight, typed: []const u8, found: *files.List) void 
 
 pub fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
     const e = &s.found.entries[r.file];
-    ui.richText(
-        c,
-        e.name(),
-        s.highlight(i, r, p),
-        .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) },
-    );
     var buf: [files.max_path]u8 = undefined;
-    ui.text(
-        c,
-        files.parent(&buf, e.path()),
-        .{ .size = 12, .color = p.sub.alpha(0.8), .truncate = .ellipsis },
-    );
+    const parent = files.parent(&buf, e.path());
+    chrome.nameDetail(c, p, e.name(), s.highlight(i, r, p), parent, .ellipsis);
     ui.text(c, if (e.folder) "Folder" else "File", .{ .size = 11.5, .color = p.sub });
 }
 
 pub fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
     const e = &s.found.entries[r.file];
-    if (e.png.len > 0) {
-        const box = ui.div(c).size(26, 26).center();
-        defer box.end();
-        _ = ui.image(
-            c,
-            .{
-                .key = e.path(),
-                .bytes = e.png,
-                .max_width = 26,
-                .max_height = 26,
-                .radius = 0,
-                .scale = 1,
-            },
-        );
-        return;
-    }
-    const box = ui.div(c).size(26, 26).rounded(7).bg(p.tile).center();
-    defer box.end();
-    ui.icon(
-        c,
-        if (e.folder) "folder" else "doc",
-        .{ .size = 13, .weight = .medium, .color = p.text },
-    );
+    if (e.png.len > 0) return chrome.iconImage(c, e.path(), e.png);
+    chrome.tile(c, p, if (e.folder) "folder" else "doc");
 }
 
 /// Retain matching rows while the worker answers the new query.

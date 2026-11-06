@@ -20,6 +20,12 @@ const Row = results.Row;
 const settings = @import("settings.zig");
 const commands = @import("commands.zig");
 const clipboard_view = @import("clipboard_view.zig");
+const chrome = @import("chrome.zig");
+const calc_card = @import("calc_card.zig");
+const palette_mod = @import("palette.zig");
+const Palette = palette_mod.Palette;
+const palette = palette_mod.palette;
+const Theme = palette_mod.Theme;
 
 /// What the panel asks of whatever shows it (the window, or a test).
 pub const Host = struct {
@@ -32,7 +38,7 @@ pub const Host = struct {
     /// Request completions, returned through `Nanolight.answered`.
     suggest: ?*const fn (ctx: *anyopaque, query: []const u8) void = null,
     files: ?*const fn (ctx: *anyopaque, query: []const u8) void = null,
-    /// Shows a search's page in the panel, over `webArea`; null takes it
+    /// Shows a search's page in the panel, over `chrome.webArea`; null takes it
     /// away. Without it, searches open in the browser.
     preview: ?*const fn (ctx: *anyopaque, url: ?[]const u8) void = null,
     /// Settings callbacks; without them, changes are not persisted.
@@ -48,8 +54,6 @@ pub const Host = struct {
     clipboard: ?*const clipboard_view.Host = null,
 };
 
-pub const width: f32 = 680;
-
 /// The longest query kept: a longer paste is cut here, as math, ranking and
 /// hashing read the whole query each frame. It is the longest file path the
 /// field must hold (Tab takes a found file's whole path, `files_view.takeFile`),
@@ -61,49 +65,7 @@ comptime {
     std.debug.assert(max_query_bytes >= files.max_path);
 }
 
-/// The app's icon (icon.png, made smaller), for the panel.
-pub const icon_png = @embedFile("icon-256.png");
-
-/// The app's icon, `size` points square.
-pub fn appIcon(c: *ui.Context, size: f32) void {
-    _ = ui.image(
-        c,
-        .{
-            .key = "nanolight-icon",
-            .bytes = icon_png,
-            .max_width = size,
-            .max_height = size,
-            .radius = 0,
-            .scale = 2,
-        },
-    );
-}
-pub const header_h = 58;
-const row_h = 40;
-const calc_h = 92;
-const section_h = 28;
-pub const footer_h = 38;
-const list_pad = 6;
-/// The room a window leaves round the panel for its shadow (`Nanolight.margin`).
-pub const shadow_margin: f32 = 40;
-/// The tallest the panel gets: every app row, the three web rows and
-/// Google's completions, under three section heads (math lists fewer), or
-/// a search's page. The window is this tall.
-pub const max_height: f32 = header_h + footer_h + 2 + list_pad * 2 +
-    results.max_rows * row_h + 3 * section_h;
-
-/// Where a search's page goes in a panel `h` tall: from `y` down from its
-/// top, `h` tall, between the header and the footer, the panel's width.
-pub fn webArea(h: f32) struct { y: f32, h: f32 } {
-    return .{ .y = header_h + 1, .h = @max(0, h - header_h - footer_h - 2) };
-}
-/// Opening: snappy, a touch under critical damping.
-pub const spring: motion.Spring = .{ .stiffness = 320, .damping = 32 };
 const slide: motion.Spring = .{ .stiffness = 700, .damping = 52 };
-
-pub const Palette = @import("palette.zig").Palette;
-pub const palette = @import("palette.zig").palette;
-pub const Theme = @import("palette.zig").Theme;
 
 pub const Nanolight = struct {
     index: *Index,
@@ -113,11 +75,8 @@ pub const Nanolight = struct {
     /// The query the rows were built for.
     built: u64 = 1,
     host: ?Host = null,
-    /// Clear room round the panel in its window, for its shadow.
-    margin: f32 = 0,
-    /// The window fades in as it shows, the system's glass with it
-    /// (panel_mac.zig): the panel has no entrance of its own (issue #9).
-    window_fades: bool = false,
+    /// How the window holds the panel (`platform.panel.setup`).
+    fit: chrome.Fit = .{},
     /// Return sends a Google search to the browser and ⌘↩ shows it in
     /// the panel, the other way round from the default (issue #10).
     searches_out: bool = false,
@@ -205,40 +164,40 @@ pub const Nanolight = struct {
         if (s.settings_ui.open) return s.settings_ui.tall();
         if (s.clip_ui.open) return clipboard_view.height;
         if (s.ext) |e| if (e.open) return e.height();
-        if (s.previewing) return max_height;
+        if (s.previewing) return chrome.max_height;
         return @max(s.rowsHeight(), s.held_h);
     }
 
     fn rowsHeight(s: *const Nanolight) f32 {
-        var h: f32 = header_h + footer_h + 1;
+        var h: f32 = chrome.header_h + chrome.footer_h + 1;
         if (s.res.n == 0) return h;
-        h += 1 + list_pad * 2;
+        h += 1 + chrome.list_pad * 2;
         for (s.res.slice(), 0..) |r, i| {
-            h += if (r.kind == .calc) calc_h else row_h;
-            if (s.res.section(i) != null) h += section_h;
+            h += if (r.kind == .calc) calc_card.height else chrome.row_h;
+            if (s.res.section(i) != null) h += chrome.section.h;
         }
         return h;
     }
 
-    /// The window's view: the panel, `margin` in from the window's edges.
+    /// The window's view: the panel, `fit.margin` in from the window's edges.
     pub fn view(s: *Nanolight, c: *ui.Context) void {
         ui.key(c, c.print("panel-{d}", .{s.shown}));
         const entrance: motion.Target = .{ .opacity = 0, .y = -6, .scale = 0.985 };
         const f = motion.frame(
             c,
             .{
-                .initial = if (s.window_fades) null else entrance,
-                .transition = .{ .spring = spring },
+                .initial = if (s.fit.window_fades) null else entrance,
+                .transition = .{ .spring = chrome.spring },
             },
         );
-        const root = ui.div(c).wFull().p(s.margin).motion(f);
+        const root = ui.div(c).wFull().p(s.fit.margin).motion(f);
         defer root.end();
         s.panel(c);
     }
 
     pub fn panel(s: *Nanolight, c: *ui.Context) void {
         const p = palette(c.theme.dark, s.theme);
-        const shell = ui.div(c).column().w(width).rounded(18).border(p.hair).clip();
+        const shell = ui.div(c).column().w(chrome.width).rounded(18).border(p.hair).clip();
         // The system's shadow is off (its outline drew a black ring round
         // the panel): this one is soft, and outside the panel only, so the
         // glass under it stays clear.
@@ -267,14 +226,14 @@ pub const Nanolight = struct {
         if (submitted) s.activate(c);
         const h = s.follow(s.height());
         {
-            const body = ui.div(c).column().wFull().h(h - header_h).clip();
+            const body = ui.div(c).column().wFull().h(h - chrome.header_h).clip();
             defer body.end();
             if (s.previewing) {
                 // Under the page, until it draws.
                 ui.div(c).wFull().h(1).bg(p.hair).end();
-                const wait = ui.div(c).wFull().h(webArea(h).h).center();
+                const wait = ui.div(c).wFull().h(chrome.webArea(h).h).center();
                 defer wait.end();
-                ui.text(c, "Searching Google…", .{ .size = 13, .color = p.sub.alpha(0.8) });
+                ui.text(c, "Searching Google…", p.waiting());
             } else if (s.res.n > 0) {
                 ui.div(c).wFull().h(1).bg(p.hair).end();
                 s.list(c, p);
@@ -287,26 +246,12 @@ pub const Nanolight = struct {
     /// The panel's height: `target`, at once, as the rows it fits are there
     /// at once (easing to it only made each key wait); a window follows it.
     pub fn follow(s: *Nanolight, target: f32) f32 {
-        const h = @min(target, max_height);
+        const h = @min(target, chrome.max_height);
         if (s.host) |host| if (host.resize) |f| if (@abs(h - s.last_h) > 0.25) {
             s.last_h = h;
             f(host.ctx, h);
         };
         return h;
-    }
-
-    /// ↓, ^N or ^J; offered before the field, so the key never edits.
-    pub fn moveDown(c: *ui.Context) bool {
-        const S = ui.Shortcut;
-        return c.shortcut(.{ .key = S.down }) or c.shortcut(.{ .key = 'n', .ctrl = true }) or
-            c.shortcut(.{ .key = 'j', .ctrl = true });
-    }
-
-    /// ↑, ^P or ^K.
-    pub fn moveUp(c: *ui.Context) bool {
-        const S = ui.Shortcut;
-        return c.shortcut(.{ .key = S.up }) or c.shortcut(.{ .key = 'p', .ctrl = true }) or
-            c.shortcut(.{ .key = 'k', .ctrl = true });
     }
 
     /// Arrows, ^N/^P, ^J/^K and Escape, before the field sees them.
@@ -329,22 +274,22 @@ pub const Nanolight = struct {
         if (!files_view.takeOnTab(s, c) and more.len > 0 and
             c.shortcut(.{ .key = S.tab })) s.take(more);
         const n = s.res.n;
-        if (moveDown(c)) {
+        if (chrome.moveDown(c)) {
             if (n > 0) s.sel = (s.sel + 1) % n;
         }
-        if (moveUp(c)) {
+        if (chrome.moveUp(c)) {
             if (n > 0) s.sel = (s.sel + n - 1) % n;
         }
         // ⌘1…⌘9: the row of that number, at once.
-        for (0..@min(n, 9)) |k| if (c.shortcut(.{ .key = @intCast('1' + k), .cmd = true })) {
+        if (chrome.numberKey(c, n)) |k| {
             s.sel = k;
             s.activate(c);
-        };
+        }
         if (c.shortcut(.{ .key = S.escape })) s.hidePanel();
     }
 
     fn header(s: *Nanolight, c: *ui.Context, p: Palette) bool {
-        const bar = ui.div(c).row().wFull().h(header_h).px(18).gap(12).itemsCenter();
+        const bar = ui.div(c).row().wFull().h(chrome.header_h).px(18).gap(12).itemsCenter();
         defer bar.end();
         ui.icon(
             c,
@@ -358,7 +303,7 @@ pub const Nanolight = struct {
             .size = 21,
             .width = .fill,
             .placeholder = "Search apps, do math, search the web…",
-            .placeholder_color = p.sub.alpha(0.75),
+            .placeholder_color = p.placeholder(),
             .color = p.text,
         });
         s.capQuery();
@@ -466,15 +411,15 @@ pub const Nanolight = struct {
     pub const filesAnswered = files_view.filesAnswered;
 
     fn list(s: *Nanolight, c: *ui.Context, p: Palette) void {
-        const box = ui.div(c).column().wFull().p(list_pad);
+        const box = ui.div(c).column().wFull().p(chrome.list_pad);
         defer box.end();
         // Where the selected row is, so the highlight can slide to it.
         var y: f32 = 0;
         var sel_y: f32 = 0;
-        var sel_h: f32 = row_h;
+        var sel_h: f32 = chrome.row_h;
         for (s.res.slice(), 0..) |r, i| {
-            if (s.res.section(i) != null) y += section_h;
-            const rh: f32 = if (r.kind == .calc) calc_h else row_h;
+            if (s.res.section(i) != null) y += chrome.section.h;
+            const rh: f32 = if (r.kind == .calc) calc_card.height else chrome.row_h;
             if (i == s.sel) {
                 sel_y = y;
                 sel_h = rh;
@@ -485,25 +430,18 @@ pub const Nanolight = struct {
         const fresh = c.print("{d}", .{s.built});
         const hy = motion.number(c, fresh, sel_y, .{ .spring = slide });
         const hh = motion.number(c, c.print("{d}h", .{s.built}), sel_h, .{ .spring = slide });
-        ui.div(c).absolute().offset(0, hy).w(width - list_pad * 2).h(hh).rounded(10).bg(p.sel)
-            .border(p.rim).end();
+        const hw = chrome.width - chrome.list_pad * 2;
+        ui.div(c).absolute().offset(0, hy).w(hw).h(hh).rounded(10).bg(p.sel).border(p.rim).end();
         for (s.res.slice(), 0..) |r, i| {
-            if (s.res.section(i)) |name| {
-                const head = ui.div(c).row().wFull().h(section_h).px(12).pb(6).itemsEnd();
-                defer head.end();
-                ui.text(
-                    c,
-                    name,
-                    .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) },
-                );
-            }
+            if (s.res.section(i)) |name| chrome.sectionHead(c, p, name, chrome.section);
             s.row(c, p, i, r);
         }
     }
 
     fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
         const big = r.kind == .calc;
-        const d = ui.div(c).row().wFull().h(if (big) calc_h else row_h).px(10).gap(12).itemsCenter()
+        const h: f32 = if (big) calc_card.height else chrome.row_h;
+        const d = ui.div(c).row().wFull().h(h).px(chrome.row_px).gap(chrome.row_gap).itemsCenter()
             .control();
         defer d.end();
         if (d.clicked()) {
@@ -517,44 +455,27 @@ pub const Nanolight = struct {
             .calc => unreachable,
             .app => {
                 const a = s.index.apps.items[r.app];
-                ui.richText(
-                    c,
-                    a.name,
-                    s.highlight(i, r, p),
-                    .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) },
-                );
-                ui.text(c, a.folder, .{ .size = 12, .color = p.sub.alpha(0.8) });
+                chrome.nameDetail(c, p, a.name, s.highlight(i, r, p), a.folder, .none);
             },
             .pane => {
                 const pane = @import("settings_panes.zig").all[r.app];
-                ui.richText(
-                    c,
-                    pane.name,
-                    s.highlight(i, r, p),
-                    .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) },
-                );
-                ui.text(c, "System Settings", .{ .size = 12, .color = p.sub.alpha(0.8) });
+                chrome.nameDetail(c, p, pane.name, s.highlight(i, r, p), "System Settings", .none);
             },
-            .command => {
-                ui.richText(
-                    c,
-                    commands.all[r.app].name,
-                    s.highlight(i, r, p),
-                    .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) },
-                );
-                ui.text(c, "System Command", .{ .size = 12, .color = p.sub.alpha(0.8) });
-            },
+            .command => chrome.nameDetail(
+                c,
+                p,
+                commands.all[r.app].name,
+                s.highlight(i, r, p),
+                "System Command",
+                .none,
+            ),
             .clipboard => {
                 ui.text(
                     c,
                     "Clipboard History",
                     .{ .size = 13.5, .weight = .medium, .color = p.text },
                 );
-                ui.text(
-                    c,
-                    "Text, images and files you copied",
-                    .{ .size = 12, .color = p.sub.alpha(0.8) },
-                );
+                ui.text(c, "Text, images and files you copied", p.detail());
             },
             .file => files_view.row(s, c, p, i, r),
             .settings => {
@@ -563,7 +484,7 @@ pub const Nanolight = struct {
                     "Nanolight Settings",
                     .{ .size = 13.5, .weight = .medium, .color = p.text },
                 );
-                ui.text(c, "Shortcut, sync, updates", .{ .size = 12, .color = p.sub.alpha(0.8) });
+                ui.text(c, "Shortcut, sync, updates", p.detail());
             },
             .suggest => {
                 const w = s.web.get(r.web);
@@ -582,7 +503,7 @@ pub const Nanolight = struct {
                     "Search {s} for “{s}”",
                     .{ ql.name, s.res.argument(q) },
                 );
-                ui.text(c, results.host(ql.url), .{ .size = 12, .color = p.sub.alpha(0.8) });
+                ui.text(c, results.host(ql.url), p.detail());
             },
         }
         ui.spacer(c);
@@ -593,16 +514,11 @@ pub const Nanolight = struct {
                 else => "Go",
             }, .{ .size = 12, .weight = .medium, .color = p.sub });
             ui.kbd(c, "↩");
-        } else if (i < 9) ui.textf(
-            c,
-            .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.5), .tabular = true },
-            "{s}{d}",
-            .{ results.mod, i + 1 },
-        );
+        } else if (i < 9) ui.textf(c, p.hint(), "{s}{d}", .{ results.mod, i + 1 });
     }
 
     fn calcCard(s: *Nanolight, c: *ui.Context, p: Palette) void {
-        @import("calc_card.zig").draw(
+        calc_card.draw(
             c,
             p,
             if (s.res.expr.len > 0) s.res.expr else s.query.text(),
@@ -619,36 +535,17 @@ pub const Nanolight = struct {
         const app = if (r.kind == .pane)
             s.index.find("System Settings")
         else if (r.kind == .app) r.app else null;
-        if (app) |a| if (s.index.icon(a)) |png| {
-            const box = ui.div(c).size(26, 26).center();
-            defer box.end();
-            _ = ui.image(
-                c,
-                .{
-                    .key = s.index.apps.items[a].path,
-                    .bytes = png,
-                    .max_width = 26,
-                    .max_height = 26,
-                    .radius = 0,
-                    .scale = 1,
-                },
-            );
-            return;
-        };
+        if (app) |a| if (s.index.icon(a)) |png|
+            return chrome.iconImage(c, s.index.apps.items[a].path, png);
         if (r.kind == .file) return files_view.tile(s, c, p, r);
-        const big = r.kind == .calc;
-        const side: f32 = if (big) 34 else 26;
-        const box = ui.div(c).size(side, side).rounded(if (big) 9 else 7).bg(p.tile).center();
-        defer box.end();
-        ui.icon(c, switch (r.kind) {
-            .calc => "plus.forwardslash.minus",
+        chrome.tile(c, p, switch (r.kind) {
             .quicklink => "globe",
             .suggest => "magnifyingglass",
             .settings => "gearshape",
             .clipboard => "doc.on.doc",
             .command => "terminal",
             else => "app.dashed",
-        }, .{ .size = if (big) 16 else 13, .weight = .medium, .color = p.text });
+        });
     }
 
     /// The matched letters, full strength and heavier.
@@ -686,13 +583,12 @@ pub const Nanolight = struct {
     }
 
     fn footer(s: *Nanolight, c: *ui.Context, p: Palette) void {
-        ui.div(c).wFull().h(1).bg(p.hair).end();
-        const bar = ui.div(c).row().wFull().h(footer_h).px(16).gap(8).itemsCenter();
+        const bar = chrome.footer(c, p);
         defer bar.end();
-        appIcon(c, 16);
+        chrome.appIcon(c, 16);
         ui.textf(
             c,
-            .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8) },
+            p.caption(),
             "{s} · {d} apps",
             .{ if (s.note.len > 0) s.note else "Nanolight", s.index.apps.items.len },
         );
@@ -706,41 +602,21 @@ pub const Nanolight = struct {
             ui.text(c, "Settings", .{ .size = 1, .color = p.sub.alpha(0) });
         }
         if (s.previewing) {
-            ui.text(
-                c,
-                "Open in Browser",
-                .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) },
-            );
-            ui.kbd(c, results.mod ++ "↩");
-            ui.div(c).w(1).h(14).bg(p.hair).end();
-            ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
-            ui.kbd(c, "esc");
+            chrome.footerKey(c, p, "Open in Browser", results.mod ++ "↩", true);
+            chrome.keySep(c, p);
+            chrome.footerKey(c, p, "Close", "esc", false);
             return;
         }
         if (s.res.n == 0) return;
         const sel = s.res.rows[s.res.actionable(s.sel)];
-        if (sel.kind == .quicklink)
-            ui.textf(
-                c,
-                .{
-                    .size = 12,
-                    .weight = .medium,
-                    .color = p.text.alpha(0.85),
-                    .truncate = .ellipsis,
-                },
-                "Search {s}",
-                .{s.quicklinks[sel.ql].name},
-            )
-        else
-            ui.text(
-                c,
-                sel.kind.action(),
-                .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) },
-            );
-        ui.kbd(c, "↩");
-        ui.div(c).w(1).h(14).bg(p.hair).end();
-        ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
-        ui.kbd(c, "esc");
+        if (sel.kind == .quicklink) {
+            var cut = p.action();
+            cut.truncate = .ellipsis;
+            ui.textf(c, cut, "Search {s}", .{s.quicklinks[sel.ql].name});
+            ui.kbd(c, "↩");
+        } else chrome.footerKey(c, p, sel.kind.action(), "↩", true);
+        chrome.keySep(c, p);
+        chrome.footerKey(c, p, "Close", "esc", false);
     }
 
     /// Return on the selected row.

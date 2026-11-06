@@ -18,7 +18,8 @@ const shortcut_clash = @import("shortcut_clash.zig");
 const results = @import("results.zig");
 const mac = @import("builtin").os.tag == .macos;
 const Choice = keys.Choice;
-const Palette = panel.Palette;
+const chrome = @import("chrome.zig");
+const Palette = @import("palette.zig").Palette;
 
 pub const Step = enum { key, try_it, done };
 
@@ -104,7 +105,7 @@ pub const Onboard = struct {
     comptime {
         // The window is never resized: every step fits in it.
         const tallest = @max(key_h + clash_h, try_h, done_h + login_h);
-        std.debug.assert(tallest <= panel.max_height);
+        std.debug.assert(tallest <= chrome.max_height);
     }
 
     pub fn height(o: *const Onboard) f32 {
@@ -127,7 +128,7 @@ pub const Onboard = struct {
         ui.key(c, @tagName(o.step));
         const f = motion.frame(
             c,
-            .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = panel.spring } },
+            .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = chrome.spring } },
         );
         const page = ui.div(c).column().wFull().grow().motion(f);
         switch (o.step) {
@@ -146,7 +147,7 @@ pub const Onboard = struct {
         {
             const top = ui.div(c).row().wFull().px(28).pt(28).pb(22).gap(16).itemsCenter();
             defer top.end();
-            panel.appIcon(c, 56);
+            chrome.appIcon(c, 56);
             const t = ui.div(c).column().gap(4);
             defer t.end();
             ui.text(
@@ -163,11 +164,7 @@ pub const Onboard = struct {
         ui.div(c).wFull().h(1).bg(p.hair).end();
         const body = ui.div(c).column().wFull().px(28).pt(18).gap(12);
         defer body.end();
-        ui.text(
-            c,
-            "Open it with",
-            .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) },
-        );
+        ui.text(c, "Open it with", p.heading());
         {
             const row = ui.div(c).row().gap(8);
             defer row.end();
@@ -178,20 +175,10 @@ pub const Onboard = struct {
             for (shown[0 .. Choice.all.len + @intFromBool(o.choice.preset() == null)]) |ch| {
                 ui.key(c, c.print("key-{d}-{d}", .{ ch.code, ch.mods }));
                 const on = ch.eql(o.choice);
-                const b = ui.div(c).row().h(36).px(16).itemsCenter().rounded(10).control()
-                    .bg(if (on) p.sel else p.tile.alpha(0.5))
-                    .border(if (on) p.text.alpha(0.35) else p.rim);
+                const label = c.print("{f}", .{shortcut.text(ch)});
+                const b = chrome.shortcutChip(c, p, label, on, chrome.welcome_chip);
                 defer b.end();
                 if (b.clicked()) o.choice = ch;
-                ui.text(
-                    c,
-                    c.print("{f}", .{shortcut.text(ch)}),
-                    .{
-                        .size = 14,
-                        .weight = if (on) .semibold else .medium,
-                        .color = if (on) p.text else p.sub,
-                    },
-                );
             }
         }
         o.status(c, p);
@@ -250,7 +237,7 @@ pub const Onboard = struct {
         // A PC has no one place to free a key: another one is the fix.
         if (!mac and cl.system != null) {
             const r = ui.div(c).row().pl(22);
-            ui.text(c, "Pick another key above.", .{ .size = 12, .color = p.sub.alpha(0.8) });
+            ui.text(c, "Pick another key above.", p.detail());
             return r.end();
         }
         const fix = ui.div(c).row().gap(10).itemsCenter().pl(22);
@@ -264,7 +251,7 @@ pub const Onboard = struct {
         if (b.clicked()) if (o.hooks) |h| h.fix(h.ctx, cl);
         ui.text(c, label, .{ .size = 12, .weight = .semibold, .color = p.text });
         b.end();
-        ui.text(c, "or pick another key above", .{ .size = 12, .color = p.sub.alpha(0.8) });
+        ui.text(c, "or pick another key above", p.detail());
     }
 
     fn list(c: *ui.Context, names: []const []const u8) []const u8 {
@@ -379,9 +366,7 @@ pub const Onboard = struct {
 
     fn doneStep(o: *Onboard, c: *ui.Context, s: *panel.Nanolight, p: Palette, enter: bool) void {
         if (enter) return o.finish(s, "");
-        for (examples, 0..) |e, i| if (c.shortcut(
-            .{ .key = @intCast('1' + i), .cmd = true },
-        )) return o.finish(s, e.q);
+        if (chrome.numberKey(c, examples.len)) |i| return o.finish(s, examples[i].q);
         {
             const top = ui.div(c).column().wFull().px(28).pt(26).pb(16).gap(4);
             defer top.end();
@@ -406,23 +391,19 @@ pub const Onboard = struct {
                     .control().hover(p.sel);
                 defer r.end();
                 if (r.clicked()) return o.finish(s, e.q);
-                const tile = ui.div(c).size(26, 26).rounded(7).bg(p.tile).center();
-                ui.icon(c, e.icon, .{ .size = 13, .weight = .medium, .color = p.text });
-                tile.end();
+                chrome.tile(c, p, e.icon);
                 ui.textf(
                     c,
                     .{ .size = 13.5, .weight = .medium, .color = p.text, .mono = true },
                     "{s}",
                     .{e.q},
                 );
-                ui.text(c, e.what, .{ .size = 12, .color = p.sub.alpha(0.8) });
+                ui.text(c, e.what, p.detail());
                 ui.spacer(c);
-                ui.textf(
-                    c,
-                    .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.55), .tabular = true },
-                    "{s}{d}",
-                    .{ results.mod, i + 1 },
-                );
+                // A shade stronger than the launcher's `hint`; kept as drawn.
+                var hint = p.hint();
+                hint.color = p.sub.alpha(0.55);
+                ui.textf(c, hint, "{s}{d}", .{ results.mod, i + 1 });
             }
         }
         const home = ui.div(c).column().wFull().px(28).pt(16).gap(12);
@@ -435,10 +416,10 @@ pub const Onboard = struct {
             tile.end();
             ui.text(
                 c,
-                if (mac)
-                    "Settings are on ⌘, and the gear. It also lives in your menu bar."
+                "Settings are on " ++ results.mod ++ ", and the gear" ++ if (mac)
+                    ". It also lives in your menu bar."
                 else
-                    "Settings are on Ctrl+, and the gear at the bottom of the panel.",
+                    " at the bottom of the panel.",
                 .{ .size = 12.5, .color = p.sub },
             );
         }
@@ -448,20 +429,16 @@ pub const Onboard = struct {
     }
 
     fn footer(o: *Onboard, c: *ui.Context, p: Palette) void {
-        ui.div(c).wFull().h(1).bg(p.hair).end();
-        const bar = ui.div(c).row().wFull().h(38).px(16).gap(8).itemsCenter();
+        const bar = chrome.footer(c, p);
         defer bar.end();
         const first: usize = @intFromBool(o.skip_key);
         const total = 3 - first;
         const n: usize = @backingInt(o.step) - first;
         for (0..total) |i| ui.div(c).w(if (i == n) 16 else 6).h(6).roundedFull()
             .bg(if (i == n) p.text.alpha(0.7) else p.sub.alpha(0.3)).end();
-        ui.textf(
-            c,
-            .{ .size = 12, .color = p.sub.alpha(0.8), .tabular = true },
-            "  {d} of {d}",
-            .{ n + 1, total },
-        );
+        var count = p.detail();
+        count.tabular = true;
+        ui.textf(c, count, "  {d} of {d}", .{ n + 1, total });
         ui.spacer(c);
         const action: []const u8 = switch (o.step) {
             .key => if (o.clash().clear())
@@ -472,16 +449,10 @@ pub const Onboard = struct {
             .done => "Start searching",
         };
         if (action.len > 0) {
-            ui.text(c, action, .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
-            ui.kbd(c, "↩");
-            ui.div(c).w(1).h(14).bg(p.hair).end();
+            chrome.footerKey(c, p, action, "↩", true);
+            chrome.keySep(c, p);
         }
-        ui.text(
-            c,
-            if (o.step == .done) "Close" else "Skip",
-            .{ .size = 12, .color = p.sub.alpha(0.8) },
-        );
-        ui.kbd(c, "esc");
+        chrome.footerKey(c, p, if (o.step == .done) "Close" else "Skip", "esc", false);
     }
 
     fn next(o: *Onboard, c: *ui.Context, step: Step) void {

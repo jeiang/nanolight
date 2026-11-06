@@ -12,7 +12,8 @@ const clipboard = @import("clipboard.zig");
 const search = @import("search.zig");
 const results = @import("results.zig");
 const account = @import("account.zig");
-const Palette = panel.Palette;
+const chrome = @import("chrome.zig");
+const Palette = @import("palette.zig").Palette;
 
 /// What the screen asks of the app. Without it the screen says history is
 /// not available (tests draw it so).
@@ -28,15 +29,13 @@ pub const Host = struct {
     copy: *const fn (ctx: *anyopaque, hash: u64) bool,
 };
 
-const row_h: f32 = 40;
 const visible_rows = 7;
-const list_pad: f32 = 6;
 const detail_h: f32 = 112;
 const max_found = 50;
 const detail_lines = 4;
+const list_h: f32 = visible_rows * chrome.row_h + chrome.list_pad * 2;
 /// Header, list, detail and footer with their hairlines.
-pub const height: f32 = panel.header_h + 1 + visible_rows * row_h + list_pad * 2 + 1 +
-    detail_h + 1 + panel.footer_h;
+pub const height: f32 = chrome.header_h + 1 + list_h + 1 + detail_h + 1 + chrome.footer_h;
 
 pub const Screen = struct {
     open: bool = false,
@@ -117,8 +116,7 @@ pub const Screen = struct {
             if (submitted) s.paste(x);
         }
         ui.div(c).wFull().h(1).bg(p.hair).end();
-        const rows = ui.div(c).column().wFull().h(visible_rows * row_h + list_pad * 2).p(list_pad)
-            .clip();
+        const rows = ui.div(c).column().wFull().h(list_h).p(chrome.list_pad).clip();
         if (hh) |x| s.list(c, p, x) else empty(c, p, "Clipboard history is not available here.");
         rows.end();
         if (hh) |x| s.sel_hash = if (s.selected(x)) |e| e.hash else 0;
@@ -134,11 +132,11 @@ pub const Screen = struct {
             return n.hidePanel();
         }
         const h = hh orelse return;
-        if (panel.Nanolight.moveDown(c)) {
+        if (chrome.moveDown(c)) {
             s.note = "";
             if (s.n > 0) s.sel = (s.sel + 1) % s.n;
         }
-        if (panel.Nanolight.moveUp(c)) {
+        if (chrome.moveUp(c)) {
             s.note = "";
             if (s.n > 0) s.sel = (s.sel + s.n - 1) % s.n;
         }
@@ -167,7 +165,7 @@ pub const Screen = struct {
     }
 
     fn header(s: *Screen, c: *ui.Context, n: *panel.Nanolight, p: Palette) bool {
-        const bar = ui.div(c).row().wFull().h(panel.header_h).px(18).gap(12).itemsCenter();
+        const bar = ui.div(c).row().wFull().h(chrome.header_h).px(18).gap(12).itemsCenter();
         defer bar.end();
         const chevron = ui.div(c).size(26, 26).center().rounded(7).bg(p.tile).control();
         if (chevron.clicked()) s.back(n);
@@ -179,7 +177,7 @@ pub const Screen = struct {
             .size = 19,
             .width = .fill,
             .placeholder = "Search Clipboard History…",
-            .placeholder_color = p.sub.alpha(0.75),
+            .placeholder_color = p.placeholder(),
             .color = p.text,
         });
         if (std.hash.Wyhash.hash(0, n.query.text()) != before) s.note = "";
@@ -200,20 +198,18 @@ pub const Screen = struct {
         for (first..@min(s.n, first + visible_rows)) |i| {
             const e = h.store.entries.items[s.found[i].index];
             ui.key(c, c.print("clip-row-{d}", .{i}));
-            const r = ui.div(c).row().wFull().h(row_h).px(10).gap(12).itemsCenter().rounded(10)
-                .control();
+            const r = ui.div(c).row().wFull().h(chrome.row_h).px(chrome.row_px).gap(chrome.row_gap)
+                .itemsCenter().rounded(10).control();
             defer r.end();
             if (i == s.sel) _ = r.bg(p.sel).border(p.rim);
             if (r.clicked()) {
                 if (s.sel == i) s.paste(h) else s.sel = i;
             }
-            const tile = ui.div(c).size(26, 26).rounded(7).bg(p.tile).center();
-            ui.icon(c, switch (e.kind) {
+            chrome.tile(c, p, switch (e.kind) {
                 .text => "doc.text",
                 .image => "photo",
                 .file => "doc",
-            }, .{ .size = 13, .weight = .medium, .color = p.text });
-            tile.end();
+            });
             var tb: [48]u8 = undefined;
             ui.text(
                 c,
@@ -290,58 +286,32 @@ pub const Screen = struct {
     }
 
     fn footer(s: *Screen, c: *ui.Context, p: Palette, hh: ?*const Host) void {
-        ui.div(c).wFull().h(1).bg(p.hair).end();
-        const bar = ui.div(c).row().wFull().h(panel.footer_h).px(16).gap(8).itemsCenter();
+        const bar = chrome.footer(c, p);
         defer bar.end();
-        panel.appIcon(c, 16);
+        chrome.appIcon(c, 16);
         if (s.note.len > 0)
             ui.text(
                 c,
                 s.note,
                 .{ .size = 12, .weight = .medium, .color = p.text, .truncate = .ellipsis },
             )
-        else if (hh) |h|
-            ui.textf(
-                c,
-                .{
-                    .size = 12,
-                    .weight = .medium,
-                    .color = p.sub.alpha(0.8),
-                    .truncate = .ellipsis,
-                },
-                "Clipboard History · {d}",
-                .{h.store.entries.items.len},
-            )
-        else
-            ui.text(
-                c,
-                "Clipboard History",
-                .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8) },
-            );
+        else if (hh) |h| {
+            var cut = p.caption();
+            cut.truncate = .ellipsis;
+            ui.textf(c, cut, "Clipboard History · {d}", .{h.store.entries.items.len});
+        } else ui.text(c, "Clipboard History", p.caption());
         ui.spacer(c);
         const h = hh orelse return;
         const copy_only = !h.store.cfg.paste_plain_text;
         if (!copy_only) {
-            ui.text(c, "Paste", .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
-            ui.kbd(c, "↩");
-            ui.div(c).w(1).h(14).bg(p.hair).end();
+            chrome.footerKey(c, p, "Paste", "↩", true);
+            chrome.keySep(c, p);
         }
-        ui.text(
-            c,
-            "Copy",
-            .{
-                .size = 12,
-                .weight = if (copy_only) .medium else .regular,
-                .color = if (copy_only) p.text.alpha(0.85) else p.sub.alpha(0.8),
-            },
-        );
-        ui.kbd(c, if (copy_only) "↩" else results.mod ++ "↩");
-        ui.div(c).w(1).h(14).bg(p.hair).end();
-        ui.text(c, "Delete", .{ .size = 12, .color = p.sub.alpha(0.8) });
-        ui.kbd(c, results.mod ++ "⌫");
-        ui.div(c).w(1).h(14).bg(p.hair).end();
-        ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
-        ui.kbd(c, "esc");
+        chrome.footerKey(c, p, "Copy", if (copy_only) "↩" else results.mod ++ "↩", copy_only);
+        chrome.keySep(c, p);
+        chrome.footerKey(c, p, "Delete", results.mod ++ "⌫", false);
+        chrome.keySep(c, p);
+        chrome.footerKey(c, p, "Close", "esc", false);
     }
 };
 

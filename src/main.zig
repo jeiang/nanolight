@@ -13,6 +13,7 @@ const apps = @import("apps.zig");
 const Index = apps.Index;
 const view = @import("view.zig");
 const Nanolight = view.Nanolight;
+const chrome = @import("chrome.zig");
 const hotkey = @import("hotkey.zig");
 const keys = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
@@ -508,6 +509,7 @@ pub const Live = struct {
         const l: *Live = @ptrCast(@alignCast(ctx));
         l.preview.fit(h);
         // The panel grew or shrank under a still pointer.
+        l.through.height = h;
         l.through.update();
         if (l.window) |w| panel.resize(w, h);
     }
@@ -768,7 +770,7 @@ pub fn main(init: std.process.Init) !void {
     s.rebuild();
     var options: nanoui.WindowOptions = .{
         .title = "Nanolight",
-        .width = view.width,
+        .width = chrome.width,
         .height = s.height(),
         .resizable = false,
         .visible = false,
@@ -779,7 +781,7 @@ pub fn main(init: std.process.Init) !void {
     // Headless (snapshots): the panel alone; `setup`, which leaves room
     // round it, never runs.
     if (app.flags.hidden) {
-        options.width = view.width;
+        options.width = chrome.width;
         options.height = s.height();
     }
     live.window = try app.newWindow(options);
@@ -844,10 +846,10 @@ fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
         "nanolight: asked an older copy to quit",
         .{},
     );
-    panel.setup(live.window.?, s);
+    s.fit = panel.setup(live.window.?);
     panel.resize(live.window.?, if (o.active) o.height() else s.height());
     live.useKey(live.choice);
-    live.through = .{ .window = live.window, .height = &s.last_h };
+    live.through = .{ .window = live.window, .height = s.last_h };
     live.preview.watch(.{ .ctx = live, .func = Live.pageKey });
     o.hooks = live.hooks();
     // The first run: the welcome, in the panel.

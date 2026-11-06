@@ -11,7 +11,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
-const view = @import("view.zig");
+const chrome = @import("chrome.zig");
 
 const mouse_moved: u64 = 1 << 5;
 const left_dragged: u64 = 1 << 6;
@@ -19,8 +19,8 @@ const mask = mouse_moved | left_dragged;
 
 pub const ClickThrough = struct {
     window: ?*nanoui.Window = null,
-    /// The panel's height as drawn now.
-    height: ?*const f32 = null,
+    /// The panel's height as drawn now (main.zig's `Live.resize`).
+    height: f32 = 0,
     global: ?objc.Object = null,
     local: ?objc.Object = null,
     ignoring: bool = false,
@@ -72,8 +72,7 @@ pub const ClickThrough = struct {
         if (!w.isVisible()) return c.stop();
         const at = objc.msg(objc.CGPoint, objc.class("NSEvent"), "mouseLocation", .{});
         const f = objc.msg(objc.CGRect, w.nswindow, "frame", .{});
-        const h: f64 = if (c.height) |p| p.* else 0;
-        c.set(!overPanel(f, at, view.shadow_margin, view.width, h));
+        c.set(!overPanel(f, at, chrome.shadow_margin, chrome.width, c.height));
     }
 
     fn set(c: *ClickThrough, ignore: bool) void {
