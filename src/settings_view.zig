@@ -50,7 +50,7 @@ pub const Settings = struct {
     /// Clipboard history recording; `clip_here` is whether this system has it.
     clip: bool = true,
     clip_here: bool = false,
-    cleared: bool = false,
+    cleared: enum { idle, done, failed } = .idle,
     sync: []const u8 = @import("account.zig").off_text,
     version: []const u8 = "0.1.0",
     ready: ?[]const u8 = null,
@@ -58,7 +58,7 @@ pub const Settings = struct {
     pub fn show(s: *Settings) void {
         s.open = true;
         s.sel = 0;
-        s.cleared = false;
+        s.cleared = .idle;
     }
 
     /// The height now: the clipboard's section is there only where this system has it.
@@ -162,7 +162,11 @@ pub const Settings = struct {
         if (s.clip_here) {
             label(c, p, "Clipboard History");
             s.switchRow(c, n, p, rows, .clipboard, "Record Copied Items");
-            s.button(c, n, p, rows, .clear_clipboard, if (s.cleared) "Clipboard History Cleared" else "Clear History");
+            s.button(c, n, p, rows, .clear_clipboard, switch (s.cleared) {
+                .idle => "Clear History",
+                .done => "Clipboard History Cleared",
+                .failed => "Could Not Clear History",
+            });
         }
         label(c, p, if (@import("builtin").os.tag == .macos) "Sync Across Macs" else "Sync Across Computers");
         ui.text(c, s.sync, .{ .size = 12.5, .color = p.sub });
@@ -387,8 +391,8 @@ pub const Settings = struct {
             .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, s.shown(), 1),
             .suggest, .files, .browser, .login, .menu_bar, .clipboard => s.flip(n, kind),
             .clear_clipboard => {
-                if (h) |host| host.clipboard_clear(host.ctx);
-                s.cleared = true;
+                const ok = if (h) |host| host.clipboard_clear(host.ctx) else true;
+                s.cleared = if (ok) .done else .failed;
             },
             .updates => if (h) |host| {
                 if (s.ready != null) host.restart(host.ctx) else host.check(host.ctx);

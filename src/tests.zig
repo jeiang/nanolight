@@ -426,6 +426,8 @@ pub const Prefs = struct {
     menu_bar_on: bool = true,
     clip_on: ?bool = null,
     clip_cleared: u8 = 0,
+    /// What Clear History answers.
+    clip_clear_ok: bool = true,
     box: SettingsHost = undefined,
 
     pub fn init(p: *Prefs) void {
@@ -494,8 +496,10 @@ pub const Prefs = struct {
         if (set) |on| p.clip_on = on;
         return p.clip_on;
     }
-    fn clipboardClear(ctx: *anyopaque) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).clip_cleared += 1;
+    fn clipboardClear(ctx: *anyopaque) bool {
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.clip_cleared += 1;
+        return p.clip_clear_ok;
     }
     fn syncStatus(_: *anyopaque) []const u8 {
         return @import("account.zig").off_text;

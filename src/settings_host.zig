@@ -25,8 +25,8 @@ pub const SettingsHost = struct {
     /// Whether clipboard history records; `set` changes it first. Null where
     /// this system has no clipboard history (its rows are not shown).
     clipboard_enabled: *const fn (ctx: *anyopaque, set: ?bool) ?bool,
-    /// Deletes every clipboard entry.
-    clipboard_clear: *const fn (ctx: *anyopaque) void,
+    /// Deletes every clipboard entry; false when something may be left on disk.
+    clipboard_clear: *const fn (ctx: *anyopaque) bool,
     /// The sync line ("Sync: host, last synced 3 min ago"); valid until the next call.
     sync_status: *const fn (ctx: *anyopaque) []const u8,
     /// The version running, and a newer one waiting (else null).

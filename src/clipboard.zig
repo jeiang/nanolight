@@ -31,6 +31,13 @@ pub const max_text: usize = 10 << 20;
 pub const max_image: usize = 20 << 20;
 /// A copied list of files, as paths one a line.
 pub const max_files: usize = 256 << 10;
+/// The most the history keeps of all its entries' content together (their `size`),
+/// whatever `max_entries` says (0 there limits only the count): past it, the oldest go first.
+pub const max_store_bytes: u64 = 256 << 20;
+comptime {
+    // The newest entry always fits on its own.
+    std.debug.assert(@max(max_text, max_image, max_files) <= max_store_bytes);
+}
 /// What the index keeps of a text longer than `Store.inline_max`.
 pub const preview_max = 512;
 /// How much of a text is matched against a search.
@@ -82,7 +89,7 @@ pub const Config = struct {
     config_ok: bool = true,
     /// 0: no age limit.
     retention_days: u32 = 7,
-    /// 0: no limit.
+    /// 0: no limit on the count (`max_store_bytes` still applies).
     max_entries: u32 = 1000,
     /// Compared with an item's source, any case. Borrowed.
     exclude_apps: []const []const u8 = &.{},
@@ -92,8 +99,27 @@ pub fn hash(kind: Kind, bytes: []const u8) u64 {
     return std.hash.Wyhash.hash(@backingInt(kind) + 1, bytes);
 }
 
-fn blobName(buf: []u8, h: u64, ext: []const u8) []const u8 {
+/// "blobs/<16 hex digits>.<ext>", the extensions being three letters.
+const blob_name_len = 48;
+const blob_ext_len = 3;
+comptime {
+    std.debug.assert("blobs/".len + 16 + ".".len + blob_ext_len <= blob_name_len);
+}
+
+fn blobName(buf: *[blob_name_len]u8, h: u64, ext: []const u8) []const u8 {
+    std.debug.assert(ext.len == blob_ext_len);
     return std.fmt.bufPrint(buf, "blobs/{x:0>16}.{s}", .{ h, ext }) catch unreachable;
+}
+
+/// Deletes `name` in `dir`; true when it is gone, a missing file included. A failure is
+/// logged: on these paths it means content may outlive a delete the person asked for.
+fn deleteIfThere(io: Io, dir: Io.Dir, name: []const u8) bool {
+    dir.deleteFile(io, name) catch |e| {
+        if (e == error.FileNotFound) return true;
+        warn("nanolight: clipboard: could not delete {s}: {t}", .{ name, e });
+        return false;
+    };
+    return true;
 }
 
 /// `s` cut to at most `max` bytes, on a character boundary.
@@ -114,6 +140,9 @@ pub const Store = struct {
     entries: std.ArrayList(Entry) = .empty,
     /// A text longer than this goes to a blob (all of it stays here without a dir).
     inline_max: usize = 4096,
+    /// The total content kept, oldest dropped first past it: `max_store_bytes` (a test
+    /// makes it small).
+    budget_bytes: u64 = max_store_bytes,
     /// Counts every change, so a screen knows its list is stale.
     gen: u32 = 0,
 
@@ -166,7 +195,7 @@ pub const Store = struct {
                 e.source = src;
             } else |_| {};
             std.mem.rotate(Entry, s.entries.items[0 .. i + 1], i);
-            s.changed();
+            s.changedOrWarn();
             return .bumped;
         };
         const e = s.make(item, h, content, now) orelse return .failed;
@@ -176,7 +205,7 @@ pub const Store = struct {
             return .failed;
         };
         _ = s.enforce();
-        s.changed();
+        s.changedOrWarn();
         return .added;
     }
 
@@ -197,7 +226,7 @@ pub const Store = struct {
         return e;
     }
 
-    fn blobFor(e: Entry, buf: []u8) ?[]const u8 {
+    fn blobFor(e: Entry, buf: *[blob_name_len]u8) ?[]const u8 {
         return switch (e.kind) {
             .image => blobName(buf, e.hash, "png"),
             .text => if (e.text.len < e.size) blobName(buf, e.hash, "txt") else null,
@@ -207,25 +236,33 @@ pub const Store = struct {
 
     fn writeBlob(s: *Store, e: Entry, bytes: []const u8) !void {
         const dir = s.dir orelse return;
-        var buf: [48]u8 = undefined;
+        var buf: [blob_name_len]u8 = undefined;
         _ = try dir.createDirPathStatus(s.io, "blobs", private_dir);
         try writeAtomic(s.io, dir, blobFor(e, &buf).?, bytes);
     }
 
+    /// A failure is logged; the next `load` sweeps the file.
     fn dropBlob(s: *Store, e: Entry) void {
         const dir = s.dir orelse return;
-        var buf: [48]u8 = undefined;
-        if (blobFor(e, &buf)) |name| dir.deleteFile(s.io, name) catch {};
+        var buf: [blob_name_len]u8 = undefined;
+        if (blobFor(e, &buf)) |name| _ = deleteIfThere(s.io, dir, name);
     }
 
-    fn changed(s: *Store) void {
+    /// After a change in memory: counted, and the index written.
+    fn changed(s: *Store) !void {
         s.gen +%= 1;
-        s.save();
+        try s.save();
+    }
+
+    /// `changed` where the caller cannot act on a failure: it is logged, and the next
+    /// change writes the whole index again.
+    fn changedOrWarn(s: *Store) void {
+        s.changed() catch |e| warn("nanolight: clipboard: could not write index.json: {t}", .{e});
     }
 
     /// The text of `e`, all of it. Caller frees.
     pub fn fullText(s: *Store, gpa: std.mem.Allocator, e: Entry) ![]u8 {
-        var buf: [48]u8 = undefined;
+        var buf: [blob_name_len]u8 = undefined;
         const name = blobFor(e, &buf) orelse return gpa.dupe(u8, e.text);
         const dir = s.dir orelse return error.NoDirectory;
         return dir.readFileAlloc(s.io, name, gpa, .limited(max_text));
@@ -235,7 +272,7 @@ pub const Store = struct {
     pub fn png(s: *Store, gpa: std.mem.Allocator, e: Entry) ?[]u8 {
         if (e.kind != .image) return null;
         const dir = s.dir orelse return null;
-        var buf: [48]u8 = undefined;
+        var buf: [blob_name_len]u8 = undefined;
         return dir.readFileAlloc(s.io, blobName(&buf, e.hash, "png"), gpa, .limited(max_image)) catch null;
     }
 
@@ -249,27 +286,34 @@ pub const Store = struct {
             _ = s.entries.orderedRemove(i);
             s.dropBlob(e);
             s.free(e);
-            s.changed();
+            s.changedOrWarn();
             return true;
         };
         return false;
     }
 
-    /// Forgets everything, blobs included.
-    pub fn clear(s: *Store) void {
-        for (s.entries.items) |e| {
-            s.dropBlob(e);
-            s.free(e);
-        }
+    pub const ClearError = error{Incomplete};
+
+    /// Forgets everything, blobs included. `error.Incomplete`: something may still be on
+    /// disk (each failure is logged); memory is empty either way.
+    pub fn clear(s: *Store) ClearError!void {
+        for (s.entries.items) |e| s.free(e);
         s.entries.clearRetainingCapacity();
-        s.sweep();
-        if (s.dir) |dir| dir.deleteFile(s.io, "index.json.corrupt") catch {};
-        s.changed();
+        // With no entries, the sweep deletes every blob.
+        var gone = s.sweep();
+        if (s.dir) |dir| gone = deleteIfThere(s.io, dir, "index.json.corrupt") and gone;
+        s.changed() catch |e| {
+            // The old index still names what was copied: it must not stay.
+            warn("nanolight: clipboard: could not write index.json: {t}; deleting it", .{e});
+            if (s.dir) |dir| gone = deleteIfThere(s.io, dir, "index.json") and gone;
+        };
+        if (!gone) return error.Incomplete;
     }
 
-    /// Drops what is older than `retention_days` and what is past `max_entries`.
-    /// Returns how many went.
-    pub fn prune(s: *Store, now: i64) usize {
+    /// Drops what is older than `retention_days`, then the oldest past `max_entries` or
+    /// `budget_bytes`. Returns how many went; an error means the index on disk still
+    /// lists them (logged by the caller; the next change or launch writes it again).
+    pub fn prune(s: *Store, now: i64) !usize {
         var gone: usize = 0;
         if (s.cfg.retention_days > 0) {
             const cutoff = now -| @as(i64, s.cfg.retention_days) * std.time.s_per_day;
@@ -284,17 +328,20 @@ pub const Store = struct {
             }
         }
         gone += s.enforce();
-        if (gone > 0) s.changed();
+        if (gone > 0) try s.changed();
         return gone;
     }
 
-    /// The oldest entries past `max_entries` go.
+    /// The oldest entries go while there are more than `max_entries` (0: any number) or
+    /// their content is over `budget_bytes`.
     fn enforce(s: *Store) usize {
+        var total: u64 = 0;
+        for (s.entries.items) |e| total +|= e.size;
         const max = s.cfg.max_entries;
-        if (max == 0) return 0;
         var gone: usize = 0;
-        while (s.entries.items.len > max) {
-            const e = s.entries.pop().?;
+        while (total > s.budget_bytes or (max > 0 and s.entries.items.len > max)) {
+            const e = s.entries.pop() orelse break;
+            total -|= e.size;
             s.dropBlob(e);
             s.free(e);
             gone += 1;
@@ -367,8 +414,8 @@ pub const Store = struct {
         };
         defer s.gpa.free(bytes);
         const parsed = std.json.parseFromSlice(Disk, s.gpa, bytes, .{ .ignore_unknown_fields = true }) catch {
-            warn("nanolight: clipboard: index.json is damaged; deleted, starting empty", .{});
-            dir.deleteFile(s.io, "index.json") catch {};
+            warn("nanolight: clipboard: index.json is damaged; deleting it, starting empty", .{});
+            _ = deleteIfThere(s.io, dir, "index.json");
             return;
         };
         defer parsed.deinit();
@@ -385,8 +432,11 @@ pub const Store = struct {
             };
         }
         std.mem.sort(Entry, s.entries.items, {}, newer);
-        _ = s.prune(now);
-        s.sweep();
+        if (s.prune(now)) |_| {} else |e| {
+            warn("nanolight: clipboard: could not write index.json: {t}", .{e});
+        }
+        // A blob it could not delete is logged; the next launch sweeps again.
+        _ = s.sweep();
         s.gen +%= 1;
     }
 
@@ -395,40 +445,50 @@ pub const Store = struct {
     }
 
     /// Deletes the blobs no entry names, and any other file in `blobs/`
-    /// (a leftover `.tmp`).
-    fn sweep(s: *Store) void {
-        const dir = s.dir orelse return;
-        var blobs = dir.openDir(s.io, "blobs", .{ .iterate = true }) catch return;
+    /// (a leftover `.tmp`). False when one may be left (logged).
+    fn sweep(s: *Store) bool {
+        const dir = s.dir orelse return true;
+        var blobs = dir.openDir(s.io, "blobs", .{ .iterate = true }) catch |e| {
+            if (e == error.FileNotFound) return true;
+            return sweepFailed(e);
+        };
         defer blobs.close(s.io);
+        var gone = true;
         var it = blobs.iterate();
-        while (it.next(s.io) catch null) |f| {
+        while (it.next(s.io) catch |e| return sweepFailed(e)) |f| {
             const stem = std.fs.path.stem(f.name);
             const h = std.fmt.parseInt(u64, stem, 16) catch {
-                blobs.deleteFile(s.io, f.name) catch {};
+                gone = deleteIfThere(s.io, blobs, f.name) and gone;
                 continue;
             };
             const keep = for (s.entries.items) |e| {
-                var buf: [48]u8 = undefined;
+                var buf: [blob_name_len]u8 = undefined;
                 const name = blobFor(e, &buf) orelse continue;
                 if (e.hash == h and std.mem.eql(u8, name["blobs/".len..], f.name)) break true;
             } else false;
-            if (!keep) blobs.deleteFile(s.io, f.name) catch {};
+            if (!keep) gone = deleteIfThere(s.io, blobs, f.name) and gone;
         }
+        return gone;
     }
 
-    fn save(s: *Store) void {
+    fn sweepFailed(e: anyerror) bool {
+        warn("nanolight: clipboard: could not list blobs: {t}", .{e});
+        return false;
+    }
+
+    fn save(s: *Store) !void {
         const dir = s.dir orelse return;
-        const list = s.gpa.alloc(DiskEntry, s.entries.items.len) catch return;
+        const list = try s.gpa.alloc(DiskEntry, s.entries.items.len);
         defer s.gpa.free(list);
-        const names = s.gpa.alloc([16]u8, list.len) catch return;
+        const names = try s.gpa.alloc([16]u8, list.len);
         defer s.gpa.free(names);
         for (s.entries.items, list, names) |e, *d, *name| {
             _ = std.fmt.bufPrint(name, "{x:0>16}", .{e.hash}) catch unreachable;
             d.* = .{ .hash = name, .kind = e.kind, .text = e.text, .size = e.size, .w = e.width, .h = e.height, .source = e.source, .at = e.at, .count = e.count };
         }
-        const json = std.json.Stringify.valueAlloc(s.gpa, Disk{ .entries = list }, .{}) catch return;
+        const json = try std.json.Stringify.valueAlloc(s.gpa, Disk{ .entries = list }, .{});
         defer s.gpa.free(json);
-        writeAtomic(s.io, dir, "index.json", json) catch |e| warn("nanolight: clipboard: could not write index.json: {t}", .{e});
+        try writeAtomic(s.io, dir, "index.json", json);
     }
 };
 
@@ -454,6 +514,7 @@ const Disk = struct {
 fn writeAtomic(io: Io, dir: Io.Dir, name: []const u8, bytes: []const u8) !void {
     var buf: [80]u8 = undefined;
     const tmp = try std.fmt.bufPrint(&buf, "{s}.tmp", .{name});
+    // best effort: the write already failed; a left temp file is overwritten next time.
     errdefer dir.deleteFile(io, tmp) catch {};
     const f = try dir.createFile(io, tmp, .{ .truncate = true, .permissions = private_file });
     defer f.close(io);
@@ -660,13 +721,49 @@ test "pruning by age and by count" {
     var t = memory(.{ .retention_days = 7, .max_entries = 0 });
     defer t.deinit();
     for ([_][]const u8{ "old", "edge", "a" }, [_]i64{ -8 * day, -6 * day, -3 }) |w, d| _ = t.add(textItem(w, ""), now + d);
-    try testing.expectEqual(@as(usize, 1), t.prune(now));
-    try testing.expectEqual(@as(usize, 0), t.prune(now));
-    try testing.expectEqual(@as(usize, 1), t.prune(now + 2 * day));
+    try testing.expectEqual(@as(usize, 1), try t.prune(now));
+    try testing.expectEqual(@as(usize, 0), try t.prune(now));
+    try testing.expectEqual(@as(usize, 1), try t.prune(now + 2 * day));
     try testing.expectEqualStrings("a", t.entries.items[0].text);
     // 0 days keeps everything.
     t.cfg.retention_days = 0;
-    try testing.expectEqual(@as(usize, 0), t.prune(now + 1000 * day));
+    try testing.expectEqual(@as(usize, 0), try t.prune(now + 1000 * day));
+}
+
+test "the size budget drops the oldest first, at its boundary and on load" {
+    var s = memory(.{ .retention_days = 0, .max_entries = 0 });
+    defer s.deinit();
+    s.budget_bytes = 10;
+    const words = [_][]const u8{ "aaaa", "bbbb", "cc" };
+    for (words, 1..) |w, at| _ = s.add(textItem(w, ""), @intCast(at));
+    // Exactly the budget: all stay.
+    try testing.expectEqual(@as(usize, 3), s.entries.items.len);
+    // One byte over: the oldest goes, the newest stays.
+    try testing.expectEqual(Result.added, s.add(textItem("d", ""), 4));
+    try testing.expectEqual(@as(usize, 3), s.entries.items.len);
+    try testing.expectEqualStrings("d", s.entries.items[0].text);
+    try testing.expectEqualStrings("bbbb", s.entries.items[2].text);
+    // A smaller budget prunes the oldest until it fits: 7 bytes, then 3.
+    s.budget_bytes = 3;
+    try testing.expectEqual(@as(usize, 1), try s.prune(5));
+    try testing.expectEqualStrings("d", s.entries.items[0].text);
+    try testing.expectEqualStrings("cc", s.entries.items[1].text);
+
+    // An index over the budget is cut on load, oldest first.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    {
+        var w: Store = .init(testing.allocator, testing.io, tmp.dir, .{ .retention_days = 0 });
+        defer w.deinit();
+        const texts = [_][]const u8{ "old", "mid", "new" };
+        for (texts, 1..) |t, at| _ = w.add(textItem(t, ""), @intCast(at));
+    }
+    var r: Store = .init(testing.allocator, testing.io, tmp.dir, .{ .retention_days = 0 });
+    defer r.deinit();
+    r.budget_bytes = 6;
+    r.load(10);
+    try testing.expectEqual(@as(usize, 2), r.entries.items.len);
+    try testing.expectEqualStrings("mid", r.entries.items[1].text);
 }
 
 test "search matches text, file names and the source app, best first" {
@@ -793,7 +890,7 @@ test "clear forgets everything, blobs too" {
     _ = s.add(.{ .kind = .image, .png = "p", .width = 1, .height = 1 }, 2);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "index.json.corrupt", .data = "secret" });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "blobs/0000000000000009.png.tmp", .data = "x" });
-    s.clear();
+    try s.clear();
     try testing.expectEqual(@as(usize, 0), s.entries.items.len);
     try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "index.json.corrupt", .{}));
     var blobs = try tmp.dir.openDir(testing.io, "blobs", .{ .iterate = true });
@@ -804,6 +901,26 @@ test "clear forgets everything, blobs too" {
     defer again.deinit();
     again.load(3);
     try testing.expectEqual(@as(usize, 0), again.entries.items.len);
+}
+
+test "clear that cannot write the index deletes it, and one that leaves a file says so" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var s: Store = .init(testing.allocator, testing.io, tmp.dir, .{});
+    defer s.deinit();
+    _ = s.add(textItem("secret", ""), 1);
+    try tmp.dir.access(testing.io, "index.json", .{});
+    // A directory where the temp index goes: every write of index.json fails.
+    try tmp.dir.createDirPath(testing.io, "index.json.tmp");
+    try s.clear();
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "index.json", .{}));
+    // A prune that cannot write the index says so.
+    _ = s.add(textItem("again", ""), 2);
+    try testing.expect(if (s.prune(100 * std.time.s_per_day)) |_| false else |_| true);
+    // Something in blobs/ that cannot be deleted: memory is cleared, the caller told.
+    try tmp.dir.createDirPath(testing.io, "blobs/0000000000000001.png/x");
+    try testing.expectError(error.Incomplete, s.clear());
+    try testing.expectEqual(@as(usize, 0), s.entries.items.len);
 }
 
 test "store files are user-only" {

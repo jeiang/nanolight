@@ -362,6 +362,12 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
     t.settle(1);
     try testing.expectEqual(@as(u8, 1), prefs.clip_cleared);
     try testing.expect(t.hasText("Clipboard History Cleared"));
+    // A clear that may have left something on disk says so.
+    prefs.clip_clear_ok = false;
+    try t.clickText("Clipboard History Cleared");
+    t.settle(1);
+    try testing.expectEqual(@as(u8, 2), prefs.clip_cleared);
+    try testing.expect(t.hasText("Could Not Clear History"));
     // Everything fits in the window.
     const quit = t.findText("Quit Nanolight").?;
     try testing.expect(quit.y + quit.h <= s.settings_ui.tall());

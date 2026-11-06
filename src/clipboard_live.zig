@@ -33,6 +33,7 @@ pub fn openDir(gpa: std.mem.Allocator, io: std.Io) ?std.Io.Dir {
     const path = std.fs.path.join(gpa, &.{ data, "clipboard" }) catch return null;
     defer gpa.free(path);
     _ = std.Io.Dir.cwd().createDirPathStatus(io, path, clipboard.private_dir) catch return null;
+    // best effort: an existing folder keeps its mode; its files are created private anyway.
     std.Io.Dir.cwd().setFilePermissions(io, path, clipboard.private_dir, .{}) catch {};
     return std.Io.Dir.cwd().openDir(io, path, .{}) catch null;
 }
@@ -64,7 +65,11 @@ fn excluded(ctx: *anyopaque, source: []const u8) bool {
 
 fn pruneTick(ctx: ?*anyopaque) callconv(.c) void {
     const l: *Live = @ptrCast(@alignCast(ctx.?));
-    if (l.clip) |store| _ = store.prune(account.now());
+    if (l.clip) |store| {
+        if (store.prune(account.now())) |_| {} else |e| {
+            std.log.warn("nanolight: clipboard: could not write index.json: {t}", .{e});
+        }
+    }
     nanoui.App.after(prune_every_ms, l, pruneTick);
 }
 
@@ -83,9 +88,11 @@ pub fn enabled(ctx: *anyopaque, set: ?bool) ?bool {
     return store.cfg.enabled;
 }
 
-/// Settings' Clear History.
-pub fn clear(ctx: *anyopaque) void {
-    if (live(ctx).clip) |store| store.clear();
+/// Settings' Clear History: false when something may be left on disk (logged).
+pub fn clear(ctx: *anyopaque) bool {
+    const store = live(ctx).clip orelse return true;
+    store.clear() catch return false;
+    return true;
 }
 
 /// Why the screen has nothing to show now, or null.
