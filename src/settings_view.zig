@@ -18,6 +18,74 @@ const mac = @import("builtin").os.tag == .macos;
 const nix = @import("build_options").nix_managed;
 
 const RowKind = enum { choice, suggest, files, browser, login, menu_bar, clipboard, clear_clipboard, updates, welcome, quit, theme };
+
+/// The rows that switch something on or off. Each reads and writes its
+/// owner: the panel's own fields, or the host's (no copy kept here).
+const Toggle = enum {
+    suggest,
+    files,
+    browser,
+    login,
+    menu_bar,
+    clipboard,
+
+    fn row(t: Toggle) RowKind {
+        return switch (t) {
+            inline else => |x| @field(RowKind, @tagName(x)),
+        };
+    }
+
+    fn get(t: Toggle, n: *const panel.Nanolight, h: ?*const SettingsHost) bool {
+        return switch (t) {
+            .suggest => n.suggest_on,
+            .files => n.files_on,
+            .browser => n.searches_out,
+            // Without a host (tests): as a fresh install has them.
+            .login => if (h) |host| host.login(host.ctx, null) else false,
+            .menu_bar => if (h) |host| host.menu_bar(host.ctx, null) else true,
+            .clipboard => if (h) |host| host.clipboard_enabled(host.ctx, null) orelse false else false,
+        };
+    }
+
+    fn set(t: Toggle, n: *panel.Nanolight, h: ?*const SettingsHost, on: bool) void {
+        switch (t) {
+            .suggest => if (h) |host| host.suggest(host.ctx, on) else {
+                n.suggest_on = on;
+                n.built = 1;
+            },
+            .files => {
+                n.files_on = on;
+                n.built = 1;
+                const key = @import("files.zig").enabled_key;
+                // best effort: file search follows the switch this run either way.
+                if (n.kv) |kv| kv.set(key, if (on) "1" else "0") catch {};
+            },
+            .browser => if (h) |host| host.searches_out(host.ctx, on) else {
+                n.searches_out = on;
+            },
+            .login => if (h) |host| {
+                _ = host.login(host.ctx, on);
+            },
+            .menu_bar => if (h) |host| {
+                _ = host.menu_bar(host.ctx, on);
+            },
+            .clipboard => if (h) |host| {
+                _ = host.clipboard_enabled(host.ctx, on);
+            },
+        }
+    }
+};
+
+/// Whether this build shows `kind`, with or without the clipboard's rows:
+/// the one rule for the keyboard's order and the drawing.
+fn present(kind: RowKind, clip: bool) bool {
+    return switch (kind) {
+        .files, .browser, .menu_bar => mac,
+        .login, .updates => !nix,
+        .clipboard, .clear_clipboard => clip,
+        .choice, .suggest, .welcome, .quit, .theme => true,
+    };
+}
 const Theme = @import("palette.zig").Theme;
 
 /// As tall as its sections, never past the window. The Mac has three rows
@@ -41,14 +109,7 @@ pub const Settings = struct {
     /// last wasn't fit (no ⌘, ⌥ or ⌃).
     recording: bool = false,
     refused: bool = false,
-    suggest: bool = true,
-    files: bool = false,
-    /// Return sends searches to the browser (`Nanolight.searches_out`).
-    browser: bool = false,
-    login: bool = false,
-    menu_bar: bool = true,
-    /// Clipboard history recording; `clip_here` is whether this system has it.
-    clip: bool = true,
+    /// Whether this system has clipboard history (its section shows).
     clip_here: bool = false,
     cleared: bool = false,
     sync: []const u8 = @import("account.zig").off_text,
@@ -83,16 +144,10 @@ pub const Settings = struct {
     }
 
     fn pull(s: *Settings, n: *panel.Nanolight) void {
-        s.suggest = n.suggest_on;
-        s.files = n.files_on;
-        s.browser = n.searches_out;
         const h = s.hooks(n) orelse return;
-        s.menu_bar = h.menu_bar(h.ctx, null);
         s.choice = h.choice(h.ctx);
         if (s.choice.preset() == null) s.custom = s.choice;
-        s.login = h.login(h.ctx, null);
         s.clip_here = h.clipboard_enabled(h.ctx, null) != null;
-        s.clip = h.clipboard_enabled(h.ctx, null) orelse false;
         s.sync = h.sync_status(h.ctx);
         s.version = h.version(h.ctx);
         s.ready = h.ready(h.ctx);
@@ -148,25 +203,26 @@ pub const Settings = struct {
     }
 
     fn body(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
+        const clip = s.clip_here;
         const col = ui.div(c).column().wFull().px(20).pt(2).pb(6).gap(if (mac) 8 else 10).grow();
         defer col.end();
         label(c, p, "Open Nanolight with");
         s.choices(c, n, p);
         label(c, p, "Search");
         s.switchRow(c, n, p, rows, .suggest, "Google Suggestions");
-        if (mac) s.switchRow(c, n, p, rows, .files, "File Search");
-        if (mac) s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
-        if (mac or !nix) label(c, p, "This " ++ @import("results.zig").machine);
-        if (!nix) s.switchRow(c, n, p, rows, .login, "Open at Login");
-        if (mac) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
-        if (s.clip_here) {
+        if (present(.files, clip)) s.switchRow(c, n, p, rows, .files, "File Search");
+        if (present(.browser, clip)) s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
+        if (present(.login, clip) or present(.menu_bar, clip)) label(c, p, "This " ++ @import("results.zig").machine);
+        if (present(.login, clip)) s.switchRow(c, n, p, rows, .login, "Open at Login");
+        if (present(.menu_bar, clip)) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
+        if (present(.clipboard, clip)) {
             label(c, p, "Clipboard History");
             s.switchRow(c, n, p, rows, .clipboard, "Record Copied Items");
             s.button(c, n, p, rows, .clear_clipboard, if (s.cleared) "Clipboard History Cleared" else "Clear History");
         }
-        label(c, p, if (@import("builtin").os.tag == .macos) "Sync Across Macs" else "Sync Across Computers");
+        label(c, p, if (mac) "Sync Across Macs" else "Sync Across Computers");
         ui.text(c, s.sync, .{ .size = 12.5, .color = p.sub });
-        if (!nix) {
+        if (present(.updates, clip)) {
             label(c, p, "Updates");
             s.updates(c, n, p, rows);
         }
@@ -233,22 +289,22 @@ pub const Settings = struct {
         h.apply(h.ctx, ch);
     }
 
-    fn switchRow(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind, kind: RowKind, title: []const u8) void {
-        const on = isSel(rows, s.sel, kind);
+    fn switchRow(
+        s: *Settings,
+        c: *ui.Context,
+        n: *panel.Nanolight,
+        p: Palette,
+        rows: []const RowKind,
+        t: Toggle,
+        title: []const u8,
+    ) void {
+        const on = isSel(rows, s.sel, t.row());
         const d = ui.div(c).row().wFull().h(36).px(4).gap(10).itemsCenter().rounded(10).control().bg(if (on) p.sel else p.fill.alpha(0));
         defer d.end();
-        if (d.clicked()) s.flip(n, kind);
+        if (d.clicked()) s.flip(n, t);
         ui.text(c, title, .{ .size = 13.5, .weight = .medium, .color = p.text });
         ui.spacer(c);
-        mark(c, p, switch (kind) {
-            .suggest => s.suggest,
-            .files => s.files,
-            .browser => s.browser,
-            .login => s.login,
-            .menu_bar => s.menu_bar,
-            .clipboard => s.clip,
-            else => false,
-        });
+        mark(c, p, t.get(n, s.hooks(n)));
     }
 
     /// A quiet on/off mark. Not `ui.toggle`: that flips on its own click,
@@ -263,40 +319,9 @@ pub const Settings = struct {
         if (!on) ui.spacer(c);
     }
 
-    fn flip(s: *Settings, n: *panel.Nanolight, kind: RowKind) void {
+    fn flip(s: *Settings, n: *panel.Nanolight, t: Toggle) void {
         const h = s.hooks(n);
-        switch (kind) {
-            .suggest => {
-                n.suggest_on = !n.suggest_on;
-                s.suggest = n.suggest_on;
-                n.built = 1;
-                if (h) |host| host.suggest(host.ctx, s.suggest);
-            },
-            .files => {
-                n.files_on = !n.files_on;
-                s.files = n.files_on;
-                n.built = 1;
-                if (n.kv) |kv| kv.set(@import("files.zig").enabled_key, if (n.files_on) "1" else "0") catch {};
-            },
-            .browser => {
-                n.searches_out = !n.searches_out;
-                s.browser = n.searches_out;
-                if (h) |host| host.searches_out(host.ctx, s.browser);
-            },
-            .login => {
-                const next = !s.login;
-                s.login = if (h) |host| host.login(host.ctx, next) else next;
-            },
-            .menu_bar => {
-                const next = !s.menu_bar;
-                s.menu_bar = if (h) |host| host.menu_bar(host.ctx, next) else next;
-            },
-            .clipboard => {
-                const next = !s.clip;
-                s.clip = if (h) |host| host.clipboard_enabled(host.ctx, next) orelse next else next;
-            },
-            else => {},
-        }
+        t.set(n, h, !t.get(n, h));
     }
 
     fn updates(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette, rows: []const RowKind) void {
@@ -385,7 +410,9 @@ pub const Settings = struct {
         switch (kind) {
             // ←/→ step through the four; Return records one's own.
             .choice => if (mac) s.record(n, !s.recording) else s.nudge(n, s.shown(), 1),
-            .suggest, .files, .browser, .login, .menu_bar, .clipboard => s.flip(n, kind),
+            inline .suggest, .files, .browser, .login, .menu_bar, .clipboard => |k| {
+                s.flip(n, @field(Toggle, @tagName(k)));
+            },
             .clear_clipboard => {
                 if (h) |host| host.clipboard_clear(host.ctx);
                 s.cleared = true;
@@ -407,13 +434,13 @@ pub const Settings = struct {
 /// The theme's swatches, in the header, are the last for ↑/↓.
 fn visible(comptime clip: bool) []const RowKind {
     const T = struct {
+        /// In `RowKind`'s order, which is the drawing's.
         const rows = blk: {
-            var list: [12]RowKind = undefined;
+            const all = @import("std").enums.values(RowKind);
+            var list: [all.len]RowKind = undefined;
             var n: usize = 0;
-            for ([_]RowKind{ .choice, .suggest, .files, .browser, .login, .menu_bar, .clipboard, .clear_clipboard, .updates, .welcome, .quit, .theme }) |k| {
-                if (!mac and (k == .files or k == .browser or k == .menu_bar)) continue;
-                if (nix and (k == .login or k == .updates)) continue;
-                if (!clip and (k == .clipboard or k == .clear_clipboard)) continue;
+            for (all) |k| {
+                if (!present(k, clip)) continue;
                 list[n] = k;
                 n += 1;
             }

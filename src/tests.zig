@@ -427,6 +427,8 @@ pub const Prefs = struct {
     clip_on: ?bool = null,
     clip_cleared: u8 = 0,
     box: SettingsHost = undefined,
+    /// The panel whose suggestions and searches the app's host would set.
+    nl: ?*view.Nanolight = null,
 
     pub fn init(p: *Prefs) void {
         p.box = .{
@@ -475,11 +477,15 @@ pub const Prefs = struct {
         if (set) |on| p.login_on = on;
         return p.login_on;
     }
-    fn suggestSet(ctx: *anyopaque, _: bool) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).suggest_sets += 1;
+    fn suggestSet(ctx: *anyopaque, on: bool) void {
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.suggest_sets += 1;
+        if (p.nl) |s| s.suggest_on = on;
     }
     fn searchesOut(ctx: *anyopaque, on: bool) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).searches_out = on;
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.searches_out = on;
+        if (p.nl) |s| s.searches_out = on;
     }
     fn themeSet(ctx: *anyopaque, t: @import("palette.zig").Theme) void {
         @as(*Prefs, @ptrCast(@alignCast(ctx))).theme = t;
@@ -520,6 +526,7 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     var s: view.Nanolight = .{ .index = &ix };
     defer s.query.deinit();
     s.host = prefs.host();
+    prefs.nl = &s;
     s.reveal();
     var t: ui.Tester = undefined;
     try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });

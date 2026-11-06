@@ -85,6 +85,7 @@ test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" 
     var s: view.Nanolight = .{ .index = &ix };
     defer s.query.deinit();
     s.host = prefs.host();
+    prefs.nl = &s;
     s.openSettings();
     var t: ui.Tester = undefined;
     try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });
@@ -105,6 +106,37 @@ test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" 
     const quit = t.findText("Quit Nanolight").?;
     try std.testing.expect(quit.y + quit.h <= settings_view.height);
     try std.testing.expect(settings_view.height <= view.max_height);
+}
+
+test "Settings' Open at Login flips what the system says, not a copy" {
+    if (@import("build_options").nix_managed) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var prefs: tests.Prefs = .{};
+    prefs.init();
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = prefs.host();
+    s.openSettings();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = view.max_height,
+        .dark = true,
+    });
+    defer t.deinit();
+    t.settle(1);
+    try t.clickText("Open at Login");
+    t.settle(1);
+    try std.testing.expect(prefs.login_on);
+    // Turned off elsewhere (System Settings) while Settings is open: the
+    // next click turns it on again, from what the system says.
+    prefs.login_on = false;
+    t.settle(1);
+    try t.clickText("Open at Login");
+    t.settle(1);
+    try std.testing.expect(prefs.login_on);
 }
 
 test "Settings' header picks the panel's theme, and keeps it" {
