@@ -32,9 +32,23 @@ pub const ClickThrough = struct {
             objc.msg(void, w.nswindow, "setAcceptsMouseMovedEvents:", .{objc.YES});
             const cls = objc.class("NSEvent");
             var g = objc.Block(ClickThrough, &.{objc.Object}).init(c, seen);
-            c.global = keep(objc.msg(?objc.Object, cls, "addGlobalMonitorForEventsMatchingMask:handler:", .{ mask, @as(*anyopaque, @ptrCast(&g)) }));
+            c.global = keep(
+                objc.msg(
+                    ?objc.Object,
+                    cls,
+                    "addGlobalMonitorForEventsMatchingMask:handler:",
+                    .{ mask, @as(*anyopaque, @ptrCast(&g)) },
+                ),
+            );
             var l = objc.BlockRet(ClickThrough, &.{objc.Object}, ?objc.Object).init(c, seenHere);
-            c.local = keep(objc.msg(?objc.Object, cls, "addLocalMonitorForEventsMatchingMask:handler:", .{ mask, @as(*anyopaque, @ptrCast(&l)) }));
+            c.local = keep(
+                objc.msg(
+                    ?objc.Object,
+                    cls,
+                    "addLocalMonitorForEventsMatchingMask:handler:",
+                    .{ mask, @as(*anyopaque, @ptrCast(&l)) },
+                ),
+            );
         }
         c.update();
     }
@@ -95,7 +109,10 @@ pub fn overPanel(frame: objc.CGRect, at: objc.CGPoint, margin: f64, width: f64, 
 }
 
 test "only the panel takes the mouse, not the clear window round it" {
-    const f: objc.CGRect = .{ .origin = .{ .x = 100, .y = 200 }, .size = .{ .width = 760, .height = 754 } };
+    const f: objc.CGRect = .{
+        .origin = .{ .x = 100, .y = 200 },
+        .size = .{ .width = 760, .height = 754 },
+    };
     // The panel: x 140…820, y from 914 (the top, 40 in) down 300 to 614.
     const t = std.testing;
     try t.expect(overPanel(f, .{ .x = 480, .y = 900 }, 40, 680, 300));

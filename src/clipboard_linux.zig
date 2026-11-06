@@ -11,7 +11,8 @@ const wl = @import("clipboard_wl.zig");
 
 pub const Watcher = struct {
     pub const available = true;
-    pub const unavailable_reason = "Clipboard history needs an X11 session or a Wayland compositor with the data-control protocol.";
+    pub const unavailable_reason = "Clipboard history needs an X11 session or a Wayland " ++
+        "compositor with the data-control protocol.";
 
     /// Why history cannot run in this session, once `start` failed.
     why: ?[]const u8 = null,
@@ -28,15 +29,18 @@ pub const Watcher = struct {
     /// Opens the Wayland connection if there is data-control, else X11.
     fn pick(w: *Watcher) !void {
         const wayland = env("WAYLAND_DISPLAY") != null;
-        var reason: []const u8 = "Clipboard history needs a display: neither WAYLAND_DISPLAY nor DISPLAY is set.";
+        var reason: []const u8 = "Clipboard history needs a display: neither WAYLAND_DISPLAY " ++
+            "nor DISPLAY is set.";
         if (wayland) {
             w.backend = .{ .wl = .{} };
             if (w.backend.wl.open()) |_| return else |e| {
                 w.backend.wl.close();
                 w.backend = .none;
                 reason = switch (e) {
-                    error.NoDataControl => "This Wayland compositor has no data-control protocol (GNOME has none), so clipboard history cannot watch it.",
-                    else => "Could not connect to the Wayland display (libwayland-client missing?).",
+                    error.NoDataControl => "This Wayland compositor has no data-control " ++
+                        "protocol (GNOME has none), so clipboard history cannot watch it.",
+                    else => "Could not connect to the Wayland display " ++
+                        "(libwayland-client missing?).",
                 };
             }
         }
@@ -126,7 +130,12 @@ pub const gnome_mime = "x-special/gnome-copied-files";
 /// from a copy somewhere else.
 pub const own_mime = "application/x-nanolight-own";
 /// In the order read; STRING is Latin-1 and counts only when it is also UTF-8.
-pub const text_mimes = [_][]const u8{ "text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING" };
+pub const text_mimes = [_][]const u8{
+    "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "text/plain",
+    "STRING",
+};
 const served_text = text_mimes[0..3];
 const served_image = [_][]const u8{png_mime};
 const served_files = [_][]const u8{ uri_mime, gnome_mime, "text/plain" };
@@ -198,7 +207,8 @@ pub const Gather = struct {
         const r = g.current() orelse return null;
         g.at += 1;
         // A hint that cannot be read is treated as a secret.
-        if (r.step == .hint) return if (bytes != null and !std.mem.startsWith(u8, bytes.?, "secret")) g.current() else null;
+        if (r.step == .hint) return if (bytes != null and
+            !std.mem.startsWith(u8, bytes.?, "secret")) g.current() else null;
         const b = bytes orelse return g.current();
         const gpa = std.heap.c_allocator;
         switch (r.step) {
@@ -217,7 +227,16 @@ pub const Gather = struct {
             },
             .image => {
                 const size = clipboard.pngSize(b) orelse return g.current();
-                g.sink.observe(g.sink.ctx, .{ .kind = .image, .png = b, .width = size[0], .height = size[1], .source = g.source });
+                g.sink.observe(
+                    g.sink.ctx,
+                    .{
+                        .kind = .image,
+                        .png = b,
+                        .width = size[0],
+                        .height = size[1],
+                        .source = g.source,
+                    },
+                );
                 return null;
             },
         }
@@ -248,7 +267,9 @@ pub fn uriListPaths(gpa: std.mem.Allocator, list: []const u8) !?[]u8 {
         var i: usize = 0;
         while (i < rest.len) : (i += 1) {
             var c = rest[i];
-            if (c == '%' and i + 2 < rest.len and unhex(rest[i + 1]) != null and unhex(rest[i + 2]) != null) {
+            if (c == '%' and i + 2 < rest.len and unhex(rest[i + 1]) != null and
+                unhex(rest[i + 2]) != null)
+            {
                 c = unhex(rest[i + 1]).? << 4 | unhex(rest[i + 2]).?;
                 i += 2;
             }
@@ -350,7 +371,8 @@ const testing = std.testing;
 
 test "a uri list becomes paths, decoded, skipping what is not a local file" {
     const gpa = testing.allocator;
-    const list = "# comment\r\nfile:///home/a%20b/c.txt\r\nhttps://example.com/x\r\nfile://localhost/tmp/d\r\nfile://host/remote\r\nfile:///tmp/a%0Ab\r\nfile:///tmp/%e2%82%ac\r\n";
+    const list = "# comment\r\nfile:///home/a%20b/c.txt\r\nhttps://example.com/x\r\nfile://" ++
+        "localhost/tmp/d\r\nfile://host/remote\r\nfile:///tmp/a%0Ab\r\nfile:///tmp/%e2%82%ac\r\n";
     const paths = (try uriListPaths(gpa, list)).?;
     defer gpa.free(paths);
     try testing.expectEqualStrings("/home/a b/c.txt\n/tmp/d\n/tmp/\u{20ac}", paths);
@@ -366,8 +388,14 @@ test "paths are served as uris that read back" {
     const gpa = testing.allocator;
     var s = try Served.init(gpa, .{ .kind = .file, .text = "/home/a b/c.txt\n/tmp/\u{20ac}" });
     defer s.deinit();
-    try testing.expectEqualStrings("file:///home/a%20b/c.txt\r\nfile:///tmp/%E2%82%AC\r\n", s.bytes(uri_mime).?);
-    try testing.expectEqualStrings("copy\nfile:///home/a%20b/c.txt\nfile:///tmp/%E2%82%AC", s.bytes(gnome_mime).?);
+    try testing.expectEqualStrings(
+        "file:///home/a%20b/c.txt\r\nfile:///tmp/%E2%82%AC\r\n",
+        s.bytes(uri_mime).?,
+    );
+    try testing.expectEqualStrings(
+        "copy\nfile:///home/a%20b/c.txt\nfile:///tmp/%E2%82%AC",
+        s.bytes(gnome_mime).?,
+    );
     try testing.expectEqualStrings("/home/a b/c.txt\n/tmp/\u{20ac}", s.bytes("text/plain").?);
     const back = (try uriListPaths(gpa, s.bytes(uri_mime).?)).?;
     defer gpa.free(back);
@@ -388,7 +416,9 @@ test "text and images are served in their own types only" {
 }
 
 test "the plan reads the hint, then files, text and image, each once" {
-    const p = plan(&.{ "image/png", "text/html", "STRING", "text/plain", "text/uri-list", hint_mime });
+    const p = plan(
+        &.{ "image/png", "text/html", "STRING", "text/plain", "text/uri-list", hint_mime },
+    );
     try testing.expect(!p.own);
     try testing.expectEqual(@as(usize, 4), p.n);
     try testing.expectEqual(Step.hint, p.steps[0].step);
@@ -419,7 +449,11 @@ const Seen = struct {
 
 test "a gather falls through unreadable and unusable types" {
     var seen: Seen = .{};
-    var g: Gather = .{ .plan = plan(&.{ "text/uri-list", "UTF8_STRING", "image/png" }), .sink = seen.sink(), .source = "app" };
+    var g: Gather = .{
+        .plan = plan(&.{ "text/uri-list", "UTF8_STRING", "image/png" }),
+        .sink = seen.sink(),
+        .source = "app",
+    };
     try testing.expectEqualStrings(uri_mime, g.first().?.mime);
     // A link, not a file: on to the text.
     try testing.expectEqualStrings("UTF8_STRING", g.feed("https://x.org\r\n").?.mime);

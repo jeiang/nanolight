@@ -16,7 +16,12 @@ pub fn isCommand(target: []const u8) bool {
 pub fn init(l: *Live, env: *const std.process.Environ.Map) void {
     const gpa = l.app.gpa;
     l.ext_ui = .{ .gpa = gpa, .back = &l.s.query };
-    l.scripts = .{ .gpa = gpa, .io = l.app.io, .ext = &l.ext_ui, .hooks = .{ .ctx = l, .hide = hide, .redraw = redraw, .copy = copy, .footer = footer } };
+    l.scripts = .{
+        .gpa = gpa,
+        .io = l.app.io,
+        .ext = &l.ext_ui,
+        .hooks = .{ .ctx = l, .hide = hide, .redraw = redraw, .copy = copy, .footer = footer },
+    };
     l.s.ext = &l.ext_ui;
     l.env = env;
 }

@@ -12,7 +12,10 @@ const pview = @import("view.zig");
 const results = @import("results.zig");
 
 /// ⌘K on the Mac; Ctrl+K moves up on a PC, so the actions are on Ctrl+O.
-pub const actions_key: ui.Shortcut = if (@import("builtin").os.tag == .macos) .{ .key = 'k', .cmd = true } else .{ .key = 'o', .ctrl = true };
+pub const actions_key: ui.Shortcut = if (@import("builtin").os.tag == .macos)
+    .{ .key = 'k', .cmd = true }
+else
+    .{ .key = 'o', .ctrl = true };
 const actions_hint = if (@import("builtin").os.tag == .macos) "⌘K" else "Ctrl+O";
 const Palette = pview.Palette;
 
@@ -433,7 +436,8 @@ pub const Ext = struct {
         t.end();
         for (acts, 0..) |a, i| {
             ui.key(c, c.print("rc-act-{d}", .{i}));
-            const r = ui.div(c).row().wFull().h(38).px(12).gap(10).itemsCenter().rounded(9).control();
+            const r = ui.div(c).row().wFull().h(38).px(12).gap(10).itemsCenter().rounded(9)
+                .control();
             if (i == e.act_sel) _ = r.bg(p.sel).border(p.rim);
             if (r.clicked()) e.run(a);
             ui.text(c, a.title(), .{ .size = 13.5, .weight = .medium, .color = p.text });

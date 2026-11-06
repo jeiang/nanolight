@@ -18,7 +18,13 @@ pub fn isSelf(path: []const u8) bool {
     const pool = objc.Pool.push();
     defer pool.pop();
     const id = ours() orelse return false;
-    const b = objc.msg(?objc.Object, objc.class("NSBundle"), "bundleWithPath:", .{objc.nsString(path)}) orelse return false;
+    const b = objc.msg(
+        ?objc.Object,
+        objc.class("NSBundle"),
+        "bundleWithPath:",
+        .{objc.nsString(path)},
+    ) orelse
+        return false;
     const theirs = objc.msg(?objc.Object, b, "bundleIdentifier", .{}) orelse return false;
     return objc.msg(objc.BOOL, id, "isEqualToString:", .{theirs}) != objc.NO;
 }
@@ -29,7 +35,12 @@ pub fn quitOthers() usize {
     defer pool.pop();
     const id = ours() orelse return 0;
     const cls = objc.class("NSRunningApplication");
-    const me = objc.msg(i32, objc.msg(objc.Object, cls, "currentApplication", .{}), "processIdentifier", .{});
+    const me = objc.msg(
+        i32,
+        objc.msg(objc.Object, cls, "currentApplication", .{}),
+        "processIdentifier",
+        .{},
+    );
     const apps = objc.msg(objc.Object, cls, "runningApplicationsWithBundleIdentifier:", .{id});
     var n: usize = 0;
     for (0..objc.msg(objc.NSUInteger, apps, "count", .{})) |i| {

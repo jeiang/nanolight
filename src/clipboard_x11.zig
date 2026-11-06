@@ -26,7 +26,17 @@ const Xlib = struct {
     XFlush: *const fn (*Display) callconv(.c) c_int,
     XSync: *const fn (*Display, c_int) callconv(.c) c_int,
     XSetErrorHandler: *const fn (?ErrorHandler) callconv(.c) ?ErrorHandler,
-    XCreateSimpleWindow: *const fn (*Display, Window, c_int, c_int, c_uint, c_uint, c_uint, c_ulong, c_ulong) callconv(.c) Window,
+    XCreateSimpleWindow: *const fn (
+        *Display,
+        Window,
+        c_int,
+        c_int,
+        c_uint,
+        c_uint,
+        c_uint,
+        c_ulong,
+        c_ulong,
+    ) callconv(.c) Window,
     XDestroyWindow: *const fn (*Display, Window) callconv(.c) c_int,
     XSelectInput: *const fn (*Display, Window, c_long) callconv(.c) c_int,
     XInternAtom: *const fn (*Display, [*:0]const u8, c_int) callconv(.c) Atom,
@@ -34,8 +44,30 @@ const Xlib = struct {
     XConvertSelection: *const fn (*Display, Atom, Atom, Atom, Window, c_ulong) callconv(.c) c_int,
     XSetSelectionOwner: *const fn (*Display, Atom, Window, c_ulong) callconv(.c) c_int,
     XGetSelectionOwner: *const fn (*Display, Atom) callconv(.c) Window,
-    XGetWindowProperty: *const fn (*Display, Window, Atom, c_long, c_long, c_int, Atom, *Atom, *c_int, *c_ulong, *c_ulong, *?[*]u8) callconv(.c) c_int,
-    XChangeProperty: *const fn (*Display, Window, Atom, Atom, c_int, c_int, [*]const u8, c_int) callconv(.c) c_int,
+    XGetWindowProperty: *const fn (
+        *Display,
+        Window,
+        Atom,
+        c_long,
+        c_long,
+        c_int,
+        Atom,
+        *Atom,
+        *c_int,
+        *c_ulong,
+        *c_ulong,
+        *?[*]u8,
+    ) callconv(.c) c_int,
+    XChangeProperty: *const fn (
+        *Display,
+        Window,
+        Atom,
+        Atom,
+        c_int,
+        c_int,
+        [*]const u8,
+        c_int,
+    ) callconv(.c) c_int,
     XDeleteProperty: *const fn (*Display, Window, Atom) callconv(.c) c_int,
     XSendEvent: *const fn (*Display, Window, c_int, c_long, *Event) callconv(.c) c_int,
     XKeysymToKeycode: *const fn (*Display, c_ulong) callconv(.c) u8,
@@ -55,11 +87,60 @@ const Xtst = struct {
 
 /// XEvent: a union 24 longs long; `type` first.
 const Event = extern union { type: c_int, pad: [24]c_long };
-const SelectionEvent = extern struct { type: c_int, serial: c_ulong, send_event: c_int, display: ?*Display, requestor: Window, selection: Atom, target: Atom, property: Atom, time: c_ulong };
-const SelectionRequest = extern struct { type: c_int, serial: c_ulong, send_event: c_int, display: ?*Display, owner: Window, requestor: Window, selection: Atom, target: Atom, property: Atom, time: c_ulong };
-const SelectionClear = extern struct { type: c_int, serial: c_ulong, send_event: c_int, display: ?*Display, window: Window, selection: Atom, time: c_ulong };
-const PropertyEvent = extern struct { type: c_int, serial: c_ulong, send_event: c_int, display: ?*Display, window: Window, atom: Atom, time: c_ulong, state: c_int };
-const FixesEvent = extern struct { type: c_int, serial: c_ulong, send_event: c_int, display: ?*Display, window: Window, subtype: c_int, owner: Window, selection: Atom, timestamp: c_ulong, selection_timestamp: c_ulong };
+const SelectionEvent = extern struct {
+    type: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: ?*Display,
+    requestor: Window,
+    selection: Atom,
+    target: Atom,
+    property: Atom,
+    time: c_ulong,
+};
+const SelectionRequest = extern struct {
+    type: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: ?*Display,
+    owner: Window,
+    requestor: Window,
+    selection: Atom,
+    target: Atom,
+    property: Atom,
+    time: c_ulong,
+};
+const SelectionClear = extern struct {
+    type: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: ?*Display,
+    window: Window,
+    selection: Atom,
+    time: c_ulong,
+};
+const PropertyEvent = extern struct {
+    type: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: ?*Display,
+    window: Window,
+    atom: Atom,
+    time: c_ulong,
+    state: c_int,
+};
+const FixesEvent = extern struct {
+    type: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: ?*Display,
+    window: Window,
+    subtype: c_int,
+    owner: Window,
+    selection: Atom,
+    timestamp: c_ulong,
+    selection_timestamp: c_ulong,
+};
 
 fn as(comptime T: type, ev: *const Event) *const T {
     return @ptrCast(ev);
@@ -160,9 +241,16 @@ pub const X11 = struct {
         x.targets_atom = x.atom("TARGETS");
         x.incr_atom = x.atom("INCR");
         x.prop_atom = x.atom("NANOLIGHT_CLIPBOARD");
-        x.chunk_max = @min(@as(usize, @intCast(@max(0, xl.XMaxRequestSize(d)))) *| 4 -| 100, 256 * 1024);
+        x.chunk_max = @min(
+            @as(usize, @intCast(@max(0, xl.XMaxRequestSize(d)))) *| 4 -| 100,
+            256 * 1024,
+        );
         x.fx.XFixesSelectSelectionInput(d, x.win, x.clipboard_atom, select_owner_mask);
-        x.watch = nanoui.fdwatch.readable(xl.XConnectionNumber(d), x, readable) catch return error.NoConnection;
+        x.watch = nanoui.fdwatch.readable(
+            xl.XConnectionNumber(d),
+            x,
+            readable,
+        ) catch return error.NoConnection;
         _ = xl.XFlush(d);
     }
 
@@ -198,14 +286,16 @@ pub const X11 = struct {
             _ = x.xl.XNextEvent(d, &ev);
             if (ev.type == x.fixes_event) {
                 const e = as(FixesEvent, &ev);
-                if (e.selection == x.clipboard_atom and e.owner != 0 and e.owner != x.win) x.begin(e.owner, e.selection_timestamp);
+                if (e.selection == x.clipboard_atom and e.owner != 0 and
+                    e.owner != x.win) x.begin(e.owner, e.selection_timestamp);
                 continue;
             }
             switch (ev.type) {
                 selection_notify => x.notified(as(SelectionEvent, &ev)),
                 property_notify => x.property(as(PropertyEvent, &ev)),
                 selection_request => x.request(as(SelectionRequest, &ev)),
-                selection_clear => if (as(SelectionClear, &ev).selection == x.clipboard_atom) x.release(),
+                selection_clear => if (as(SelectionClear, &ev)
+                    .selection == x.clipboard_atom) x.release(),
                 else => {},
             }
         }
@@ -225,7 +315,20 @@ pub const X11 = struct {
             var left: c_ulong = 0;
             var data: ?[*]u8 = null;
             const before = x.trap();
-            const rc = x.xl.XGetWindowProperty(x.d.?, owner, x.atom(prop), 0, 64, 0, xa_string, &kind, &format, &n, &left, &data);
+            const rc = x.xl.XGetWindowProperty(
+                x.d.?,
+                owner,
+                x.atom(prop),
+                0,
+                64,
+                0,
+                xa_string,
+                &kind,
+                &format,
+                &n,
+                &left,
+                &data,
+            );
             const ok = x.untrap(before) and rc == 0;
             defer if (data) |p| {
                 _ = x.xl.XFree(p);
@@ -291,13 +394,32 @@ pub const X11 = struct {
         }
     }
 
-    const Prop = struct { kind: Atom = 0, format: c_int = 0, n: c_ulong = 0, left: c_ulong = 0, data: ?[*]u8 = null };
+    const Prop = struct {
+        kind: Atom = 0,
+        format: c_int = 0,
+        n: c_ulong = 0,
+        left: c_ulong = 0,
+        data: ?[*]u8 = null,
+    };
 
     /// Our property, read and deleted; at most `cap` bytes.
     fn take(x: *X11, cap: usize) ?Prop {
         var p: Prop = .{};
         const words: c_long = @intCast((cap + 3) / 4 + 1);
-        if (x.xl.XGetWindowProperty(x.d.?, x.win, x.prop_atom, 0, words, 1, 0, &p.kind, &p.format, &p.n, &p.left, &p.data) != 0) return null;
+        if (x.xl.XGetWindowProperty(
+            x.d.?,
+            x.win,
+            x.prop_atom,
+            0,
+            words,
+            1,
+            0,
+            &p.kind,
+            &p.format,
+            &p.n,
+            &p.left,
+            &p.data,
+        ) != 0) return null;
         return p;
     }
 
@@ -448,7 +570,16 @@ pub const X11 = struct {
         }
         const n: c_int = @intCast(if (format == 32) data.len / @sizeOf(c_ulong) else data.len);
         const before = x.trap();
-        _ = x.xl.XChangeProperty(x.d.?, e.requestor, prop, kind, format, prop_mode_replace, data.ptr, n);
+        _ = x.xl.XChangeProperty(
+            x.d.?,
+            e.requestor,
+            prop,
+            kind,
+            format,
+            prop_mode_replace,
+            data.ptr,
+            n,
+        );
         return x.untrap(before);
     }
 
@@ -460,7 +591,16 @@ pub const X11 = struct {
         var size: c_ulong = data.len;
         const before = x.trap();
         _ = x.xl.XSelectInput(x.d.?, requestor, property_change_mask);
-        _ = x.xl.XChangeProperty(x.d.?, requestor, prop, x.incr_atom, 32, prop_mode_replace, std.mem.asBytes(&size), 1);
+        _ = x.xl.XChangeProperty(
+            x.d.?,
+            requestor,
+            prop,
+            x.incr_atom,
+            32,
+            prop_mode_replace,
+            std.mem.asBytes(&size),
+            1,
+        );
         if (!x.untrap(before)) {
             gpa.free(dup);
             return false;
@@ -495,7 +635,16 @@ pub const X11 = struct {
         if (e.window != o.requestor or e.atom != o.prop or e.state != property_delete) return;
         const n = @min(x.chunk_max, o.data.len - o.at);
         const before = x.trap();
-        _ = x.xl.XChangeProperty(x.d.?, o.requestor, o.prop, o.kind, 8, prop_mode_replace, o.data.ptr + o.at, @intCast(n));
+        _ = x.xl.XChangeProperty(
+            x.d.?,
+            o.requestor,
+            o.prop,
+            o.kind,
+            8,
+            prop_mode_replace,
+            o.data.ptr + o.at,
+            @intCast(n),
+        );
         const ok = x.untrap(before);
         o.at += n;
         if (n == 0 or !ok) x.endOut() else x.stepOut();
@@ -521,7 +670,12 @@ pub const X11 = struct {
         const ctrl = x.xl.XKeysymToKeycode(d, xk_control_l);
         const v = x.xl.XKeysymToKeycode(d, xk_v);
         if (ctrl == 0 or v == 0) return;
-        for ([_][2]c_int{ .{ ctrl, 1 }, .{ v, 1 }, .{ v, 0 }, .{ ctrl, 0 } }) |k| _ = t.XTestFakeKeyEvent(d, @intCast(k[0]), k[1], 0);
+        for ([_][2]c_int{
+            .{ ctrl, 1 },
+            .{ v, 1 },
+            .{ v, 0 },
+            .{ ctrl, 0 },
+        }) |k| _ = t.XTestFakeKeyEvent(d, @intCast(k[0]), k[1], 0);
         _ = x.xl.XFlush(d);
     }
 };

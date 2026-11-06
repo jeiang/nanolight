@@ -31,7 +31,10 @@ pub const ClickThrough = struct {
 };
 
 pub const Recorder = struct {
-    pub const Got = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque, r: @import("shortcut.zig").Recorded) void };
+    pub const Got = struct {
+        ctx: *anyopaque,
+        func: *const fn (ctx: *anyopaque, r: @import("shortcut.zig").Recorded) void,
+    };
     pub fn active(_: *const Recorder) bool {
         return false;
     }

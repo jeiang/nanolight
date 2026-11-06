@@ -221,14 +221,10 @@ const Parser = struct {
         const start = p.i;
         while (p.i < p.s.len and numeric(p.s[p.i], p.commas)) p.i += 1;
         // 1e3, 2.5E-4
-        if (p.i + 1 < p.s.len and (p.s[p.i] == 'e' or p.s[p.i] == 'E')) {
-            const next = p.s[p.i + 1];
-            const signed = (next == '-' or next == '+') and p.i + 2 < p.s.len and
-                std.ascii.isDigit(p.s[p.i + 2]);
-            if (std.ascii.isDigit(next) or signed) {
-                p.i += 2;
-                while (p.i < p.s.len and std.ascii.isDigit(p.s[p.i])) p.i += 1;
-            }
+        const exponent = p.exponentMark();
+        if (exponent > 0) {
+            p.i += exponent;
+            while (p.i < p.s.len and std.ascii.isDigit(p.s[p.i])) p.i += 1;
         }
         const text = p.s[start..p.i];
         if (std.mem.indexOfScalar(u8, text, ',') == null) {
@@ -244,6 +240,19 @@ const Parser = struct {
             n += 1;
         }
         return std.fmt.parseFloat(f64, buf[0..n]) catch error.Syntax;
+    }
+
+    /// The length of an exponent's mark ("e", "E-") at `p.i`, when digits follow
+    /// it; else 0.
+    fn exponentMark(p: *const Parser) usize {
+        const rest = p.s[p.i..];
+        if (rest.len < 2) return 0;
+        if (rest[0] != 'e' and rest[0] != 'E') return 0;
+        if (std.ascii.isDigit(rest[1])) return 1;
+        if (rest[1] != '-' and rest[1] != '+') return 0;
+        if (rest.len < 3) return 0;
+        if (!std.ascii.isDigit(rest[2])) return 0;
+        return 2;
     }
 
     /// A constant, or a function name and its opening parenthesis.

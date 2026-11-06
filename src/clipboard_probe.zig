@@ -23,8 +23,19 @@ fn say(comptime fmt: []const u8, args: anytype) void {
 
 fn observe(_: *anyopaque, item: clipboard.Item) void {
     switch (item.kind) {
-        .image => say("observed image {d}x{d} {d} bytes source=\"{s}\"", .{ item.width, item.height, item.png.len, item.source }),
-        else => say("observed {t} {d} bytes \"{f}\" source=\"{s}\"", .{ item.kind, item.text.len, std.zig.fmtString(clipboard.clip(item.text, 80)), item.source }),
+        .image => say(
+            "observed image {d}x{d} {d} bytes source=\"{s}\"",
+            .{ item.width, item.height, item.png.len, item.source },
+        ),
+        else => say(
+            "observed {t} {d} bytes \"{f}\" source=\"{s}\"",
+            .{
+                item.kind,
+                item.text.len,
+                std.zig.fmtString(clipboard.clip(item.text, 80)),
+                item.source,
+            },
+        ),
     }
 }
 
@@ -38,7 +49,10 @@ fn hide(_: *anyopaque) void {
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 3) return say("usage: clip-probe watch|paste-text|paste-png|paste-files ... <seconds>", .{});
+    if (args.len < 3) return say(
+        "usage: clip-probe watch|paste-text|paste-png|paste-files ... <seconds>",
+        .{},
+    );
     const secs = try std.fmt.parseInt(u64, args[args.len - 1], 10);
     var w: clipboard.Watcher = .{};
     var token: u8 = 0;
@@ -47,16 +61,28 @@ pub fn main(init: std.process.Init) !void {
     };
     say("started: {s}", .{@tagName(w.backend)});
     if (std.mem.eql(u8, args[1], "paste-text")) {
-        say("paste -> {t}", .{w.paste(.{ .kind = .text, .text = args[2] }, .{ .ctx = &token, .func = hide })});
+        say(
+            "paste -> {t}",
+            .{w.paste(.{ .kind = .text, .text = args[2] }, .{ .ctx = &token, .func = hide })},
+        );
     } else if (std.mem.eql(u8, args[1], "paste-png")) {
-        const png = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], init.arena.allocator(), .limited(clipboard.max_image));
-        say("paste -> {t}", .{w.paste(.{ .kind = .image, .png = png }, .{ .ctx = &token, .func = hide })});
+        const png = try std.Io.Dir.cwd()
+            .readFileAlloc(init.io, args[2], init.arena.allocator(), .limited(clipboard.max_image));
+        say(
+            "paste -> {t}",
+            .{w.paste(.{ .kind = .image, .png = png }, .{ .ctx = &token, .func = hide })},
+        );
     } else if (std.mem.eql(u8, args[1], "paste-files")) {
         const joined = try std.mem.join(init.arena.allocator(), "\n", args[2 .. args.len - 1]);
-        say("paste -> {t}", .{w.paste(.{ .kind = .file, .text = joined }, .{ .ctx = &token, .func = hide })});
+        say(
+            "paste -> {t}",
+            .{w.paste(.{ .kind = .file, .text = joined }, .{ .ctx = &token, .func = hide })},
+        );
     }
     nanoui.App.after(secs * 1000, null, finish);
-    const iterate: *const fn (?*anyopaque, c_int) callconv(.c) c_int = @ptrCast(std.c.dlsym(null, "g_main_context_iteration") orelse return say("no glib", .{}));
+    const iterate: *const fn (?*anyopaque, c_int) callconv(.c) c_int = @ptrCast(
+        std.c.dlsym(null, "g_main_context_iteration") orelse return say("no glib", .{}),
+    );
     while (!done) _ = iterate(null, 1);
     say("done", .{});
 }

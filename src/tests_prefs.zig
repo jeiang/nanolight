@@ -58,7 +58,10 @@ test "searches can open in the browser, ⌘↩ showing them in the panel (issue 
     // Return: the browser, and the panel goes.
     findRow(t, s, "pizza");
     support.press(t, &.{.{ .command = .insert_newline }});
-    try std.testing.expectEqualStrings("https://www.google.com/search?q=pizza", web.probe.opened[0..web.probe.opened_len]);
+    try std.testing.expectEqualStrings(
+        "https://www.google.com/search?q=pizza",
+        web.probe.opened[0..web.probe.opened_len],
+    );
     try std.testing.expect(web.probe.hidden and web.page_len == null and !s.previewing);
     // ⌘↩: the page in the panel, which stays.
     web.probe = .{};
@@ -66,7 +69,10 @@ test "searches can open in the browser, ⌘↩ showing them in the panel (issue 
     t.settle(1);
     findRow(t, s, "pasta");
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
-    try std.testing.expectEqualStrings("https://www.google.com/search?q=pasta", web.page[0..web.page_len.?]);
+    try std.testing.expectEqualStrings(
+        "https://www.google.com/search?q=pasta",
+        web.page[0..web.page_len.?],
+    );
     try std.testing.expect(!web.probe.hidden and web.probe.opened_len == 0 and s.previewing);
 }
 
@@ -208,7 +214,10 @@ test "System Settings' panes open from the panel, which stays in its window (#12
     try std.testing.expect(t.hasText("Login Items & Extensions"));
     try std.testing.expect(t.hasText("Open in System Settings"));
     support.press(t, &.{.{ .command = .insert_newline }});
-    try std.testing.expectEqualStrings("x-apple.systempreferences:com.apple.LoginItems-Settings.extension", web.probe.opened[0..web.probe.opened_len]);
+    try std.testing.expectEqualStrings(
+        "x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
+        web.probe.opened[0..web.probe.opened_len],
+    );
     try std.testing.expect(web.probe.hidden);
     // Every app row, a pane, and Google's completions: the tallest list
     // with four sections still fits.

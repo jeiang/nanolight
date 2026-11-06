@@ -41,7 +41,12 @@ extern "kernel32" fn GlobalUnlock(mem: *anyopaque) callconv(.winapi) i32;
 extern "kernel32" fn GlobalSize(mem: *anyopaque) callconv(.winapi) usize;
 extern "kernel32" fn OpenProcess(access: u32, inherit: i32, pid: u32) callconv(.winapi) HANDLE;
 extern "kernel32" fn CloseHandle(h: *anyopaque) callconv(.winapi) i32;
-extern "kernel32" fn QueryFullProcessImageNameW(process: *anyopaque, flags: u32, name: [*]u16, len: *u32) callconv(.winapi) i32;
+extern "kernel32" fn QueryFullProcessImageNameW(
+    process: *anyopaque,
+    flags: u32,
+    name: [*]u16,
+    len: *u32,
+) callconv(.winapi) i32;
 extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
 extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
 
@@ -86,7 +91,8 @@ pub fn dibToPng(gpa: std.mem.Allocator, dib: []const u8) Error![]u8 {
     const bits = std.mem.readInt(u16, dib[14..16], .little);
     const compression = le32(dib, 16);
     if (w_signed <= 0 or h_signed == 0) return error.Corrupt;
-    if ((bits != 24 and bits != 32) or (compression != 0 and compression != 3)) return error.Unsupported;
+    if ((bits != 24 and bits != 32) or (compression != 0 and
+        compression != 3)) return error.Unsupported;
     const w: usize = @intCast(w_signed);
     const h: usize = @abs(h_signed);
     if (w * h > max_pixels) return error.TooLarge;
@@ -96,7 +102,8 @@ pub fn dibToPng(gpa: std.mem.Allocator, dib: []const u8) Error![]u8 {
         // Only the usual B, G, R byte order.
         if (bits != 32 or dib.len < 52) return error.Unsupported;
         const r = le32(dib, 40);
-        if (r != 0x00ff0000 or le32(dib, 44) != 0x0000ff00 or le32(dib, 48) != 0x000000ff) return error.Unsupported;
+        if (r != 0x00ff0000 or le32(dib, 44) != 0x0000ff00 or
+            le32(dib, 48) != 0x000000ff) return error.Unsupported;
         if (header >= 56) alpha_mask = le32(dib, 52);
         if (header == 40) offset += 12;
     }
@@ -122,7 +129,10 @@ pub fn dibToPng(gpa: std.mem.Allocator, dib: []const u8) Error![]u8 {
             px[3] = a;
         }
     }
-    return nanoui.ui.png.encode(gpa, .{ .bytes = bytes, .width = w, .height = h }) catch error.OutOfMemory;
+    return nanoui.ui.png.encode(
+        gpa,
+        .{ .bytes = bytes, .width = w, .height = h },
+    ) catch error.OutOfMemory;
 }
 
 /// The pixels of a PNG as straight RGBA rows (8-bit, RGB or RGBA, not
@@ -132,7 +142,8 @@ const Rgba = struct { w: usize, h: usize, px: []u8 };
 fn pngPixels(gpa: std.mem.Allocator, png: []const u8) Error!Rgba {
     if (clipboard.pngSize(png) == null) return error.Corrupt;
     const size = clipboard.pngSize(png).?;
-    if (png.len < 29 or png[24] != 8 or (png[25] != 2 and png[25] != 6) or png[28] != 0) return error.Unsupported;
+    if (png.len < 29 or png[24] != 8 or (png[25] != 2 and png[25] != 6) or
+        png[28] != 0) return error.Unsupported;
     const w: usize = size[0];
     const h: usize = size[1];
     if (w == 0 or h == 0 or w * h > max_pixels) return error.TooLarge;
@@ -143,14 +154,21 @@ fn pngPixels(gpa: std.mem.Allocator, png: []const u8) Error!Rgba {
     while (pos + 12 <= png.len) {
         const len = std.mem.readInt(u32, png[pos..][0..4], .big);
         if (len > png.len - pos - 12) return error.Corrupt;
-        if (std.mem.eql(u8, png[pos + 4 ..][0..4], "IDAT")) try idat.appendSlice(gpa, png[pos + 8 ..][0..len]);
+        if (std.mem.eql(
+            u8,
+            png[pos + 4 ..][0..4],
+            "IDAT",
+        )) try idat.appendSlice(gpa, png[pos + 8 ..][0..len]);
         pos += 12 + len;
     }
     const window = try gpa.alloc(u8, std.compress.flate.max_window_len);
     defer gpa.free(window);
     var input: std.Io.Reader = .fixed(idat.items);
     var inflate: std.compress.flate.Decompress = .init(&input, .zlib, window);
-    const raw = inflate.reader.allocRemaining(gpa, .limited(h * (w * bpp + 1) + 1)) catch return error.Corrupt;
+    const raw = inflate.reader.allocRemaining(
+        gpa,
+        .limited(h * (w * bpp + 1) + 1),
+    ) catch return error.Corrupt;
     defer gpa.free(raw);
     const row_len = w * bpp;
     if (raw.len != h * (row_len + 1)) return error.Corrupt;
@@ -160,7 +178,10 @@ fn pngPixels(gpa: std.mem.Allocator, png: []const u8) Error!Rgba {
     for (0..h) |y| {
         const row = raw[y * (row_len + 1) ..][0 .. row_len + 1];
         const cur = row[1..];
-        const prev: ?[]const u8 = if (y == 0) null else raw[(y - 1) * (row_len + 1) + 1 ..][0..row_len];
+        const prev: ?[]const u8 = if (y == 0)
+            null
+        else
+            raw[(y - 1) * (row_len + 1) + 1 ..][0..row_len];
         for (0..row_len) |i| {
             const a: i32 = if (i >= bpp) cur[i - bpp] else 0;
             const b: i32 = if (prev) |p| p[i] else 0;
@@ -209,7 +230,9 @@ pub fn pngToDib(gpa: std.mem.Allocator, png: []const u8) Error![]u8 {
         for (0..img.w) |x| {
             const s = img.px[(y * img.w + x) * 4 ..][0..4];
             const a: u32 = s[3];
-            for (0..3) |c| dst[x * 4 + c] = @intCast((@as(u32, s[2 - c]) * a + 255 * (255 - a) + 127) / 255);
+            for (0..3) |c| dst[x * 4 + c] = @intCast(
+                (@as(u32, s[2 - c]) * a + 255 * (255 - a) + 127) / 255,
+            );
             dst[x * 4 + 3] = 255;
         }
     }
@@ -302,7 +325,9 @@ fn data(format: u32) ?[]const u8 {
 /// Whether the content asks not to be kept: the monitor-exclusion format,
 /// or the history format holding a DWORD 0. The clipboard is open.
 fn marked() bool {
-    if (IsClipboardFormatAvailable(registered("ExcludeClipboardContentFromMonitorProcessing")) != 0) return true;
+    if (IsClipboardFormatAvailable(
+        registered("ExcludeClipboardContentFromMonitorProcessing"),
+    ) != 0) return true;
     const history = registered("CanIncludeInClipboardHistory");
     if (IsClipboardFormatAvailable(history) == 0) return false;
     const d = data(history) orelse return false;
@@ -324,7 +349,8 @@ fn processName(hwnd: HANDLE, buf: []u8) []const u8 {
 
 fn ownedByUs(hwnd: HANDLE) bool {
     var pid: u32 = 0;
-    return hwnd != null and GetWindowThreadProcessId(hwnd, &pid) != 0 and pid == GetCurrentProcessId();
+    return hwnd != null and GetWindowThreadProcessId(hwnd, &pid) != 0 and
+        pid == GetCurrentProcessId();
 }
 
 /// Writes one format; the clipboard is open. The block is the clipboard's
@@ -414,7 +440,10 @@ pub const Watcher = struct {
         const png = dibToPng(gpa, dib) catch return;
         defer gpa.free(png);
         const size = clipboard.pngSize(png) orelse .{ 0, 0 };
-        sink.observe(sink.ctx, .{ .kind = .image, .png = png, .width = size[0], .height = size[1], .source = owner });
+        sink.observe(
+            sink.ctx,
+            .{ .kind = .image, .png = png, .width = size[0], .height = size[1], .source = owner },
+        );
     }
 
     /// The window in front now, unless it is ours: where a paste goes.
@@ -482,11 +511,17 @@ test "wide text stops at the NUL and rejects a lone surrogate" {
     const cut = try wideToUtf8(testing.allocator, &.{ 'a', 'b', 0, 'c' });
     defer testing.allocator.free(cut);
     try testing.expectEqualStrings("ab", cut);
-    try testing.expectError(error.ExpectedSecondSurrogateHalf, wideToUtf8(testing.allocator, &.{ 0xd800, 'a' }));
+    try testing.expectError(
+        error.ExpectedSecondSurrogateHalf,
+        wideToUtf8(testing.allocator, &.{ 0xd800, 'a' }),
+    );
 }
 
 test "a process path is cut to its exe name" {
-    try testing.expectEqualStrings("Bitwarden.exe", exeName("C:\\Program Files\\Bitwarden\\Bitwarden.exe"));
+    try testing.expectEqualStrings(
+        "Bitwarden.exe",
+        exeName("C:\\Program Files\\Bitwarden\\Bitwarden.exe"),
+    );
     try testing.expectEqualStrings("a.exe", exeName("a.exe"));
 }
 

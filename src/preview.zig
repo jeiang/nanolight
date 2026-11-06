@@ -27,8 +27,19 @@ pub const Preview = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         const web = p.web orelse p.make(window) orelse return;
-        const u = objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString(url)}) orelse return;
-        _ = objc.msg(?objc.Object, web, "loadRequest:", .{objc.msg(objc.Object, objc.class("NSURLRequest"), "requestWithURL:", .{u})});
+        const u = objc.msg(
+            ?objc.Object,
+            objc.class("NSURL"),
+            "URLWithString:",
+            .{objc.nsString(url)},
+        ) orelse
+            return;
+        _ = objc.msg(
+            ?objc.Object,
+            web,
+            "loadRequest:",
+            .{objc.msg(objc.Object, objc.class("NSURLRequest"), "requestWithURL:", .{u})},
+        );
         p.fit(h);
         objc.msg(void, web, "setHidden:", .{objc.NO});
     }
@@ -41,7 +52,12 @@ pub const Preview = struct {
         defer pool.pop();
         objc.msg(void, web, "setHidden:", .{objc.YES});
         objc.msg(void, web, "stopLoading", .{});
-        _ = objc.msg(?objc.Object, web, "loadHTMLString:baseURL:", .{ objc.nsString(""), @as(?objc.Object, null) });
+        _ = objc.msg(
+            ?objc.Object,
+            web,
+            "loadHTMLString:baseURL:",
+            .{ objc.nsString(""), @as(?objc.Object, null) },
+        );
     }
 
     pub fn showing(p: *const Preview) bool {
@@ -58,7 +74,17 @@ pub const Preview = struct {
         var y: f64 = m + area.y;
         if (objc.msg(objc.BOOL, host, "isFlipped", .{}) == objc.NO)
             y = objc.msg(objc.CGRect, host, "bounds", .{}).size.height - y - area.h;
-        objc.msg(void, web, "setFrame:", .{objc.CGRect{ .origin = .{ .x = m, .y = y }, .size = .{ .width = view.width, .height = area.h } }});
+        objc.msg(
+            void,
+            web,
+            "setFrame:",
+            .{
+                objc.CGRect{
+                    .origin = .{ .x = m, .y = y },
+                    .size = .{ .width = view.width, .height = area.h },
+                },
+            },
+        );
     }
 
     /// The page's address now (it may have been followed on), into `buf`.
@@ -79,9 +105,22 @@ pub const Preview = struct {
         const config = objc.msg(objc.Object, objc.alloc("WKWebViewConfiguration"), "init", .{});
         defer objc.release(config);
         var ua: [64]u8 = undefined;
-        objc.msg(void, config, "setApplicationNameForUserAgent:", .{objc.nsString(safariName(&ua))});
-        const zero: objc.CGRect = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 0, .height = 0 } };
-        const web = objc.msg(objc.Object, objc.alloc("WKWebView"), "initWithFrame:configuration:", .{ zero, config });
+        objc.msg(
+            void,
+            config,
+            "setApplicationNameForUserAgent:",
+            .{objc.nsString(safariName(&ua))},
+        );
+        const zero: objc.CGRect = .{
+            .origin = .{ .x = 0, .y = 0 },
+            .size = .{ .width = 0, .height = 0 },
+        };
+        const web = objc.msg(
+            objc.Object,
+            objc.alloc("WKWebView"),
+            "initWithFrame:configuration:",
+            .{ zero, config },
+        );
         // Clear until the page draws: the panel's "Searching" shows through.
         const no = objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{objc.NO});
         objc.msg(void, web, "setValue:forKey:", .{ no, objc.nsString("drawsBackground") });
@@ -90,7 +129,14 @@ pub const Preview = struct {
         const cls = objc.defineClass(.{
             .name = "NanolightPreviewUI",
             .protocols = &.{"WKUIDelegate"},
-            .methods = &.{.{ .name = "webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:", .imp = &newWindow, .types = "@@:@@@@" }},
+            .methods = &.{
+                .{
+                    .name = "webView:createWebViewWithConfiguration:forNavigationAction:" ++
+                        "windowFeatures:",
+                    .imp = &newWindow,
+                    .types = "@@:@@@@",
+                },
+            },
         });
         const delegate = objc.msg(objc.Object, cls, "new", .{});
         objc.msg(void, web, "setUIDelegate:", .{delegate});
@@ -107,7 +153,12 @@ pub const Preview = struct {
         p.watcher = w;
         var block = objc.BlockRet(Preview, &.{objc.Object}, ?objc.Object).init(p, keyDown);
         const key_down_mask: u64 = 1 << 10;
-        _ = objc.msg(?objc.Object, objc.class("NSEvent"), "addLocalMonitorForEventsMatchingMask:handler:", .{ key_down_mask, @as(*anyopaque, @ptrCast(&block)) });
+        _ = objc.msg(
+            ?objc.Object,
+            objc.class("NSEvent"),
+            "addLocalMonitorForEventsMatchingMask:handler:",
+            .{ key_down_mask, @as(*anyopaque, @ptrCast(&block)) },
+        );
     }
 
     fn keyDown(p: *Preview, ev: objc.Object) ?objc.Object {
@@ -127,7 +178,14 @@ pub const Preview = struct {
 };
 
 /// A link that asks for a new window loads here instead.
-fn newWindow(_: objc.Object, _: objc.SEL, web: objc.Object, _: objc.Object, action: objc.Object, _: objc.Object) callconv(.c) ?objc.Object {
+fn newWindow(
+    _: objc.Object,
+    _: objc.SEL,
+    web: objc.Object,
+    _: objc.Object,
+    action: objc.Object,
+    _: objc.Object,
+) callconv(.c) ?objc.Object {
     const req = objc.msg(objc.Object, action, "request", .{});
     _ = objc.msg(?objc.Object, web, "loadRequest:", .{req});
     return null;
@@ -136,9 +194,24 @@ fn newWindow(_: objc.Object, _: objc.SEL, web: objc.Object, _: objc.Object, acti
 /// "Version/26.1 Safari/605.1.15", with the installed Safari's version.
 fn safariName(buf: []u8) []const u8 {
     var version: []const u8 = "26.0";
-    for ([_][]const u8{ "/System/Cryptexes/App/System/Applications/Safari.app", "/Applications/Safari.app" }) |path| {
-        const b = objc.msg(?objc.Object, objc.class("NSBundle"), "bundleWithPath:", .{objc.nsString(path)}) orelse continue;
-        const v = objc.msg(?objc.Object, b, "objectForInfoDictionaryKey:", .{objc.nsString("CFBundleShortVersionString")}) orelse continue;
+    for ([_][]const u8{
+        "/System/Cryptexes/App/System/Applications/Safari.app",
+        "/Applications/Safari.app",
+    }) |path| {
+        const b = objc.msg(
+            ?objc.Object,
+            objc.class("NSBundle"),
+            "bundleWithPath:",
+            .{objc.nsString(path)},
+        ) orelse
+            continue;
+        const v = objc.msg(
+            ?objc.Object,
+            b,
+            "objectForInfoDictionaryKey:",
+            .{objc.nsString("CFBundleShortVersionString")},
+        ) orelse
+            continue;
         const s = objc.fromNSString(v);
         if (s.len > 0 and s.len < 16) {
             version = s;

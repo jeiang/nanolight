@@ -81,5 +81,9 @@ fn accepted(_: ?*anyopaque) callconv(.c) void {
     if (got <= 0) return;
     const line = std.mem.trim(u8, buf[0..@intCast(got)], " \r\n");
     const l = listener orelse return;
-    if (std.mem.eql(u8, line, "quit")) l.func(l.ctx, .quit) else if (std.mem.eql(u8, line, "toggle")) l.func(l.ctx, .toggle);
+    if (std.mem.eql(u8, line, "quit")) l.func(l.ctx, .quit) else if (std.mem.eql(
+        u8,
+        line,
+        "toggle",
+    )) l.func(l.ctx, .toggle);
 }

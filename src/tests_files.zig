@@ -29,7 +29,11 @@ test "files share the local results' head and fit the original window" {
             if (exact) found.add("/tmp/settings", true, .{ .score = 2000 });
             for (0..5) |i| {
                 var path: [64]u8 = undefined;
-                found.add(try std.fmt.bufPrint(&path, "/tmp/settings{d}", .{i}), false, .{ .score = 0 });
+                found.add(
+                    try std.fmt.bufPrint(&path, "/tmp/settings{d}", .{i}),
+                    false,
+                    .{ .score = 0 },
+                );
             }
             s.filesAnswered(q, &found);
             s.answered(q, &four);
@@ -47,7 +51,10 @@ test "files share the local results' head and fit the original window" {
             try std.testing.expect(file_rows > 0);
             // Results, Search and Quicklinks: files bring no head of their own.
             try std.testing.expectEqual(@as(usize, 3), heads);
-            if (exact) try std.testing.expectEqual(results.Kind.file, s.res.rows[@intFromBool(settings)].kind);
+            if (exact) try std.testing.expectEqual(
+                results.Kind.file,
+                s.res.rows[@intFromBool(settings)].kind,
+            );
             // Every quicklink still follows, X's last, and one search for what was typed.
             try std.testing.expectEqual(results.Kind.quicklink, s.res.rows[s.res.n - 1].kind);
             try std.testing.expectEqual(@as(u16, 4), s.res.rows[s.res.n - 1].ql);
@@ -99,18 +106,41 @@ test "file tiers merge duplicates and keep exact names against many subsequences
 test "Spotlight predicates prioritize literal names before subsequences" {
     const files = @import("files.zig");
     var buf: [2048]u8 = undefined;
-    try std.testing.expectEqualStrings("kMDItemFSName == \"readme\"cd", files.predicate(&buf, "readme", .exact).?);
-    try std.testing.expectEqualStrings("kMDItemFSName == \"readme*\"cd", files.predicate(&buf, "readme", .prefix).?);
-    try std.testing.expectEqualStrings("kMDItemFSName == \"* readme*\"cd", files.predicate(&buf, "readme", .word).?);
-    try std.testing.expectEqualStrings("kMDItemFSName == \"*r*e*a*d*m*e*\"cd", files.predicate(&buf, "readme", .subsequence).?);
-    try std.testing.expectEqualStrings("kMDItemFSName == \"a\\*\\?\\\"\\\\*\"cd", files.predicate(&buf, "a*?\"\\", .prefix).?);
+    try std.testing.expectEqualStrings(
+        "kMDItemFSName == \"readme\"cd",
+        files.predicate(&buf, "readme", .exact).?,
+    );
+    try std.testing.expectEqualStrings(
+        "kMDItemFSName == \"readme*\"cd",
+        files.predicate(&buf, "readme", .prefix).?,
+    );
+    try std.testing.expectEqualStrings(
+        "kMDItemFSName == \"* readme*\"cd",
+        files.predicate(&buf, "readme", .word).?,
+    );
+    try std.testing.expectEqualStrings(
+        "kMDItemFSName == \"*r*e*a*d*m*e*\"cd",
+        files.predicate(&buf, "readme", .subsequence).?,
+    );
+    try std.testing.expectEqualStrings(
+        "kMDItemFSName == \"a\\*\\?\\\"\\\\*\"cd",
+        files.predicate(&buf, "a*?\"\\", .prefix).?,
+    );
 }
 
 test "name search excludes the home Library subtree by default" {
     const files = @import("files.zig");
     if (files.home().len == 0) return;
     var buf: [files.max_path]u8 = undefined;
-    for ([_][]const u8{ "Library", "Library/Application Support/App/readme", "Library/Logs/readme", "Library/WebKit/readme", "Library/HTTPStorages/readme", "Library/Application Scripts/readme", "Library/Caches/readme" }) |part| {
+    for ([_][]const u8{
+        "Library",
+        "Library/Application Support/App/readme",
+        "Library/Logs/readme",
+        "Library/WebKit/readme",
+        "Library/HTTPStorages/readme",
+        "Library/Application Scripts/readme",
+        "Library/Caches/readme",
+    }) |part| {
         const path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ files.home(), part });
         try std.testing.expect(files.excluded(path, ""));
     }
@@ -163,7 +193,12 @@ test "apps, panes, files and quicklinks share the window budget" {
     }
     s.filesAnswered("login", &found);
     var web: suggest.List = .{};
-    for ([_][]const u8{ "login mac", "login windows", "login iphone", "login help" }) |q| web.push(q);
+    for ([_][]const u8{
+        "login mac",
+        "login windows",
+        "login iphone",
+        "login help",
+    }) |q| web.push(q);
     s.answered("login", &web);
     var heads: usize = 0;
     var apps = false;
@@ -201,7 +236,11 @@ test "file icon allocations survive filtering, eviction and owning replacement" 
     try t.expect(@sizeOf(files.Entry) < files.max_path + 1024);
     for (0..files.max_rows) |i| {
         var path: [64]u8 = undefined;
-        found.add(try std.fmt.bufPrint(&path, "/tmp/keep{d}", .{i}), false, .{ .score = @intCast(100 - i) });
+        found.add(
+            try std.fmt.bufPrint(&path, "/tmp/keep{d}", .{i}),
+            false,
+            .{ .score = @intCast(100 - i) },
+        );
         found.entries[i].png = try t.allocator.dupe(u8, "icon");
     }
     found.add("/tmp/keep-new", false, .{ .score = 200 });

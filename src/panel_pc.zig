@@ -51,8 +51,12 @@ fn xid() c_ulong {
     const win = w.gtkwindow orelse return 0;
     const gtk = std.c.dlopen("libgtk-3.so.0", .{ .NOW = true, .NOLOAD = true }) orelse return 0;
     const gdk = std.c.dlopen("libgdk-3.so.0", .{ .NOW = true, .NOLOAD = true }) orelse return 0;
-    const get_window: *const fn (*anyopaque) callconv(.c) ?*anyopaque = @ptrCast(@alignCast(std.c.dlsym(gtk, "gtk_widget_get_window") orelse return 0));
-    const get_xid: *const fn (*anyopaque) callconv(.c) c_ulong = @ptrCast(@alignCast(std.c.dlsym(gdk, "gdk_x11_window_get_xid") orelse return 0));
+    const get_window: *const fn (*anyopaque) callconv(.c) ?*anyopaque = @ptrCast(
+        @alignCast(std.c.dlsym(gtk, "gtk_widget_get_window") orelse return 0),
+    );
+    const get_xid: *const fn (*anyopaque) callconv(.c) c_ulong = @ptrCast(
+        @alignCast(std.c.dlsym(gdk, "gdk_x11_window_get_xid") orelse return 0),
+    );
     const gw = get_window(@ptrCast(win)) orelse return 0;
     return get_xid(gw);
 }
@@ -62,7 +66,10 @@ pub fn place(w: *nanoui.Window) void {
     const m = w.monitorSize();
     // A fifth of the way down, but high enough that the panel at its
     // tallest (a command's screen) stays on a small screen.
-    w.setPosition(@max(0, (m[0] - view.width) / 2), @max(0, @min(m[1] * 0.2, m[1] - view.max_height - 16)));
+    w.setPosition(
+        @max(0, (m[0] - view.width) / 2),
+        @max(0, @min(m[1] * 0.2, m[1] - view.max_height - 16)),
+    );
     // X11: the panel's user time is the hot key's, set before it maps, so a
     // window manager that prevents focus stealing (Xfce, KDE) lets it take
     // the keys from the window that had them.
@@ -72,8 +79,12 @@ pub fn place(w: *nanoui.Window) void {
     const win = w.gtkwindow orelse return;
     const gtk = std.c.dlopen("libgtk-3.so.0", .{ .NOW = true, .NOLOAD = true }) orelse return;
     const gdk = std.c.dlopen("libgdk-3.so.0", .{ .NOW = true, .NOLOAD = true }) orelse return;
-    const get_window: *const fn (*anyopaque) callconv(.c) ?*anyopaque = @ptrCast(@alignCast(std.c.dlsym(gtk, "gtk_widget_get_window") orelse return));
-    const set_time: *const fn (*anyopaque, u32) callconv(.c) void = @ptrCast(@alignCast(std.c.dlsym(gdk, "gdk_x11_window_set_user_time") orelse return));
+    const get_window: *const fn (*anyopaque) callconv(.c) ?*anyopaque = @ptrCast(
+        @alignCast(std.c.dlsym(gtk, "gtk_widget_get_window") orelse return),
+    );
+    const set_time: *const fn (*anyopaque, u32) callconv(.c) void = @ptrCast(
+        @alignCast(std.c.dlsym(gdk, "gdk_x11_window_set_user_time") orelse return),
+    );
     const gw = get_window(@ptrCast(win)) orelse return;
     set_time(gw, t);
 }

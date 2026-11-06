@@ -11,7 +11,11 @@ pub fn takeFile(s: *Nanolight, i: usize) void {
     const e = &s.found.entries[i];
     var buf: [files.max_path + 1]u8 = undefined;
     const path = e.path();
-    const text = std.fmt.bufPrint(&buf, "{s}{s}", .{ path, if (e.folder and !std.mem.endsWith(u8, path, "/")) "/" else "" }) catch return;
+    const text = std.fmt.bufPrint(
+        &buf,
+        "{s}{s}",
+        .{ path, if (e.folder and !std.mem.endsWith(u8, path, "/")) "/" else "" },
+    ) catch return;
     s.query.set(text);
     s.query.want_selection = .{ text.len, text.len };
 }
@@ -27,9 +31,18 @@ pub fn filesAnswered(s: *Nanolight, typed: []const u8, found: *files.List) void 
 
 pub fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
     const e = &s.found.entries[r.file];
-    ui.richText(c, e.name(), s.highlight(i, r, p), .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) });
+    ui.richText(
+        c,
+        e.name(),
+        s.highlight(i, r, p),
+        .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) },
+    );
     var buf: [files.max_path]u8 = undefined;
-    ui.text(c, files.parent(&buf, e.path()), .{ .size = 12, .color = p.sub.alpha(0.8), .truncate = .ellipsis });
+    ui.text(
+        c,
+        files.parent(&buf, e.path()),
+        .{ .size = 12, .color = p.sub.alpha(0.8), .truncate = .ellipsis },
+    );
     ui.text(c, if (e.folder) "Folder" else "File", .{ .size = 11.5, .color = p.sub });
 }
 
@@ -38,12 +51,26 @@ pub fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
     if (e.png.len > 0) {
         const box = ui.div(c).size(26, 26).center();
         defer box.end();
-        _ = ui.image(c, .{ .key = e.path(), .bytes = e.png, .max_width = 26, .max_height = 26, .radius = 0, .scale = 1 });
+        _ = ui.image(
+            c,
+            .{
+                .key = e.path(),
+                .bytes = e.png,
+                .max_width = 26,
+                .max_height = 26,
+                .radius = 0,
+                .scale = 1,
+            },
+        );
         return;
     }
     const box = ui.div(c).size(26, 26).rounded(7).bg(p.tile).center();
     defer box.end();
-    ui.icon(c, if (e.folder) "folder" else "doc", .{ .size = 13, .weight = .medium, .color = p.text });
+    ui.icon(
+        c,
+        if (e.folder) "folder" else "doc",
+        .{ .size = 13, .weight = .medium, .color = p.text },
+    );
 }
 
 /// Retain matching rows while the worker answers the new query.
@@ -58,7 +85,8 @@ pub fn rebuild(s: *Nanolight) void {
 }
 
 pub fn takeOnTab(s: *Nanolight, c: *ui.Context) bool {
-    if (s.sel >= s.res.n or s.res.rows[s.sel].kind != .file or !files.isPath(s.query.text())) return false;
+    if (s.sel >= s.res.n or s.res.rows[s.sel].kind != .file or
+        !files.isPath(s.query.text())) return false;
     if (c.shortcut(.{ .key = ui.Shortcut.tab })) takeFile(s, s.res.rows[s.sel].file);
     return true;
 }

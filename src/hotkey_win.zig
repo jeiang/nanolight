@@ -5,7 +5,12 @@ const std = @import("std");
 const Choice = @import("shortcut.zig").Choice;
 const msg = @import("win_msg.zig");
 
-extern "user32" fn RegisterHotKey(hwnd: ?msg.HWND, id: i32, mods: u32, vk: u32) callconv(.winapi) i32;
+extern "user32" fn RegisterHotKey(
+    hwnd: ?msg.HWND,
+    id: i32,
+    mods: u32,
+    vk: u32,
+) callconv(.winapi) i32;
 extern "user32" fn UnregisterHotKey(hwnd: ?msg.HWND, id: i32) callconv(.winapi) i32;
 
 const mod_alt: u32 = 0x1;

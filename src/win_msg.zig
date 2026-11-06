@@ -22,9 +22,27 @@ const WNDCLASSEXW = extern struct {
     hIconSm: ?*anyopaque = null,
 };
 extern "user32" fn RegisterClassExW(*const WNDCLASSEXW) callconv(.winapi) u16;
-extern "user32" fn CreateWindowExW(ex: u32, class: [*:0]const u16, name: ?[*:0]const u16, style: u32, x: i32, y: i32, w: i32, h: i32, parent: ?HWND, menu: ?*anyopaque, inst: HINSTANCE, param: ?*anyopaque) callconv(.winapi) ?HWND;
+extern "user32" fn CreateWindowExW(
+    ex: u32,
+    class: [*:0]const u16,
+    name: ?[*:0]const u16,
+    style: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    parent: ?HWND,
+    menu: ?*anyopaque,
+    inst: HINSTANCE,
+    param: ?*anyopaque,
+) callconv(.winapi) ?HWND;
 extern "user32" fn DefWindowProcW(HWND, u32, usize, isize) callconv(.winapi) isize;
-extern "user32" fn FindWindowExW(parent: ?HWND, after: ?HWND, class: [*:0]const u16, name: ?[*:0]const u16) callconv(.winapi) ?HWND;
+extern "user32" fn FindWindowExW(
+    parent: ?HWND,
+    after: ?HWND,
+    class: [*:0]const u16,
+    name: ?[*:0]const u16,
+) callconv(.winapi) ?HWND;
 extern "user32" fn PostMessageW(?HWND, u32, usize, isize) callconv(.winapi) i32;
 extern "kernel32" fn GetModuleHandleW(?[*:0]const u16) callconv(.winapi) HINSTANCE;
 
@@ -58,7 +76,9 @@ fn proc(h: HWND, msg: u32, wp: usize, lp: isize) callconv(.winapi) isize {
 pub fn window() ?HWND {
     if (hwnd) |h| return h;
     const inst = GetModuleHandleW(null);
-    _ = RegisterClassExW(&.{ .lpfnWndProc = &proc, .hInstance = inst, .lpszClassName = class_name });
+    _ = RegisterClassExW(
+        &.{ .lpfnWndProc = &proc, .hInstance = inst, .lpszClassName = class_name },
+    );
     hwnd = CreateWindowExW(0, class_name, null, 0, 0, 0, 0, 0, message_parent, null, inst, null);
     return hwnd;
 }

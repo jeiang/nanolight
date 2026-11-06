@@ -35,7 +35,8 @@ pub const default_quicklinks = [_]Quicklink{
 /// A quicklink opens in a browser or the panel: http and https only.
 pub fn webUrl(url: []const u8) bool {
     inline for (.{ "http://", "https://" }) |scheme| {
-        if (url.len > scheme.len and std.ascii.eqlIgnoreCase(url[0..scheme.len], scheme)) return true;
+        if (url.len > scheme.len and
+            std.ascii.eqlIgnoreCase(url[0..scheme.len], scheme)) return true;
     }
     return false;
 }
@@ -75,19 +76,35 @@ pub fn decode(arena: std.mem.Allocator, body: []const u8) ?Settings {
     if (s.quicklinks.len > max_quicklinks) return null;
     for (s.quicklinks) |q| {
         if (q.name.len == 0 or q.url.len == 0) return null;
-        if (q.name.len > max_quicklink_field or q.url.len > max_quicklink_field or q.keyword.len > max_quicklink_field) return null;
+        if (q.name.len > max_quicklink_field or q.url.len > max_quicklink_field or
+            q.keyword.len > max_quicklink_field) return null;
     }
     return s;
 }
 
 /// The two, merged. `prefer_remote`: this Mac's first sync, where the
 /// account's key and choices win over what a fresh install picked.
-pub fn merge(arena: std.mem.Allocator, local: Settings, remote: Settings, prefer_remote: bool) !Settings {
+pub fn merge(
+    arena: std.mem.Allocator,
+    local: Settings,
+    remote: Settings,
+    prefer_remote: bool,
+) !Settings {
     const theirs = prefer_remote or remote.at > local.at;
     var out: Settings = if (theirs)
-        .{ .hotkey = remote.hotkey, .suggest = remote.suggest, .at = remote.at, .quicklinks = remote.quicklinks }
+        .{
+            .hotkey = remote.hotkey,
+            .suggest = remote.suggest,
+            .at = remote.at,
+            .quicklinks = remote.quicklinks,
+        }
     else
-        .{ .hotkey = local.hotkey, .suggest = local.suggest, .at = local.at, .quicklinks = local.quicklinks };
+        .{
+            .hotkey = local.hotkey,
+            .suggest = local.suggest,
+            .at = local.at,
+            .quicklinks = local.quicklinks,
+        };
     var list: std.ArrayList(Launch) = .empty;
     for ([_][]const Launch{ local.launches, remote.launches }) |side| for (side) |l| {
         if (l.name.len == 0 or l.name.len > 255) continue;
@@ -154,7 +171,8 @@ pub fn encodeWithin(arena: std.mem.Allocator, s: Settings, limit: usize) !?[]u8 
 
 /// Whether the two say the same.
 pub fn same(a: Settings, b: Settings) bool {
-    if (!std.mem.eql(u8, a.hotkey, b.hotkey) or a.suggest != b.suggest or a.at != b.at or a.launches.len != b.launches.len) return false;
+    if (!std.mem.eql(u8, a.hotkey, b.hotkey) or a.suggest != b.suggest or a.at != b.at or
+        a.launches.len != b.launches.len) return false;
     for (a.launches, b.launches) |x, y| if (x.count != y.count or !launchSame(x, y)) return false;
     return sameQuicklinks(a.quicklinks, b.quicklinks);
 }
@@ -162,7 +180,8 @@ pub fn same(a: Settings, b: Settings) bool {
 pub fn sameQuicklinks(a: []const Quicklink, b: []const Quicklink) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| {
-        if (!std.mem.eql(u8, x.name, y.name) or !std.mem.eql(u8, x.url, y.url) or !std.mem.eql(u8, x.keyword, y.keyword)) return false;
+        if (!std.mem.eql(u8, x.name, y.name) or !std.mem.eql(u8, x.url, y.url) or
+            !std.mem.eql(u8, x.keyword, y.keyword)) return false;
     }
     return true;
 }
@@ -181,8 +200,18 @@ test "two Macs merge: the later choice wins, and each app keeps its higher count
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const here: Settings = .{ .hotkey = "cmd_space", .suggest = true, .at = 100, .launches = &.{ .{ .name = "Safari", .count = 5 }, .{ .name = "Notes", .count = 1 } } };
-    const there: Settings = .{ .hotkey = "opt_space", .suggest = false, .at = 200, .launches = &.{ .{ .name = "Notes", .count = 4 }, .{ .name = "Mail", .count = 2 } } };
+    const here: Settings = .{
+        .hotkey = "cmd_space",
+        .suggest = true,
+        .at = 100,
+        .launches = &.{ .{ .name = "Safari", .count = 5 }, .{ .name = "Notes", .count = 1 } },
+    };
+    const there: Settings = .{
+        .hotkey = "opt_space",
+        .suggest = false,
+        .at = 200,
+        .launches = &.{ .{ .name = "Notes", .count = 4 }, .{ .name = "Mail", .count = 2 } },
+    };
     const m = try merge(a, here, there, false);
     try std.testing.expectEqualStrings("opt_space", m.hotkey);
     try std.testing.expect(!m.suggest);
@@ -203,15 +232,40 @@ test "a record round-trips, and what isn't one isn't taken" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const s: Settings = .{ .hotkey = "cmd_space", .suggest = true, .at = 1793600000, .launches = &.{.{ .name = "Visual \"Studio\" Code", .count = 3 }}, .quicklinks = &.{.{ .name = "DuckDuckGo", .url = "https://duckduckgo.com/?q={argument}", .keyword = "ddg" }} };
+    const s: Settings = .{
+        .hotkey = "cmd_space",
+        .suggest = true,
+        .at = 1793600000,
+        .launches = &.{.{ .name = "Visual \"Studio\" Code", .count = 3 }},
+        .quicklinks = &.{
+            .{
+                .name = "DuckDuckGo",
+                .url = "https://duckduckgo.com/?q={argument}",
+                .keyword = "ddg",
+            },
+        },
+    };
     const body = try encode(a, s);
     const back = decode(a, body).?;
     try std.testing.expect(same(s, back));
-    try std.testing.expect(decode(a, "{\"v\":3,\"hotkey\":\"x\",\"suggest\":true,\"at\":1}") == null);
-    try std.testing.expect(decode(a, "{\"v\":2,\"hotkey\":\"x\",\"suggest\":true,\"at\":1,\"quicklinks\":[{\"name\":\"\",\"url\":\"u\"}]}") == null);
+    try std.testing.expect(
+        decode(a, "{\"v\":3,\"hotkey\":\"x\",\"suggest\":true,\"at\":1}") == null,
+    );
+    try std.testing.expect(
+        decode(
+            a,
+            "{\"v\":2,\"hotkey\":\"x\",\"suggest\":true,\"at\":1,\"quicklinks\":[{\"name\":\"\"," ++
+                "\"url\":\"u\"}]}",
+        ) == null,
+    );
     try std.testing.expect(decode(a, "not json") == null);
     // Fields a later version adds are passed over.
-    try std.testing.expect(decode(a, "{\"v\":2,\"hotkey\":\"cmd_space\",\"suggest\":false,\"at\":5,\"theme\":\"dark\"}") != null);
+    try std.testing.expect(
+        decode(
+            a,
+            "{\"v\":2,\"hotkey\":\"cmd_space\",\"suggest\":false,\"at\":5,\"theme\":\"dark\"}",
+        ) != null,
+    );
 }
 
 test "a v1 record decodes with no quicklinks, and the quicklinks go with the later choice" {
@@ -220,7 +274,9 @@ test "a v1 record decodes with no quicklinks, and the quicklinks go with the lat
     const a = arena.allocator();
     const old = decode(a, "{\"v\":1,\"hotkey\":\"cmd_space\",\"suggest\":true,\"at\":5}").?;
     try std.testing.expectEqual(@as(usize, 0), old.quicklinks.len);
-    const ql: []const Quicklink = &.{.{ .name = "Claude", .url = "https://claude.ai/new?q={argument}" }};
+    const ql: []const Quicklink = &.{
+        .{ .name = "Claude", .url = "https://claude.ai/new?q={argument}" },
+    };
     const newer: Settings = .{ .hotkey = "cmd_space", .suggest = true, .at = 9, .quicklinks = ql };
     try std.testing.expectEqual(@as(usize, 1), (try merge(a, old, newer, false)).quicklinks.len);
     try std.testing.expectEqual(@as(usize, 1), (try merge(a, newer, old, false)).quicklinks.len);
@@ -243,7 +299,11 @@ test "a record too big for the limit sheds its least opened apps" {
     const a = arena.allocator();
     const launches = try a.alloc(Launch, 100);
     for (launches, 0..) |*l, i| {
-        l.* = .{ .name = "App", .path = try std.fmt.allocPrint(a, "/Applications/{d:0>3}", .{i}), .count = @intCast(i) };
+        l.* = .{
+            .name = "App",
+            .path = try std.fmt.allocPrint(a, "/Applications/{d:0>3}", .{i}),
+            .count = @intCast(i),
+        };
     }
     const s: Settings = .{ .hotkey = "cmd_space", .suggest = true, .at = 1, .launches = launches };
     const whole = try encode(a, s);

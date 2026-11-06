@@ -1,9 +1,9 @@
 //! Clipboard History, in the panel in place of the rows: a search field, the
 //! entries newest first (type, source app, how long ago), and what the
 //! selected one holds. Return pastes it, ⌘↩ (Ctrl+Enter) only copies it,
-//! ⌘⌫ (Ctrl+Backspace, or ⌘D / Ctrl+D) deletes it, Esc closes it and the panel. ↑ ↓, ^N ^P and ^J ^K move.
-//! The panel hides on a paste; a paste that could only copy says why in the
-//! footer.
+//! ⌘⌫ (Ctrl+Backspace, or ⌘D / Ctrl+D) deletes it, Esc closes it and the
+//! panel. ↑ ↓, ^N ^P and ^J ^K move. The panel hides on a paste; a paste
+//! that could only copy says why in the footer.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -36,7 +36,8 @@ const detail_h: f32 = 112;
 const max_found = 50;
 const detail_lines = 4;
 /// Header, list, detail and footer with their hairlines.
-pub const height: f32 = panel.header_h + 1 + visible_rows * row_h + list_pad * 2 + 1 + detail_h + 1 + panel.footer_h;
+pub const height: f32 = panel.header_h + 1 + visible_rows * row_h + list_pad * 2 + 1 +
+    detail_h + 1 + panel.footer_h;
 
 pub const Screen = struct {
     open: bool = false,
@@ -90,10 +91,11 @@ pub const Screen = struct {
         s.built = q;
         s.gen = h.store.gen;
         s.n = h.store.find(n.query.text(), &s.found);
-        if (same_query) for (s.found[0..s.n], 0..) |at, i| if (h.store.entries.items[at].hash == s.sel_hash) {
-            s.sel = i;
-            break;
-        };
+        if (same_query) for (s.found[0..s.n], 0..) |at, i|
+            if (h.store.entries.items[at].hash == s.sel_hash) {
+                s.sel = i;
+                break;
+            };
         if (s.sel >= s.n) s.sel = s.n -| 1;
     }
 
@@ -116,7 +118,8 @@ pub const Screen = struct {
             if (submitted) s.paste(x);
         }
         ui.div(c).wFull().h(1).bg(p.hair).end();
-        const rows = ui.div(c).column().wFull().h(visible_rows * row_h + list_pad * 2).p(list_pad).clip();
+        const rows = ui.div(c).column().wFull().h(visible_rows * row_h + list_pad * 2).p(list_pad)
+            .clip();
         if (hh) |x| s.list(c, p, x) else empty(c, p, "Clipboard history is not available here.");
         rows.end();
         if (hh) |x| s.sel_hash = if (s.selected(x)) |e| e.hash else 0;
@@ -142,7 +145,10 @@ pub const Screen = struct {
         }
         if (c.shortcut(.{ .key = S.enter, .cmd = true })) s.copy(h);
         // ⌫ is 0x7f on the Mac and 0x08 on GTK; Windows offers no key for it, so ⌘D / Ctrl+D too.
-        if (c.shortcut(.{ .key = 0x7f, .cmd = true }) or c.shortcut(.{ .key = 0x08, .cmd = true }) or c.shortcut(.{ .key = 'd', .cmd = true })) if (s.selected(h)) |e| {
+        if (c.shortcut(.{ .key = 0x7f, .cmd = true }) or
+            c.shortcut(.{ .key = 0x08, .cmd = true }) or
+            c.shortcut(.{ .key = 'd', .cmd = true })) if (s.selected(h)) |e|
+        {
             _ = h.store.remove(e.hash);
             s.note = "Deleted";
             s.refresh(n, h);
@@ -184,7 +190,10 @@ pub const Screen = struct {
     fn list(s: *Screen, c: *ui.Context, p: Palette, h: *const Host) void {
         if (s.n == 0) {
             const why = h.status(h.ctx);
-            const none = if (h.store.entries.items.len == 0) "Nothing copied yet." else "No matches.";
+            const none = if (h.store.entries.items.len == 0)
+                "Nothing copied yet."
+            else
+                "No matches.";
             return empty(c, p, if (why != null and h.store.entries.items.len == 0) why.? else none);
         }
         const first = if (s.sel >= visible_rows) s.sel + 1 - visible_rows else 0;
@@ -192,7 +201,8 @@ pub const Screen = struct {
         for (first..@min(s.n, first + visible_rows)) |i| {
             const e = h.store.entries.items[s.found[i]];
             ui.key(c, c.print("clip-row-{d}", .{i}));
-            const r = ui.div(c).row().wFull().h(row_h).px(10).gap(12).itemsCenter().rounded(10).control();
+            const r = ui.div(c).row().wFull().h(row_h).px(10).gap(12).itemsCenter().rounded(10)
+                .control();
             defer r.end();
             if (i == s.sel) _ = r.bg(p.sel).border(p.rim);
             if (r.clicked()) {
@@ -206,11 +216,25 @@ pub const Screen = struct {
             }, .{ .size = 13, .weight = .medium, .color = p.text });
             tile.end();
             var tb: [48]u8 = undefined;
-            ui.text(c, c.print("{s}", .{clipboard.title(&tb, e)}), .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis });
+            ui.text(
+                c,
+                c.print("{s}", .{clipboard.title(&tb, e)}),
+                .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis },
+            );
             ui.spacer(c);
             var rb: [24]u8 = undefined;
             const app = clipboard.appName(e.source);
-            ui.textf(c, .{ .size = 12, .color = p.sub.alpha(0.85), .tabular = true }, "{s}{s}{s} · {s}", .{ clipboard.kindLabel(e.kind), if (app.len > 0) " · " else "", app, clipboard.relative(&rb, now, e.at) });
+            ui.textf(
+                c,
+                .{ .size = 12, .color = p.sub.alpha(0.85), .tabular = true },
+                "{s}{s}{s} · {s}",
+                .{
+                    clipboard.kindLabel(e.kind),
+                    if (app.len > 0) " · " else "",
+                    app,
+                    clipboard.relative(&rb, now, e.at),
+                },
+            );
         }
     }
 
@@ -222,7 +246,12 @@ pub const Screen = struct {
         switch (e.kind) {
             .image => {
                 var sb: [24]u8 = undefined;
-                ui.textf(c, .{ .size = 13, .color = p.text }, "Image, {d} × {d} pixels, {s}", .{ e.width, e.height, clipboard.sizeText(&sb, e.size) });
+                ui.textf(
+                    c,
+                    .{ .size = 13, .color = p.text },
+                    "Image, {d} × {d} pixels, {s}",
+                    .{ e.width, e.height, clipboard.sizeText(&sb, e.size) },
+                );
             },
             .text, .file => {
                 var lines = std.mem.splitScalar(u8, e.text, '\n');
@@ -233,14 +262,32 @@ pub const Screen = struct {
                         ui.text(c, "…", .{ .size = 12.5, .color = p.sub });
                         break;
                     }
-                    ui.text(c, if (line.len == 0) " " else clipboard.clip(line, 240), .{ .size = 12.5, .mono = e.kind == .text, .color = p.text, .truncate = .ellipsis });
+                    ui.text(
+                        c,
+                        if (line.len == 0) " " else clipboard.clip(line, 240),
+                        .{
+                            .size = 12.5,
+                            .mono = e.kind == .text,
+                            .color = p.text,
+                            .truncate = .ellipsis,
+                        },
+                    );
                     shown += 1;
                 }
             },
         }
         ui.spacer(c);
         var rb: [24]u8 = undefined;
-        ui.textf(c, .{ .size = 11.5, .color = p.sub.alpha(0.85) }, "Copied {d} time{s} · last {s}", .{ e.count, if (e.count == 1) "" else "s", clipboard.relative(&rb, account.now(), e.at) });
+        ui.textf(
+            c,
+            .{ .size = 11.5, .color = p.sub.alpha(0.85) },
+            "Copied {d} time{s} · last {s}",
+            .{
+                e.count,
+                if (e.count == 1) "" else "s",
+                clipboard.relative(&rb, account.now(), e.at),
+            },
+        );
     }
 
     fn footer(s: *Screen, c: *ui.Context, p: Palette, hh: ?*const Host) void {
@@ -249,11 +296,29 @@ pub const Screen = struct {
         defer bar.end();
         panel.appIcon(c, 16);
         if (s.note.len > 0)
-            ui.text(c, s.note, .{ .size = 12, .weight = .medium, .color = p.text, .truncate = .ellipsis })
+            ui.text(
+                c,
+                s.note,
+                .{ .size = 12, .weight = .medium, .color = p.text, .truncate = .ellipsis },
+            )
         else if (hh) |h|
-            ui.textf(c, .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8), .truncate = .ellipsis }, "Clipboard History · {d}", .{h.store.entries.items.len})
+            ui.textf(
+                c,
+                .{
+                    .size = 12,
+                    .weight = .medium,
+                    .color = p.sub.alpha(0.8),
+                    .truncate = .ellipsis,
+                },
+                "Clipboard History · {d}",
+                .{h.store.entries.items.len},
+            )
         else
-            ui.text(c, "Clipboard History", .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8) });
+            ui.text(
+                c,
+                "Clipboard History",
+                .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8) },
+            );
         ui.spacer(c);
         if (hh == null) return;
         if (!hh.?.copy_only) {
@@ -261,7 +326,15 @@ pub const Screen = struct {
             ui.kbd(c, "↩");
             ui.div(c).w(1).h(14).bg(p.hair).end();
         }
-        ui.text(c, "Copy", .{ .size = 12, .weight = if (hh.?.copy_only) .medium else .regular, .color = if (hh.?.copy_only) p.text.alpha(0.85) else p.sub.alpha(0.8) });
+        ui.text(
+            c,
+            "Copy",
+            .{
+                .size = 12,
+                .weight = if (hh.?.copy_only) .medium else .regular,
+                .color = if (hh.?.copy_only) p.text.alpha(0.85) else p.sub.alpha(0.8),
+            },
+        );
         ui.kbd(c, if (hh.?.copy_only) "↩" else results.mod ++ "↩");
         ui.div(c).w(1).h(14).bg(p.hair).end();
         ui.text(c, "Delete", .{ .size = 12, .color = p.sub.alpha(0.8) });

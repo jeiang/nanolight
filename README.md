@@ -261,8 +261,7 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 The icon is drawn by `tools/icon.zig` (`zig build icon`, on a Mac). The release tools are Zig too, in `tools/`, run as `zig build` steps.
 
 Zig code follows [TigerStyle](docs/TIGER_STYLE.md), as its first section applies it, and
-`zig build lint` checks the rules a machine can. Code written before TigerStyle was adopted does
-not pass yet.
+`zig build lint` checks the rules a machine can.
 
 ## License
 

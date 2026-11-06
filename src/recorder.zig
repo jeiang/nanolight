@@ -10,7 +10,10 @@ const shortcut = @import("shortcut.zig");
 
 const key_down: u64 = 1 << 10;
 
-pub const Got = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque, r: shortcut.Recorded) void };
+pub const Got = struct {
+    ctx: *anyopaque,
+    func: *const fn (ctx: *anyopaque, r: shortcut.Recorded) void,
+};
 
 pub const Recorder = struct {
     monitor: ?objc.Object = null,
@@ -49,10 +52,16 @@ pub const Recorder = struct {
         const code = objc.msg(u16, ev, "keyCode", .{});
         const flags: u64 = objc.msg(objc.NSUInteger, ev, "modifierFlags", .{});
         // What the key types without modifiers: "x" for ⌥X, not "≈".
-        const plain = objc.msg(?objc.Object, ev, "charactersByApplyingModifiers:", .{@as(objc.NSUInteger, 0)});
+        const plain = objc.msg(
+            ?objc.Object,
+            ev,
+            "charactersByApplyingModifiers:",
+            .{@as(objc.NSUInteger, 0)},
+        );
         const s = objc.fromNSString(plain);
         const len = if (s.len > 0) std.unicode.utf8ByteSequenceLength(s[0]) catch 1 else 0;
-        const ch: u21 = if (len > 0 and len <= s.len) std.unicode.utf8Decode(s[0..len]) catch 0 else 0;
+        const ch: u21 = if (len > 0 and
+            len <= s.len) std.unicode.utf8Decode(s[0..len]) catch 0 else 0;
         r.last = shortcut.recorded(code, flags, ch);
         nanoui.App.after(0, r, deliver);
         return null;

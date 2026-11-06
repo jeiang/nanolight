@@ -10,7 +10,10 @@
 const builtin = @import("builtin");
 
 pub const Command = enum { toggle, quit };
-pub const Listener = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque, cmd: Command) void };
+pub const Listener = struct {
+    ctx: *anyopaque,
+    func: *const fn (ctx: *anyopaque, cmd: Command) void,
+};
 
 const impl = switch (builtin.os.tag) {
     .macos => @import("single_mac.zig"),

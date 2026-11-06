@@ -165,9 +165,14 @@ pub fn complete(io: std.Io, query: []const u8, out: *List) void {
     var seen: usize = 0;
     while (seen < 2048) : (seen += 1) {
         const e = (it.next(io) catch null) orelse break;
-        if (e.name.len == 0 or (e.name[0] == '.' and (prefix.len == 0 or prefix[0] != '.'))) continue;
+        if (e.name.len == 0 or (e.name[0] == '.' and (prefix.len == 0 or
+            prefix[0] != '.'))) continue;
         if (!std.ascii.startsWithIgnoreCase(e.name, prefix)) continue;
-        const full = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{ dir_path, if (slash == 0) "" else "/", e.name }) catch continue;
+        const full = std.fmt.bufPrint(
+            &buf,
+            "{s}{s}{s}",
+            .{ dir_path, if (slash == 0) "" else "/", e.name },
+        ) catch continue;
         const st = std.Io.Dir.cwd().statFile(io, full, .{}) catch continue;
         out.add(full, st.kind == .directory, search.score(prefix, e.name) orelse .{ .score = 1 });
         if (out.n == max_rows) break;
@@ -175,7 +180,8 @@ pub fn complete(io: std.Io, query: []const u8, out: *List) void {
 }
 
 fn within(path: []const u8, root: []const u8) bool {
-    return std.mem.eql(u8, path, root) or (std.mem.startsWith(u8, path, root) and (std.mem.endsWith(u8, root, "/") or (path.len > root.len and path[root.len] == '/')));
+    return std.mem.eql(u8, path, root) or (std.mem.startsWith(u8, path, root) and
+        (std.mem.endsWith(u8, root, "/") or (path.len > root.len and path[root.len] == '/')));
 }
 
 fn hasComponent(path: []const u8, component: []const u8) bool {
@@ -195,7 +201,16 @@ pub fn excluded(path: []const u8, extra: []const u8) bool {
         const library = std.fmt.bufPrint(&library_buf, "{s}/Library", .{h}) catch return true;
         if (within(path, library)) return true;
     }
-    for ([_][]const u8{ "node_modules", ".git", "Library/Caches", ".cache", ".Trash", ".zig-cache", "zig-cache", "zig-out" }) |part| {
+    for ([_][]const u8{
+        "node_modules",
+        ".git",
+        "Library/Caches",
+        ".cache",
+        ".Trash",
+        ".zig-cache",
+        "zig-cache",
+        "zig-out",
+    }) |part| {
         if (hasComponent(path, part)) return true;
     }
     var lines = std.mem.tokenizeScalar(u8, extra, '\n');
@@ -225,7 +240,8 @@ pub fn predicate(buf: []u8, query: []const u8, tier: Tier) ?[]const u8 {
     while (i < query.len) {
         const len = std.unicode.utf8ByteSequenceLength(query[i]) catch return null;
         if (i + len > query.len) return null;
-        if (len == 1 and (query[i] == '"' or query[i] == '*' or query[i] == '\\' or query[i] == '?')) w.writeByte('\\') catch return null;
+        if (len == 1 and (query[i] == '"' or query[i] == '*' or query[i] == '\\' or
+            query[i] == '?')) w.writeByte('\\') catch return null;
         w.writeAll(query[i..][0..len]) catch return null;
         if (tier == .subsequence) w.writeByte('*') catch return null;
         i += len;
@@ -236,7 +252,13 @@ pub fn predicate(buf: []u8, query: []const u8, tier: Tier) ?[]const u8 {
 }
 
 /// Bounded tiers share one two-second deadline and one ranked, deduplicated list.
-pub fn find(io: std.Io, query: []const u8, locations: []const u8, extra: []const u8, out: *List) bool {
+pub fn find(
+    io: std.Io,
+    query: []const u8,
+    locations: []const u8,
+    extra: []const u8,
+    out: *List,
+) bool {
     out.deinit();
     if (!eligible(query)) return false;
     var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
@@ -244,7 +266,11 @@ pub fn find(io: std.Io, query: []const u8, locations: []const u8, extra: []const
     const a = arena.allocator();
     var argv: std.ArrayList([]const u8) = .empty;
     argv.append(a, "/usr/bin/mdfind") catch return false;
-    var lines = std.mem.tokenizeScalar(u8, if (std.mem.trim(u8, locations, " \r\n\t").len == 0) home() else locations, '\n');
+    var lines = std.mem.tokenizeScalar(
+        u8,
+        if (std.mem.trim(u8, locations, " \r\n\t").len == 0) home() else locations,
+        '\n',
+    );
     while (lines.next()) |line| {
         var buf: [max_path]u8 = undefined;
         const path = expand(&buf, std.mem.trim(u8, line, " \r\t")) orelse continue;
@@ -266,8 +292,18 @@ pub fn find(io: std.Io, query: []const u8, locations: []const u8, extra: []const
     return ok;
 }
 
-fn collect(io: std.Io, argv: []const []const u8, query: []const u8, extra: []const u8, out: *List, deadline: i64) bool {
-    var child = std.process.spawn(io, .{ .argv = argv, .stdin = .ignore, .stdout = .pipe, .stderr = .ignore }) catch return false;
+fn collect(
+    io: std.Io,
+    argv: []const []const u8,
+    query: []const u8,
+    extra: []const u8,
+    out: *List,
+    deadline: i64,
+) bool {
+    var child = std.process.spawn(
+        io,
+        .{ .argv = argv, .stdin = .ignore, .stdout = .pipe, .stderr = .ignore },
+    ) catch return false;
     defer child.kill(io);
     var read_buf: [8192]u8 = undefined;
     var path_buf: [max_path]u8 = undefined;
@@ -279,7 +315,9 @@ fn collect(io: std.Io, argv: []const []const u8, query: []const u8, extra: []con
     while (count < 256 and total < 256 * max_path) {
         const remaining = deadline - std.Io.Clock.awake.now(io).toMilliseconds();
         if (remaining <= 0) break;
-        var fds = [_]std.posix.pollfd{.{ .fd = child.stdout.?.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+        var fds = [_]std.posix.pollfd{
+            .{ .fd = child.stdout.?.handle, .events = std.posix.POLL.IN, .revents = 0 },
+        };
         if ((std.posix.poll(&fds, @intCast(@min(remaining, 20))) catch return false) == 0) continue;
         const n = std.c.read(child.stdout.?.handle, &read_buf, read_buf.len);
         if (n < 0) return false;

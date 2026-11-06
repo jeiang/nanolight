@@ -23,50 +23,267 @@ pub const Pane = struct {
 pub const url_prefix = "x-apple.systempreferences:";
 
 pub const all = [_]Pane{
-    .{ .name = "Wi-Fi", .id = "com.apple.wifi-settings-extension", .appex = "Wi-Fi", .keywords = &.{ "wifi", "wireless" } },
+    .{
+        .name = "Wi-Fi",
+        .id = "com.apple.wifi-settings-extension",
+        .appex = "Wi-Fi",
+        .keywords = &.{ "wifi", "wireless" },
+    },
     .{ .name = "Bluetooth", .id = "com.apple.BluetoothSettings", .appex = "Bluetooth" },
-    .{ .name = "Network", .id = "com.apple.Network-Settings.extension", .appex = "Network", .keywords = &.{ "ethernet", "internet", "firewall", "proxy", "dns" } },
-    .{ .name = "VPN", .id = "com.apple.NetworkExtensionSettingsUI.NESettingsUIExtension", .appex = "VPN" },
-    .{ .name = "Notifications", .id = "com.apple.Notifications-Settings.extension", .appex = "NotificationsSettings", .keywords = &.{ "alerts", "banners" } },
-    .{ .name = "Sound", .id = "com.apple.Sound-Settings.extension", .appex = "Sound", .keywords = &.{ "volume", "audio", "speakers", "microphone", "output", "input" } },
-    .{ .name = "Focus", .id = "com.apple.Focus-Settings.extension", .appex = "FocusSettingsExtension", .keywords = &.{ "do not disturb", "dnd" } },
-    .{ .name = "Screen Time", .id = "com.apple.Screen-Time-Settings.extension", .appex = "ScreenTimePreferencesExtension", .keywords = &.{ "parental controls", "app limits" } },
-    .{ .name = "General", .id = "com.apple.systempreferences.GeneralSettings", .appex = "GeneralSettings" },
-    .{ .name = "About", .id = "com.apple.SystemProfiler.AboutExtension", .appex = "AboutExtension", .keywords = &.{ "about this mac", "serial number", "macos version" } },
-    .{ .name = "Software Update", .id = "com.apple.Software-Update-Settings.extension", .appex = "SoftwareUpdateSettingsExtension", .keywords = &.{ "update macos", "upgrade" } },
-    .{ .name = "Storage", .id = "com.apple.settings.Storage", .appex = "Storage", .keywords = &.{ "disk space", "free space" } },
-    .{ .name = "AirDrop & Handoff", .id = "com.apple.AirDrop-Handoff-Settings.extension", .appex = "AirDropHandoffExtension", .keywords = &.{ "airplay receiver", "continuity" } },
-    .{ .name = "Login Items & Extensions", .id = "com.apple.LoginItems-Settings.extension", .appex = "LoginItems", .keywords = &.{ "open at login", "startup items", "background items", "extensions" } },
-    .{ .name = "Language & Region", .id = "com.apple.Localization-Settings.extension", .appex = "Localization", .keywords = &.{ "language", "region", "locale", "date format" } },
-    .{ .name = "Date & Time", .id = "com.apple.Date-Time-Settings.extension", .appex = "DateAndTime Extension", .keywords = &.{ "clock", "time zone" } },
-    .{ .name = "Sharing", .id = "com.apple.Sharing-Settings.extension", .appex = "Sharing", .keywords = &.{ "file sharing", "screen sharing", "remote login", "ssh", "computer name" } },
-    .{ .name = "Time Machine", .id = "com.apple.Time-Machine-Settings.extension", .appex = "TimeMachineSettings", .keywords = &.{"backup"} },
-    .{ .name = "Transfer or Reset", .id = "com.apple.Transfer-Reset-Settings.extension", .appex = "TransferResetExtension", .keywords = &.{ "erase all content", "factory reset" } },
-    .{ .name = "Startup Disk", .id = "com.apple.Startup-Disk-Settings.extension", .appex = "StartupDisk" },
-    .{ .name = "Device Management", .id = "com.apple.Profiles-Settings.extension", .appex = "ProfilesSettingsExt", .keywords = &.{ "profiles", "mdm" } },
-    .{ .name = "Appearance", .id = "com.apple.Appearance-Settings.extension", .appex = "Appearance", .keywords = &.{ "dark mode", "light mode", "accent color", "theme" } },
-    .{ .name = "Accessibility", .id = "com.apple.Accessibility-Settings.extension", .appex = "AccessibilitySettingsExtension", .keywords = &.{ "voiceover", "zoom", "reduce motion" } },
-    .{ .name = "Control Center", .id = "com.apple.ControlCenter-Settings.extension", .appex = "ControlCenterSettings", .keywords = &.{"menu bar"} },
-    .{ .name = "Siri", .id = "com.apple.Siri-Settings.extension", .appex = "SiriPreferenceExtension", .keywords = &.{ "apple intelligence", "dictation" } },
-    .{ .name = "Spotlight", .id = "com.apple.Spotlight-Settings.extension", .appex = "SpotlightPreferenceExtension" },
-    .{ .name = "Privacy & Security", .id = "com.apple.settings.PrivacySecurity.extension", .appex = "SecurityPrivacyExtension", .keywords = &.{ "permissions", "full disk access", "accessibility access", "location services", "camera access", "filevault", "gatekeeper" } },
-    .{ .name = "Desktop & Dock", .id = "com.apple.Desktop-Settings.extension", .appex = "DesktopSettings", .keywords = &.{ "dock", "mission control", "hot corners", "stage manager", "widgets" } },
-    .{ .name = "Displays", .id = "com.apple.Displays-Settings.extension", .appex = "DisplaysExt", .keywords = &.{ "monitor", "resolution", "brightness", "night shift" } },
-    .{ .name = "Wallpaper", .id = "com.apple.Wallpaper-Settings.extension", .appex = "Wallpaper", .keywords = &.{ "background", "desktop picture" } },
-    .{ .name = "Battery", .id = "com.apple.Battery-Settings.extension", .appex = "PowerPreferences", .keywords = &.{ "energy", "power", "low power mode" } },
-    .{ .name = "Lock Screen", .id = "com.apple.Lock-Screen-Settings.extension", .appex = "LockScreen", .keywords = &.{ "screen saver", "require password" } },
-    .{ .name = "Touch ID & Password", .id = "com.apple.Touch-ID-Settings.extension", .appex = "Touch ID & Password", .keywords = &.{ "fingerprint", "password" } },
-    .{ .name = "Users & Groups", .id = "com.apple.Users-Groups-Settings.extension", .appex = "UsersGroups", .keywords = &.{ "accounts", "users", "guest user" } },
-    .{ .name = "Internet Accounts", .id = "com.apple.Internet-Accounts-Settings.extension", .appex = "InternetAccountsSettingsExtension", .keywords = &.{ "mail accounts", "email accounts" } },
-    .{ .name = "Game Center", .id = "com.apple.Game-Center-Settings.extension", .appex = "GameCenterMacOSSettingsExtension" },
-    .{ .name = "Game Controllers", .id = "com.apple.Game-Controller-Settings.extension", .appex = "GameControllerMacSettings", .keywords = &.{"gamepad"} },
-    .{ .name = "Wallet & Apple Pay", .id = "com.apple.WalletSettingsExtension", .appex = "WalletSettingsExtension" },
-    .{ .name = "Keyboard", .id = "com.apple.Keyboard-Settings.extension", .appex = "KeyboardSettings", .keywords = &.{ "keyboard shortcuts", "input sources", "key repeat" } },
-    .{ .name = "Mouse", .id = "com.apple.Mouse-Settings.extension", .appex = "MouseExtension", .keywords = &.{ "pointer speed", "natural scrolling" } },
-    .{ .name = "Trackpad", .id = "com.apple.Trackpad-Settings.extension", .appex = "TrackpadExtension", .keywords = &.{ "gestures", "tap to click", "natural scrolling" } },
-    .{ .name = "Printers & Scanners", .id = "com.apple.Print-Scan-Settings.extension", .appex = "PrinterScannerSettings", .keywords = &.{"printer"} },
-    .{ .name = "Apple Account", .id = "com.apple.systempreferences.AppleIDSettings", .appex = "AppleIDSettings", .keywords = &.{ "apple id", "icloud" } },
-    .{ .name = "Family", .id = "com.apple.Family-Settings.extension", .appex = "FamilySettings", .keywords = &.{"family sharing"} },
+    .{
+        .name = "Network",
+        .id = "com.apple.Network-Settings.extension",
+        .appex = "Network",
+        .keywords = &.{ "ethernet", "internet", "firewall", "proxy", "dns" },
+    },
+    .{
+        .name = "VPN",
+        .id = "com.apple.NetworkExtensionSettingsUI.NESettingsUIExtension",
+        .appex = "VPN",
+    },
+    .{
+        .name = "Notifications",
+        .id = "com.apple.Notifications-Settings.extension",
+        .appex = "NotificationsSettings",
+        .keywords = &.{ "alerts", "banners" },
+    },
+    .{
+        .name = "Sound",
+        .id = "com.apple.Sound-Settings.extension",
+        .appex = "Sound",
+        .keywords = &.{ "volume", "audio", "speakers", "microphone", "output", "input" },
+    },
+    .{
+        .name = "Focus",
+        .id = "com.apple.Focus-Settings.extension",
+        .appex = "FocusSettingsExtension",
+        .keywords = &.{ "do not disturb", "dnd" },
+    },
+    .{
+        .name = "Screen Time",
+        .id = "com.apple.Screen-Time-Settings.extension",
+        .appex = "ScreenTimePreferencesExtension",
+        .keywords = &.{ "parental controls", "app limits" },
+    },
+    .{
+        .name = "General",
+        .id = "com.apple.systempreferences.GeneralSettings",
+        .appex = "GeneralSettings",
+    },
+    .{
+        .name = "About",
+        .id = "com.apple.SystemProfiler.AboutExtension",
+        .appex = "AboutExtension",
+        .keywords = &.{ "about this mac", "serial number", "macos version" },
+    },
+    .{
+        .name = "Software Update",
+        .id = "com.apple.Software-Update-Settings.extension",
+        .appex = "SoftwareUpdateSettingsExtension",
+        .keywords = &.{ "update macos", "upgrade" },
+    },
+    .{
+        .name = "Storage",
+        .id = "com.apple.settings.Storage",
+        .appex = "Storage",
+        .keywords = &.{ "disk space", "free space" },
+    },
+    .{
+        .name = "AirDrop & Handoff",
+        .id = "com.apple.AirDrop-Handoff-Settings.extension",
+        .appex = "AirDropHandoffExtension",
+        .keywords = &.{ "airplay receiver", "continuity" },
+    },
+    .{
+        .name = "Login Items & Extensions",
+        .id = "com.apple.LoginItems-Settings.extension",
+        .appex = "LoginItems",
+        .keywords = &.{ "open at login", "startup items", "background items", "extensions" },
+    },
+    .{
+        .name = "Language & Region",
+        .id = "com.apple.Localization-Settings.extension",
+        .appex = "Localization",
+        .keywords = &.{ "language", "region", "locale", "date format" },
+    },
+    .{
+        .name = "Date & Time",
+        .id = "com.apple.Date-Time-Settings.extension",
+        .appex = "DateAndTime Extension",
+        .keywords = &.{ "clock", "time zone" },
+    },
+    .{
+        .name = "Sharing",
+        .id = "com.apple.Sharing-Settings.extension",
+        .appex = "Sharing",
+        .keywords = &.{ "file sharing", "screen sharing", "remote login", "ssh", "computer name" },
+    },
+    .{
+        .name = "Time Machine",
+        .id = "com.apple.Time-Machine-Settings.extension",
+        .appex = "TimeMachineSettings",
+        .keywords = &.{"backup"},
+    },
+    .{
+        .name = "Transfer or Reset",
+        .id = "com.apple.Transfer-Reset-Settings.extension",
+        .appex = "TransferResetExtension",
+        .keywords = &.{ "erase all content", "factory reset" },
+    },
+    .{
+        .name = "Startup Disk",
+        .id = "com.apple.Startup-Disk-Settings.extension",
+        .appex = "StartupDisk",
+    },
+    .{
+        .name = "Device Management",
+        .id = "com.apple.Profiles-Settings.extension",
+        .appex = "ProfilesSettingsExt",
+        .keywords = &.{ "profiles", "mdm" },
+    },
+    .{
+        .name = "Appearance",
+        .id = "com.apple.Appearance-Settings.extension",
+        .appex = "Appearance",
+        .keywords = &.{ "dark mode", "light mode", "accent color", "theme" },
+    },
+    .{
+        .name = "Accessibility",
+        .id = "com.apple.Accessibility-Settings.extension",
+        .appex = "AccessibilitySettingsExtension",
+        .keywords = &.{ "voiceover", "zoom", "reduce motion" },
+    },
+    .{
+        .name = "Control Center",
+        .id = "com.apple.ControlCenter-Settings.extension",
+        .appex = "ControlCenterSettings",
+        .keywords = &.{"menu bar"},
+    },
+    .{
+        .name = "Siri",
+        .id = "com.apple.Siri-Settings.extension",
+        .appex = "SiriPreferenceExtension",
+        .keywords = &.{ "apple intelligence", "dictation" },
+    },
+    .{
+        .name = "Spotlight",
+        .id = "com.apple.Spotlight-Settings.extension",
+        .appex = "SpotlightPreferenceExtension",
+    },
+    .{
+        .name = "Privacy & Security",
+        .id = "com.apple.settings.PrivacySecurity.extension",
+        .appex = "SecurityPrivacyExtension",
+        .keywords = &.{
+            "permissions",
+            "full disk access",
+            "accessibility access",
+            "location services",
+            "camera access",
+            "filevault",
+            "gatekeeper",
+        },
+    },
+    .{
+        .name = "Desktop & Dock",
+        .id = "com.apple.Desktop-Settings.extension",
+        .appex = "DesktopSettings",
+        .keywords = &.{ "dock", "mission control", "hot corners", "stage manager", "widgets" },
+    },
+    .{
+        .name = "Displays",
+        .id = "com.apple.Displays-Settings.extension",
+        .appex = "DisplaysExt",
+        .keywords = &.{ "monitor", "resolution", "brightness", "night shift" },
+    },
+    .{
+        .name = "Wallpaper",
+        .id = "com.apple.Wallpaper-Settings.extension",
+        .appex = "Wallpaper",
+        .keywords = &.{ "background", "desktop picture" },
+    },
+    .{
+        .name = "Battery",
+        .id = "com.apple.Battery-Settings.extension",
+        .appex = "PowerPreferences",
+        .keywords = &.{ "energy", "power", "low power mode" },
+    },
+    .{
+        .name = "Lock Screen",
+        .id = "com.apple.Lock-Screen-Settings.extension",
+        .appex = "LockScreen",
+        .keywords = &.{ "screen saver", "require password" },
+    },
+    .{
+        .name = "Touch ID & Password",
+        .id = "com.apple.Touch-ID-Settings.extension",
+        .appex = "Touch ID & Password",
+        .keywords = &.{ "fingerprint", "password" },
+    },
+    .{
+        .name = "Users & Groups",
+        .id = "com.apple.Users-Groups-Settings.extension",
+        .appex = "UsersGroups",
+        .keywords = &.{ "accounts", "users", "guest user" },
+    },
+    .{
+        .name = "Internet Accounts",
+        .id = "com.apple.Internet-Accounts-Settings.extension",
+        .appex = "InternetAccountsSettingsExtension",
+        .keywords = &.{ "mail accounts", "email accounts" },
+    },
+    .{
+        .name = "Game Center",
+        .id = "com.apple.Game-Center-Settings.extension",
+        .appex = "GameCenterMacOSSettingsExtension",
+    },
+    .{
+        .name = "Game Controllers",
+        .id = "com.apple.Game-Controller-Settings.extension",
+        .appex = "GameControllerMacSettings",
+        .keywords = &.{"gamepad"},
+    },
+    .{
+        .name = "Wallet & Apple Pay",
+        .id = "com.apple.WalletSettingsExtension",
+        .appex = "WalletSettingsExtension",
+    },
+    .{
+        .name = "Keyboard",
+        .id = "com.apple.Keyboard-Settings.extension",
+        .appex = "KeyboardSettings",
+        .keywords = &.{ "keyboard shortcuts", "input sources", "key repeat" },
+    },
+    .{
+        .name = "Mouse",
+        .id = "com.apple.Mouse-Settings.extension",
+        .appex = "MouseExtension",
+        .keywords = &.{ "pointer speed", "natural scrolling" },
+    },
+    .{
+        .name = "Trackpad",
+        .id = "com.apple.Trackpad-Settings.extension",
+        .appex = "TrackpadExtension",
+        .keywords = &.{ "gestures", "tap to click", "natural scrolling" },
+    },
+    .{
+        .name = "Printers & Scanners",
+        .id = "com.apple.Print-Scan-Settings.extension",
+        .appex = "PrinterScannerSettings",
+        .keywords = &.{"printer"},
+    },
+    .{
+        .name = "Apple Account",
+        .id = "com.apple.systempreferences.AppleIDSettings",
+        .appex = "AppleIDSettings",
+        .keywords = &.{ "apple id", "icloud" },
+    },
+    .{
+        .name = "Family",
+        .id = "com.apple.Family-Settings.extension",
+        .appex = "FamilySettings",
+        .keywords = &.{"family sharing"},
+    },
 };
 
 /// The addresses of `all`, in step with it.
@@ -87,11 +304,18 @@ fn present(i: usize) bool {
         var buf: [256]u8 = undefined;
         // Most panes are system extensions. General ships inside System
         // Settings itself before macOS 27.
-        const dirs = [_][]const u8{ "/System/Library/ExtensionKit/Extensions", "/System/Applications/System Settings.app/Contents/PlugIns" };
+        const dirs = [_][]const u8{
+            "/System/Library/ExtensionKit/Extensions",
+            "/System/Applications/System Settings.app/Contents/PlugIns",
+        };
         for (all, 0..) |p, k| {
             have[k] = false;
             for (dirs) |d| {
-                const path = std.fmt.bufPrint(&buf, "{s}/{s}.appex", .{ d, p.appex }) catch continue;
+                const path = std.fmt.bufPrint(
+                    &buf,
+                    "{s}/{s}.appex",
+                    .{ d, p.appex },
+                ) catch continue;
                 if (std.Io.Dir.accessAbsolute(io, path, .{})) |_| {
                     have[k] = true;
                     break;
@@ -108,7 +332,12 @@ fn present(i: usize) bool {
 fn strip(query: []const u8) []const u8 {
     var q = std.mem.trim(u8, query, " ");
     for ([_][]const u8{ " settings", " preferences", " pane" }) |tail| {
-        if (q.len > tail.len and std.ascii.endsWithIgnoreCase(q, tail)) q = std.mem.trimEnd(u8, q[0 .. q.len - tail.len], " ");
+        if (q.len > tail.len and
+            std.ascii.endsWithIgnoreCase(q, tail)) q = std.mem.trimEnd(
+            u8,
+            q[0 .. q.len - tail.len],
+            " ",
+        );
     }
     return q;
 }
@@ -167,7 +396,18 @@ test "every pane's extension is on this Mac's macOS, or is known not to be" {
     if (!mac) return error.SkipZigTest;
     // The panes every Mac running Nanolight has (macOS 14 or later): a
     // typo in a bundle name here would hide its pane for good.
-    for ([_][]const u8{ "Wi-Fi", "Bluetooth", "Network", "Sound", "General", "Appearance", "Keyboard", "Displays", "Login Items & Extensions", "Privacy & Security" }) |want| {
+    for ([_][]const u8{
+        "Wi-Fi",
+        "Bluetooth",
+        "Network",
+        "Sound",
+        "General",
+        "Appearance",
+        "Keyboard",
+        "Displays",
+        "Login Items & Extensions",
+        "Privacy & Security",
+    }) |want| {
         const i = for (all, 0..) |p, k| {
             if (std.mem.eql(u8, p.name, want)) break k;
         } else return error.NoPane;
@@ -184,10 +424,14 @@ test "every pane's extension is on this Mac's macOS, or is known not to be" {
 fn listLike(want: []const u8) void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const word = want[0 .. std.mem.indexOfAny(u8, want, " -&") orelse want.len];
-    var dir = std.Io.Dir.cwd().openDir(io, "/System/Library/ExtensionKit/Extensions", .{ .iterate = true }) catch return;
+    var dir = std.Io.Dir.cwd()
+        .openDir(io, "/System/Library/ExtensionKit/Extensions", .{ .iterate = true }) catch return;
     defer dir.close(io);
     var it = dir.iterate();
     while (it.next(io) catch null) |e| {
-        if (std.ascii.findIgnoreCase(e.name, word) != null) std.debug.print("  on this Mac: {s}\n", .{e.name});
+        if (std.ascii.findIgnoreCase(e.name, word) != null) std.debug.print(
+            "  on this Mac: {s}\n",
+            .{e.name},
+        );
     }
 }

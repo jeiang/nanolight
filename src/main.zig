@@ -26,7 +26,10 @@ const panel = if (mac) @import("panel_mac.zig") else @import("panel_pc.zig");
 const preview_mod = if (mac) @import("preview.zig") else @import("pc_stubs.zig");
 const Preview = preview_mod.Preview;
 const single = @import("single.zig");
-const ClickThrough = if (mac) @import("clickthrough.zig").ClickThrough else @import("pc_stubs.zig").ClickThrough;
+const ClickThrough = if (mac)
+    @import("clickthrough.zig").ClickThrough
+else
+    @import("pc_stubs.zig").ClickThrough;
 const Recorder = if (mac) @import("recorder.zig").Recorder else @import("pc_stubs.zig").Recorder;
 const account = @import("account.zig");
 const rc = @import("script_live.zig");
@@ -113,7 +116,18 @@ pub const Live = struct {
     fn host(l: *Live) view.Host {
         const bind = @import("settings_bind.zig");
         bind.box.ctx = l;
-        return .{ .ctx = l, .open = open, .hide = hide, .resize = resize, .suggest = ask, .files = if (mac) @import("files_live.zig").askFiles else null, .preview = if (mac) showPage else null, .settings = &bind.box, .command = runCommand, .rates = needRates };
+        return .{
+            .ctx = l,
+            .open = open,
+            .hide = hide,
+            .resize = resize,
+            .suggest = ask,
+            .files = if (mac) @import("files_live.zig").askFiles else null,
+            .preview = if (mac) showPage else null,
+            .settings = &bind.box,
+            .command = runCommand,
+            .rates = needRates,
+        };
     }
 
     fn open(ctx: *anyopaque, target: []const u8) void {
@@ -190,7 +204,10 @@ pub const Live = struct {
         var keep: std.ArrayList(settings_mod.Quicklink) = .empty;
         for (list) |q| {
             if (!settings_mod.webUrl(q.url)) {
-                std.log.warn("nanolight: quicklink \"{s}\": only http and https addresses work; ignored", .{q.name});
+                std.log.warn(
+                    "nanolight: quicklink \"{s}\": only http and https addresses work; ignored",
+                    .{q.name},
+                );
                 continue;
             }
             const copy: settings_mod.Quicklink = .{
@@ -297,6 +314,7 @@ pub const Live = struct {
     fn ratesPath(l: *Live) ?[]u8 {
         const data = nanoui.path(l.app.gpa, .data, "Nanolight") catch return null;
         defer l.app.gpa.free(data);
+        // best effort: without the folder no rates are read, and the write says why.
         std.Io.Dir.cwd().createDirPath(l.app.io, data) catch {};
         return std.fs.path.join(l.app.gpa, &.{ data, "rates.json" }) catch null;
     }
@@ -420,18 +438,36 @@ pub const Live = struct {
         if (comptime !mac) return;
         const t = l.tray orelse return;
         const ready = if (l.updater) |u| u.ready() else null;
-        const label = if (ready) |v| std.fmt.bufPrint(&l.update_label, "Restart to Update to {s}", .{v}) catch "Restart to Update" else "Check for Updates";
+        const label = if (ready) |v|
+            std.fmt.bufPrint(
+                &l.update_label,
+                "Restart to Update to {s}",
+                .{v},
+            ) catch "Restart to Update"
+        else
+            "Check for Updates";
         const acc = l.accountItem();
         const Item = nanoui.menu.MenuItem;
-        const update = if (nix_managed) [_]Item{} else [_]Item{.{ .label = label, .disabled = l.updater == null, .click = .of(l, Live.updateNow) }};
+        const update = if (nix_managed)
+            [_]Item{}
+        else
+            [_]Item{
+                .{ .label = label, .disabled = l.updater == null, .click = .of(l, Live.updateNow) },
+            };
         t.setMenu("Nanolight", &([_]Item{
             .{ .label = "Settings…", .accelerator = "Cmd+,", .click = .of(l, Live.menuSettings) },
             .{ .label = "Open Nanolight", .click = .of(l, Live.menuShow) },
             .{ .label = "Welcome…", .click = .of(l, Live.welcome) },
-            .{ .label = "Google Suggestions", .kind = .checkbox, .checked = l.s.suggest_on, .click = .of(l, Live.toggleSuggest) },
+            .{
+                .label = "Google Suggestions",
+                .kind = .checkbox,
+                .checked = l.s.suggest_on,
+                .click = .of(l, Live.toggleSuggest),
+            },
             .separator,
             acc,
             .separator,
+            // best effort: without the menu, the panel still opens from its key.
         } ++ update ++ [_]Item{.{ .label = "Quit Nanolight", .role = .quit }})) catch {};
     }
 
@@ -516,13 +552,22 @@ pub const Live = struct {
     }
 
     fn hooks(l: *Live) @import("onboard.zig").Hooks {
-        return .{ .ctx = l, .apply = apply, .fix = fix, .login = if (l.o.skip_key) null else login, .done = done };
+        return .{
+            .ctx = l,
+            .apply = apply,
+            .fix = fix,
+            .login = if (l.o.skip_key) null else login,
+            .done = done,
+        };
     }
 
     fn useKey(l: *Live, choice: shortcut.Choice) void {
         l.choice = choice;
         hotkey.register(choice, .{ .ctx = l, .func = toggle }) catch |e|
-            std.log.warn("nanolight: {f} can't be registered ({s}); open it from the menu bar", .{ choice, @errorName(e) });
+            std.log.warn(
+                "nanolight: {f} can't be registered ({s}); open it from the menu bar",
+                .{ choice, @errorName(e) },
+            );
     }
 
     /// Settings records a key: until it has one, keys pressed go to it,
@@ -558,7 +603,9 @@ pub const Live = struct {
     fn fix(ctx: *anyopaque, clash: shortcut.Clash) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (clash.system != null) {
-            _ = nanoui.shell.openUrl("x-apple.systempreferences:com.apple.Keyboard-Settings.extension");
+            _ = nanoui.shell.openUrl(
+                "x-apple.systempreferences:com.apple.Keyboard-Settings.extension",
+            );
         } else for (clash.launchers) |name| shortcut.quit(name);
         // A launcher takes a moment to quit: then the panel looks again.
         nanoui.App.after(900, l, struct {
@@ -633,7 +680,13 @@ const Ask = struct {
         var arena: std.heap.ArenaAllocator = .init(l.app.gpa);
         defer arena.deinit();
         var list: suggest.List = .{};
-        if (r.status != 200 or !suggest.decode(arena.allocator(), r.body, a.text[0..a.len], &list)) return l.s.unanswered(a.text[0..a.len]);
+        if (r.status != 200 or
+            !suggest.decode(
+                arena.allocator(),
+                r.body,
+                a.text[0..a.len],
+                &list,
+            )) return l.s.unanswered(a.text[0..a.len]);
         l.s.answered(a.text[0..a.len], &list);
     }
 };
@@ -655,7 +708,9 @@ const RatesAsk = struct {
             _ = config.kvSet(l.kv, rates_at_key, at_text);
             if (l.ratesPath()) |path| {
                 defer gpa.free(path);
-                std.Io.Dir.cwd().writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch {};
+                std.Io.Dir.cwd()
+                    .writeFile(l.app.io, .{ .sub_path = path, .data = r.body }) catch |err|
+                    std.log.warn("nanolight: the rates weren't kept in {s}: {t}", .{ path, err });
             }
         } else if (a.which + 1 < convert.urls.len) {
             return l.fetchRates(a.which + 1);
@@ -677,26 +732,17 @@ const version = @import("build_options").version;
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
 pub fn main(init: std.process.Init) !void {
-    // `nanolight --toggle`: the running copy's panel (Wayland's shortcut);
-    // `--version`: what the updater asks a downloaded copy.
     var arena: std.heap.ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
-    for (try init.minimal.args.toSlice(arena.allocator())) |arg| {
-        if (std.mem.eql(u8, arg, "--version")) {
-            var out: [64]u8 = undefined;
-            var w = std.Io.File.stdout().writer(init.io, &out);
-            try w.interface.print("nanolight {s}\n", .{version});
-            return w.interface.flush();
-        }
-        if (std.mem.eql(u8, arg, "--toggle")) {
-            if (single.send(.toggle)) return;
-            break;
-        }
-    }
+    if (try answeredArgs(init, try init.minimal.args.toSlice(arena.allocator()))) return;
     // Linux: GTK 3, where a window can be put somewhere (GTK 4 lets only
     // the compositor place one), unless the user asked for another.
-    if (builtin.os.tag == .linux and std.c.getenv("NANOUI_GTK") == null) _ = setenv("NANOUI_GTK", "3", 0);
-    const app = try nanoui.App.create(init, .{ .name = "Nanolight", .quit_on_last_window_closed = false });
+    if (builtin.os.tag == .linux and
+        std.c.getenv("NANOUI_GTK") == null) _ = setenv("NANOUI_GTK", "3", 0);
+    const app = try nanoui.App.create(
+        init,
+        .{ .name = "Nanolight", .quit_on_last_window_closed = false },
+    );
     defer app.destroy();
     var index: Index = .init(init.gpa);
     defer index.deinit();
@@ -713,11 +759,21 @@ pub fn main(init: std.process.Init) !void {
     const cfg = loaded.config();
     config.apply(kv, init.gpa, loaded, account.now());
     // The key is the config's or the Nix module's: the welcome does not ask.
-    var o: Onboard = .{ .skip_key = nix_managed or (if (cfg.hotkey) |h| shortcut.Choice.parse(h) != null else false) };
+    var o: Onboard = .{
+        .skip_key = nix_managed or
+            (if (cfg.hotkey) |h| shortcut.Choice.parse(h) != null else false),
+    };
     var s: Nanolight = .{ .index = &index, .kv = kv, .onboard = &o };
     defer s.query.deinit();
     defer s.found.deinit();
-    var live: Live = .{ .app = app, .s = &s, .o = &o, .kv = kv, .choice = shortcut.load(kv, init.gpa), .cfg = cfg };
+    var live: Live = .{
+        .app = app,
+        .s = &s,
+        .o = &o,
+        .kv = kv,
+        .choice = shortcut.load(kv, init.gpa),
+        .cfg = cfg,
+    };
     defer live.rates.deinit();
     s.feed = &live.rates;
     defer if (live.ql_arena) |a| {
@@ -728,16 +784,7 @@ pub fn main(init: std.process.Init) !void {
     s.pop_after = cfg.pop_to_root_seconds;
     if (!app.flags.hidden) _ = live.setQuicklinks(config.loadQuicklinks(cfg_arena.allocator(), kv));
     @import("files_live.zig").load(&live);
-    // Google's completions are on unless turned off in Settings.
-    if (kv.get(init.gpa, suggest_key) catch null) |v| {
-        defer init.gpa.free(v);
-        s.suggest_on = !std.mem.eql(u8, v, "0");
-    }
-    if (kv.get(init.gpa, searches_out_key) catch null) |v| {
-        defer init.gpa.free(v);
-        s.searches_out = std.mem.eql(u8, v, "1");
-    }
-    s.theme = @import("settings_bind.zig").loadTheme(kv, init.gpa);
+    loadPreferences(&s, kv, init.gpa);
     s.reveal();
     // The rows first, so a snapshot is as tall as the panel.
     s.rebuild();
@@ -751,28 +798,75 @@ pub fn main(init: std.process.Init) !void {
     panel.adjust(&options, app.flags.hidden, s.height());
     live.window = try app.newWindow(options);
     if (app.flags.hidden) return app.run();
+    try runShown(init, &live, loaded);
+}
+
+/// `nanolight --toggle`: the running copy's panel (Wayland's shortcut);
+/// `--version`: what the updater asks a downloaded copy. True when the
+/// arguments were the whole job.
+fn answeredArgs(init: std.process.Init, args: []const [:0]const u8) !bool {
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--version")) {
+            var out: [64]u8 = undefined;
+            var w = std.Io.File.stdout().writer(init.io, &out);
+            try w.interface.print("nanolight {s}\n", .{version});
+            try w.interface.flush();
+            return true;
+        }
+        if (std.mem.eql(u8, arg, "--toggle")) return single.send(.toggle);
+    }
+    return false;
+}
+
+/// The settings kept outside the config: Google's completions (on unless
+/// turned off in Settings), searches sent out, and the theme.
+fn loadPreferences(s: *Nanolight, kv: nanoui.kv.Store, gpa: std.mem.Allocator) void {
+    if (kv.get(gpa, suggest_key) catch null) |v| {
+        defer gpa.free(v);
+        s.suggest_on = !std.mem.eql(u8, v, "0");
+    }
+    if (kv.get(gpa, searches_out_key) catch null) |v| {
+        defer gpa.free(v);
+        s.searches_out = std.mem.eql(u8, v, "1");
+    }
+    s.theme = @import("settings_bind.zig").loadTheme(kv, gpa);
+}
+
+/// A run with a person at it: script commands, the clipboard history, the
+/// hotkey, the menu bar, updates and sync, then the app's loop.
+fn runShown(init: std.process.Init, live: *Live, loaded: config.Loaded) !void {
+    const app = live.app;
+    const s = live.s;
+    const o = live.o;
+    const kv = live.kv;
     // Script commands among the apps (never in headless runs: they're this
     // machine's).
-    rc.init(&live, init.environ_map);
-    defer rc.deinit(&live);
+    rc.init(live, init.environ_map);
+    defer rc.deinit(live);
     commands.init(init.io, init.environ_map);
-    live.cmds = .{ .io = app.io, .hooks = .{ .ctx = &live, .footer = Live.commandFooter, .done = Live.commandDone } };
+    live.cmds = .{
+        .io = app.io,
+        .hooks = .{ .ctx = live, .footer = Live.commandFooter, .done = Live.commandDone },
+    };
     defer live.cmds.deinit();
-    rc.rescan(&live);
+    rc.rescan(live);
     var clip_dir = clipboard_live.openDir(init.gpa, init.io);
     defer if (clip_dir) |*d| d.close(init.io);
     const clip_cfg = config.clipboardConfig(kv, init.gpa, loaded);
     var clip_store: clipboard.Store = .init(init.gpa, init.io, clip_dir, clip_cfg);
     defer clip_store.deinit();
     // No data directory, no history: nothing could be kept.
-    if (clip_dir != null) clipboard_live.init(&live, &clip_store);
-    defer clipboard_live.deinit(&live);
+    if (clip_dir != null) clipboard_live.init(live, &clip_store);
+    defer clipboard_live.deinit(live);
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
-    if (single.claim(.{ .ctx = &live, .func = Live.command }) > 0) std.log.info("nanolight: asked an older copy to quit", .{});
-    panel.setup(app, live.window.?, &s, if (o.active) o.height() else s.height());
+    if (single.claim(.{ .ctx = live, .func = Live.command }) > 0) std.log.info(
+        "nanolight: asked an older copy to quit",
+        .{},
+    );
+    panel.setup(app, live.window.?, s, if (o.active) o.height() else s.height());
     live.useKey(live.choice);
     live.through = .{ .window = live.window, .height = &s.last_h };
-    live.preview.watch(.{ .ctx = &live, .func = Live.pageKey });
+    live.preview.watch(.{ .ctx = live, .func = Live.pageKey });
     o.hooks = live.hooks();
     // The first run: the welcome, in the panel.
     if (!shortcut.onboarded(kv)) o.start(live.choice);
@@ -782,40 +876,56 @@ pub fn main(init: std.process.Init) !void {
         defer init.gpa.free(v);
         if (std.mem.eql(u8, v, "0")) _ = live.menuBar(false);
     }
-    // A release build checks its GitHub releases; one run from zig-out
-    // can't replace itself, and leaves the item off. A Nix build never
-    // updates itself.
-    const updater = if (nix_managed) null else nanoui.Updater.start(init, .{
+    const updater = startUpdater(init, live);
+    defer if (updater) |u| u.deinit();
+    // `[sync]` names a server: synced now.
+    live.acct = .{
+        .gpa = init.gpa,
+        .io = init.io,
+        .kv = kv,
+        .hooks = live.accountHooks(),
+        .cfg = live.cfg.sync,
+    };
+    live.acct.?.load();
+    live.menu();
+    var note_buf: [64]u8 = undefined;
+    greet(init.gpa, live, &note_buf);
+    try app.run();
+}
+
+/// A release build checks its GitHub releases; one run from zig-out
+/// can't replace itself, and leaves the item off. A Nix build never
+/// updates itself. The caller ends what this returns.
+fn startUpdater(init: std.process.Init, live: *Live) ?*nanoui.Updater {
+    if (nix_managed) return null;
+    const u = nanoui.Updater.start(init, .{
         .repo = "jeiang/nanolight",
         .asset = asset,
         .version = version,
         .name = "Nanolight",
-        .changed = .{ .ctx = &live, .func = Live.updated },
-    }) catch null;
-    defer if (updater) |u| u.deinit();
-    if (updater) |u| if (u.phase.load(.acquire) != .off) {
-        live.updater = u;
-        // A launcher almost never quits, so installing at quit would mean
-        // never: it restarts into an update once the panel has been away
-        // 10 s, unseen, and comes back as it was (update_pc.zig off the Mac).
-        u.autoRestart(app, .{ .idle_ms = 10 * 1000 });
-    };
-    // `[sync]` names a server: synced now.
-    live.acct = .{ .gpa = init.gpa, .io = init.io, .kv = kv, .hooks = live.accountHooks(), .cfg = cfg.sync };
-    live.acct.?.load();
-    live.menu();
-    // Restarted by an automatic update: quietly, the panel saying so the
-    // next time it opens. Otherwise launching stays in the background,
-    // the key or the menu bar icon opening the panel, unless the welcome
-    // is due.
-    var note_buf: [64]u8 = undefined;
-    const old = kv.get(init.gpa, updated_key) catch null;
-    defer if (old) |v| init.gpa.free(v);
+        .changed = .{ .ctx = live, .func = Live.updated },
+    }) catch return null;
+    if (u.phase.load(.acquire) == .off) return u;
+    live.updater = u;
+    // A launcher almost never quits, so installing at quit would mean
+    // never: it restarts into an update once the panel has been away
+    // 10 s, unseen, and comes back as it was (update_pc.zig off the Mac).
+    u.autoRestart(live.app, .{ .idle_ms = 10 * 1000 });
+    return u;
+}
+
+/// Restarted by an automatic update: quietly, the panel saying so the
+/// next time it opens (in `note_buf`). Otherwise launching stays in the
+/// background, the key or the menu bar icon opening the panel, unless the
+/// welcome is due.
+fn greet(gpa: std.mem.Allocator, live: *Live, note_buf: *[64]u8) void {
+    const kv = live.kv;
+    const old = kv.get(gpa, updated_key) catch null;
+    defer if (old) |v| gpa.free(v);
     if (old != null) kv.remove(updated_key);
     const restarted = if (live.updater) |u| u.updatedFrom() != null else false;
     if (restarted or old != null) {
         const now = if (live.updater) |u| u.current else old.?;
-        s.note = std.fmt.bufPrint(&note_buf, "Updated to {s}", .{now}) catch "Updated";
-    } else if (o.active) Live.toggle(&live);
-    try app.run();
+        live.s.note = std.fmt.bufPrint(note_buf, "Updated to {s}", .{now}) catch "Updated";
+    } else if (live.o.active) Live.toggle(live);
 }

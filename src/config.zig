@@ -87,14 +87,16 @@ pub const searches_out_key = "nanolight.searches_out";
 pub const menu_bar_key = "nanolight.menu_bar";
 /// The quicklinks in use, as JSON: the config's, or what sync last brought.
 pub const quicklinks_key = "nanolight.quicklinks";
-/// "0": clipboard history is off (the app's own switch; the config's `[clipboard] enabled` seeds it).
+/// "0": clipboard history is off (the app's own switch; the config's
+/// `[clipboard] enabled` seeds it).
 pub const clipboard_key = "nanolight.clipboard.enabled";
 /// When this machine last changed its key or suggestions (settings.zig's `at`).
 pub const sync_at_key = "nanolight.sync.at";
 
 const applied_prefix = "nanolight.config.";
 
-/// Set once a config file has been applied; a later launch that finds none must not fall back to defaults.
+/// Set once a config file has been applied; a later launch that finds none
+/// must not fall back to defaults.
 const seen_key = "nanolight.config.seen";
 
 /// Reads the first config file `candidates` finds. Strings live as long as `arena`.
@@ -110,12 +112,22 @@ pub fn load(
 
 /// Where a config may live, first match wins: `NANOLIGHT_CONFIG`, the data dir, the XDG config dir
 /// (home-manager's `xdg.configFile`), then `/etc/nanolight` (the NixOS and nix-darwin modules).
-fn candidates(arena: std.mem.Allocator, env: *const std.process.Environ.Map, data_dir: ?[]const u8) std.mem.Allocator.Error![]const []const u8 {
+fn candidates(
+    arena: std.mem.Allocator,
+    env: *const std.process.Environ.Map,
+    data_dir: ?[]const u8,
+) std.mem.Allocator.Error![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     if (env.get("NANOLIGHT_CONFIG")) |p| try out.append(arena, p);
     if (data_dir) |d| try out.append(arena, try std.fs.path.join(arena, &.{ d, "config.toml" }));
-    const xdg: ?[]const u8 = if (env.get("XDG_CONFIG_HOME")) |x| (if (x.len > 0) x else null) else null;
-    if (xdg orelse (if (env.get("HOME")) |h| try std.fs.path.join(arena, &.{ h, ".config" }) else null)) |c|
+    const xdg: ?[]const u8 = if (env.get("XDG_CONFIG_HOME")) |x|
+        (if (x.len > 0) x else null)
+    else
+        null;
+    if (xdg orelse (if (env.get("HOME")) |h|
+        try std.fs.path.join(arena, &.{ h, ".config" })
+    else
+        null)) |c|
         try out.append(arena, try std.fs.path.join(arena, &.{ c, "nanolight", "config.toml" }));
     try out.append(arena, "/etc/nanolight/config.toml");
     return out.items;
@@ -123,8 +135,14 @@ fn candidates(arena: std.mem.Allocator, env: *const std.process.Environ.Map, dat
 
 /// A script runs with its folder as the working directory, so a relative
 /// `[script_commands] dirs` entry is taken relative to the config file.
-fn absoluteScriptDirs(arena: std.mem.Allocator, io: std.Io, c: *Config, config_path: []const u8) !Config {
-    const base = try std.Io.Dir.cwd().realPathFileAlloc(io, std.fs.path.dirname(config_path) orelse ".", arena);
+fn absoluteScriptDirs(
+    arena: std.mem.Allocator,
+    io: std.Io,
+    c: *Config,
+    config_path: []const u8,
+) !Config {
+    const base = try std.Io.Dir.cwd()
+        .realPathFileAlloc(io, std.fs.path.dirname(config_path) orelse ".", arena);
     const dirs = try arena.alloc([]const u8, c.script_command_dirs.len);
     for (c.script_command_dirs, dirs) |d, *out|
         out.* = if (std.fs.path.isAbsolute(d)) d else try std.fs.path.join(arena, &.{ base, d });
@@ -148,7 +166,10 @@ fn loadFrom(
         var c = parse(arena, text, &problem) catch |e| {
             if (e == error.OutOfMemory) return .unusable;
             if (problem.line > 0)
-                std.log.warn("nanolight: {s}:{d}: {s}; using the defaults", .{ path, problem.line, problem.msg })
+                std.log.warn(
+                    "nanolight: {s}:{d}: {s}; using the defaults",
+                    .{ path, problem.line, problem.msg },
+                )
             else
                 std.log.warn("nanolight: {s}: {s}; using the defaults", .{ path, problem.msg });
             return .unusable;
@@ -184,14 +205,34 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8, problem: *Problem) Erro
     c.open_searches_in_browser = try r.get(bool, root, "", "open_searches_in_browser");
     c.show_in_menu_bar = try r.get(bool, root, "", "show_in_menu_bar");
     if (try r.get(u32, root, "", "pop_to_root_seconds")) |v| c.pop_to_root_seconds = v;
-    r.unknown(root, "", &.{ "hotkey", "suggestions", "open_searches_in_browser", "show_in_menu_bar", "pop_to_root_seconds", "apps", "script_commands", "quicklinks", "clipboard", "sync" });
+    r.unknown(
+        root,
+        "",
+        &.{
+            "hotkey",
+            "suggestions",
+            "open_searches_in_browser",
+            "show_in_menu_bar",
+            "pop_to_root_seconds",
+            "apps",
+            "script_commands",
+            "quicklinks",
+            "clipboard",
+            "sync",
+        },
+    );
 
     if (try r.table(root, "apps")) |t| {
         if (try r.get([]const []const u8, t, "apps.", "extra_dirs")) |v| c.extra_app_dirs = v;
         r.unknown(t, "apps.", &.{"extra_dirs"});
     }
     if (try r.table(root, "script_commands")) |t| {
-        if (try r.get([]const []const u8, t, "script_commands.", "dirs")) |v| c.script_command_dirs = v;
+        if (try r.get(
+            []const []const u8,
+            t,
+            "script_commands.",
+            "dirs",
+        )) |v| c.script_command_dirs = v;
         r.unknown(t, "script_commands.", &.{"dirs"});
     }
     if (root.get("quicklinks")) |v| c.quicklinks = try r.quicklinks(v);
@@ -202,7 +243,11 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8, problem: *Problem) Erro
         if (try r.get(u32, t, s, "max_entries")) |x| c.clipboard.max_entries = x;
         if (try r.get(bool, t, s, "paste_plain_text")) |x| c.clipboard.paste_plain_text = x;
         if (try r.get([]const []const u8, t, s, "exclude_apps")) |x| c.clipboard.exclude_apps = x;
-        r.unknown(t, s, &.{ "enabled", "retention_days", "max_entries", "paste_plain_text", "exclude_apps" });
+        r.unknown(
+            t,
+            s,
+            &.{ "enabled", "retention_days", "max_entries", "paste_plain_text", "exclude_apps" },
+        );
     }
     if (try r.table(root, "sync")) |t| {
         if (try r.get([]const u8, t, "sync.", "url")) |x| c.sync.url = x;
@@ -217,11 +262,23 @@ const Reader = struct {
     problem: *Problem,
 
     fn bad(r: *Reader, scope: []const u8, key: []const u8, what: []const u8) Error {
-        r.problem.* = .{ .msg = std.fmt.allocPrint(r.a, "{s}{s} must be {s}", .{ scope, key, what }) catch "a value has the wrong type" };
+        r.problem.* = .{
+            .msg = std.fmt.allocPrint(
+                r.a,
+                "{s}{s} must be {s}",
+                .{ scope, key, what },
+            ) catch "a value has the wrong type",
+        };
         return error.Invalid;
     }
 
-    fn get(r: *Reader, comptime T: type, t: *const toml.Table, scope: []const u8, key: []const u8) Error!?T {
+    fn get(
+        r: *Reader,
+        comptime T: type,
+        t: *const toml.Table,
+        scope: []const u8,
+        key: []const u8,
+    ) Error!?T {
         const v = t.get(key) orelse return null;
         switch (T) {
             bool => return if (v == .boolean) v.boolean else r.bad(scope, key, "true or false"),
@@ -254,21 +311,40 @@ const Reader = struct {
         for (v.items()) |item| {
             if (item != .table) return r.bad("", "quicklinks", "a list of tables ([[quicklinks]])");
             const t = item.table;
-            const name = try r.get([]const u8, t, "quicklinks.", "name") orelse return r.bad("quicklinks.", "name", "set, as a string");
-            const url = try r.get([]const u8, t, "quicklinks.", "url") orelse return r.bad("quicklinks.", "url", "set, as a string");
-            if (name.len == 0 or url.len == 0) return r.bad("quicklinks.", "name and url", "not empty");
+            const name = try r.get([]const u8, t, "quicklinks.", "name") orelse
+                return r.bad("quicklinks.", "name", "set, as a string");
+            const url = try r.get([]const u8, t, "quicklinks.", "url") orelse
+                return r.bad("quicklinks.", "url", "set, as a string");
+            if (name.len == 0 or
+                url.len == 0) return r.bad("quicklinks.", "name and url", "not empty");
             r.unknown(t, "quicklinks.", &.{ "name", "url", "keyword" });
             if (!settings.webUrl(url)) {
-                warn("nanolight: config: quicklink \"{s}\": only http and https addresses work; ignored", .{name});
+                warn(
+                    "nanolight: config: quicklink \"{s}\": only http and https addresses work; " ++
+                        "ignored",
+                    .{name},
+                );
                 continue;
             }
-            try out.append(r.a, .{ .name = name, .url = url, .keyword = try r.get([]const u8, t, "quicklinks.", "keyword") orelse "" });
+            try out.append(
+                r.a,
+                .{
+                    .name = name,
+                    .url = url,
+                    .keyword = try r.get([]const u8, t, "quicklinks.", "keyword") orelse "",
+                },
+            );
         }
         return out.items;
     }
 
     /// A key nothing reads is most often a typo: say so.
-    fn unknown(r: *Reader, t: *const toml.Table, scope: []const u8, known: []const []const u8) void {
+    fn unknown(
+        r: *Reader,
+        t: *const toml.Table,
+        scope: []const u8,
+        known: []const []const u8,
+    ) void {
         _ = r;
         outer: for (t.map.keys()) |k| {
             for (known) |name| if (std.mem.eql(u8, k, name)) continue :outer;
@@ -339,7 +415,12 @@ fn seedBool(store: nanoui.kv.Store, gpa: std.mem.Allocator, b: SeedBool) bool {
     return true;
 }
 
-fn seedQuicklinks(store: nanoui.kv.Store, gpa: std.mem.Allocator, list: []const Quicklink, synced: *bool) void {
+fn seedQuicklinks(
+    store: nanoui.kv.Store,
+    gpa: std.mem.Allocator,
+    list: []const Quicklink,
+    synced: *bool,
+) void {
     if (list.len == 0) return forget(store, "quicklinks");
     const json = std.json.Stringify.valueAlloc(gpa, list, .{}) catch return;
     defer gpa.free(json);
@@ -393,11 +474,20 @@ pub fn clipboardConfig(
 /// The quicklinks kept by the file or by sync; empty means the built-in ones.
 pub fn loadQuicklinks(arena: std.mem.Allocator, store: nanoui.kv.Store) []const Quicklink {
     const text = (store.get(arena, quicklinks_key) catch return &.{}) orelse return &.{};
-    return std.json.parseFromSliceLeaky([]const Quicklink, arena, text, .{ .ignore_unknown_fields = true }) catch &.{};
+    return std.json.parseFromSliceLeaky(
+        []const Quicklink,
+        arena,
+        text,
+        .{ .ignore_unknown_fields = true },
+    ) catch &.{};
 }
 
 /// Keeps `list` as the quicklinks in use; empty goes back to the built-in ones.
-pub fn saveQuicklinks(store: nanoui.kv.Store, gpa: std.mem.Allocator, list: []const Quicklink) void {
+pub fn saveQuicklinks(
+    store: nanoui.kv.Store,
+    gpa: std.mem.Allocator,
+    list: []const Quicklink,
+) void {
     if (list.len == 0) return store.remove(quicklinks_key);
     const json = std.json.Stringify.valueAlloc(gpa, list, .{}) catch return;
     defer gpa.free(json);
@@ -427,7 +517,10 @@ fn seed(store: nanoui.kv.Store, gpa: std.mem.Allocator, c: Config, now: i64) voi
                 record(store, "hotkey", h);
                 synced = true;
             }
-        } else warn("nanolight: config: hotkey \"{s}\" is not a shortcut this system can use; ignored", .{h});
+        } else warn(
+            "nanolight: config: hotkey \"{s}\" is not a shortcut this system can use; ignored",
+            .{h},
+        );
     } else forget(store, "hotkey");
     seedQuicklinks(store, gpa, c.quicklinks, &synced);
     const bools = [_]SeedBool{
@@ -533,7 +626,10 @@ test "bad files say what and where" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     var p: Problem = .{};
-    try testing.expectError(error.Invalid, parse(arena.allocator(), "suggestions = true\nhotkey = \n", &p));
+    try testing.expectError(
+        error.Invalid,
+        parse(arena.allocator(), "suggestions = true\nhotkey = \n", &p),
+    );
     try testing.expectEqual(@as(usize, 2), p.line);
     for ([_][]const u8{
         "suggestions = \"yes\"\n",
@@ -560,7 +656,10 @@ test "bad files say what and where" {
 test "quicklinks as an inline array read the same" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const c = try parseOk(arena.allocator(), "quicklinks = [{ name = \"A\", url = \"http://a/{argument}\", keyword = \"a\" }]\n");
+    const c = try parseOk(
+        arena.allocator(),
+        "quicklinks = [{ name = \"A\", url = \"http://a/{argument}\", keyword = \"a\" }]\n",
+    );
     try testing.expectEqual(@as(usize, 1), c.quicklinks.len);
     try testing.expectEqualStrings("a", c.quicklinks[0].keyword);
 }
@@ -572,14 +671,22 @@ fn kvGet(store: nanoui.kv.Store, key: []const u8) !?[]u8 {
 fn expectKv(store: nanoui.kv.Store, key: []const u8, want: ?[]const u8) !void {
     const v = try kvGet(store, key);
     defer if (v) |x| testing.allocator.free(x);
-    if (want) |w| try testing.expectEqualStrings(w, v orelse return error.TestExpectedEqual) else try testing.expect(v == null);
+    if (want) |w| try testing.expectEqualStrings(
+        w,
+        v orelse return error.TestExpectedEqual,
+    ) else try testing.expect(v == null);
 }
 
 test "the file seeds once, then the app's own change wins" {
     var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
     defer m.deinit();
     const store = m.store();
-    const file: Config = .{ .hotkey = "ctrl_space", .suggestions = false, .open_searches_in_browser = true, .show_in_menu_bar = false };
+    const file: Config = .{
+        .hotkey = "ctrl_space",
+        .suggestions = false,
+        .open_searches_in_browser = true,
+        .show_in_menu_bar = false,
+    };
 
     // First start: everything is new.
     seed(store, testing.allocator, file, 1000);
@@ -760,13 +867,17 @@ test "quicklinks: a changed list is a local change now, an unchanged one leaves 
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const ddg: []const Quicklink = &.{.{ .name = "DDG", .url = "https://duckduckgo.com/?q={argument}", .keyword = "ddg" }};
+    const ddg: []const Quicklink = &.{
+        .{ .name = "DDG", .url = "https://duckduckgo.com/?q={argument}", .keyword = "ddg" },
+    };
     seed(store, testing.allocator, .{ .quicklinks = ddg }, 100);
     try testing.expectEqualStrings("ddg", loadQuicklinks(a, store)[0].keyword);
     try expectKv(store, sync_at_key, "100");
 
     // Sync brought another list; the same file leaves it, and the time, alone.
-    const synced: []const Quicklink = &.{.{ .name = "Kagi", .url = "https://kagi.com/search?q={argument}" }};
+    const synced: []const Quicklink = &.{
+        .{ .name = "Kagi", .url = "https://kagi.com/search?q={argument}" },
+    };
     saveQuicklinks(store, testing.allocator, synced);
     try store.set(sync_at_key, "150");
     seed(store, testing.allocator, .{ .quicklinks = ddg }, 200);
@@ -774,7 +885,9 @@ test "quicklinks: a changed list is a local change now, an unchanged one leaves 
     try expectKv(store, sync_at_key, "150");
 
     // An edited file wins again, as a change now.
-    const edited: []const Quicklink = &.{.{ .name = "Bing", .url = "https://bing.com/search?q={argument}" }};
+    const edited: []const Quicklink = &.{
+        .{ .name = "Bing", .url = "https://bing.com/search?q={argument}" },
+    };
     seed(store, testing.allocator, .{ .quicklinks = edited }, 300);
     try testing.expectEqualStrings("Bing", loadQuicklinks(a, store)[0].name);
     try expectKv(store, sync_at_key, "300");
@@ -860,12 +973,18 @@ test "a relative script command dir is relative to the config file" {
     defer arena.deinit();
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.toml", .data = "[script_commands]\ndirs = [\"scripts\", \"/abs\"]\n" });
+    try tmp.dir.writeFile(
+        testing.io,
+        .{ .sub_path = "a.toml", .data = "[script_commands]\ndirs = [\"scripts\", \"/abs\"]\n" },
+    );
     const a = arena.allocator();
     const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
     const paths = [_][]const u8{try std.fs.path.join(a, &.{ dir, "a.toml" })};
     const c = loadFrom(a, testing.io, &paths, m.store()).file;
-    try testing.expectEqualStrings(try std.fs.path.join(a, &.{ dir, "scripts" }), c.script_command_dirs[0]);
+    try testing.expectEqualStrings(
+        try std.fs.path.join(a, &.{ dir, "scripts" }),
+        c.script_command_dirs[0],
+    );
     try testing.expectEqualStrings("/abs", c.script_command_dirs[1]);
 }
 
@@ -876,12 +995,20 @@ test "a relative config path still gives absolute script command dirs" {
     defer arena.deinit();
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.toml", .data = "[script_commands]\ndirs = [\"scripts\"]\n" });
+    try tmp.dir.writeFile(
+        testing.io,
+        .{ .sub_path = "a.toml", .data = "[script_commands]\ndirs = [\"scripts\"]\n" },
+    );
     const a = arena.allocator();
-    const paths = [_][]const u8{try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path, "a.toml" })};
+    const paths = [_][]const u8{
+        try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path, "a.toml" }),
+    };
     const c = loadFrom(a, testing.io, &paths, m.store()).file;
     const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
-    try testing.expectEqualStrings(try std.fs.path.join(a, &.{ dir, "scripts" }), c.script_command_dirs[0]);
+    try testing.expectEqualStrings(
+        try std.fs.path.join(a, &.{ dir, "scripts" }),
+        c.script_command_dirs[0],
+    );
 }
 
 test "no file after one was applied is a failed load, not the defaults" {

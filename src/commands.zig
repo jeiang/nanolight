@@ -39,18 +39,50 @@ fn macVolume(comptime v: u8) []const []const []const u8 {
 
 fn linuxVolume(comptime v: u8) []const []const []const u8 {
     return &.{
-        &.{ "wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", std.fmt.comptimePrint("{d}.{d:0>2}", .{ v / 100, v % 100 }) },
+        &.{
+            "wpctl",
+            "set-volume",
+            "@DEFAULT_AUDIO_SINK@",
+            std.fmt.comptimePrint("{d}.{d:0>2}", .{ v / 100, v % 100 }),
+        },
         &.{ "pactl", "set-sink-volume", "@DEFAULT_SINK@", std.fmt.comptimePrint("{d}%", .{v}) },
     };
 }
 
 pub const mac_table = volumes(macVolume) ++ [_]Command{
-    .{ .name = "Toggle Dark Mode", .keywords = &.{ "appearance", "theme", "light mode" }, .runs = &.{&.{ "osascript", "-e", "tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode" }} },
-    .{ .name = "Mute", .keywords = &.{ "volume", "audio", "sound" }, .runs = &.{&.{ "osascript", "-e", "set volume output muted true" }} },
-    .{ .name = "Unmute", .keywords = &.{ "volume", "audio", "sound" }, .runs = &.{&.{ "osascript", "-e", "set volume output muted false" }} },
+    .{
+        .name = "Toggle Dark Mode",
+        .keywords = &.{ "appearance", "theme", "light mode" },
+        .runs = &.{
+            &.{
+                "osascript",
+                "-e",
+                "tell application \"System Events\" to tell appearance preferences to set dark " ++
+                    "mode to not dark mode",
+            },
+        },
+    },
+    .{
+        .name = "Mute",
+        .keywords = &.{ "volume", "audio", "sound" },
+        .runs = &.{&.{ "osascript", "-e", "set volume output muted true" }},
+    },
+    .{
+        .name = "Unmute",
+        .keywords = &.{ "volume", "audio", "sound" },
+        .runs = &.{&.{ "osascript", "-e", "set volume output muted false" }},
+    },
     .{ .name = "Sleep", .keywords = &.{"suspend"}, .runs = &.{&.{ "pmset", "sleepnow" }} },
-    .{ .name = "Sleep Display", .keywords = &.{ "display off", "screen off" }, .runs = &.{&.{ "pmset", "displaysleepnow" }} },
-    .{ .name = "Empty Trash", .keywords = &.{ "bin", "delete" }, .runs = &.{&.{ "osascript", "-e", "tell application \"Finder\" to empty trash" }} },
+    .{
+        .name = "Sleep Display",
+        .keywords = &.{ "display off", "screen off" },
+        .runs = &.{&.{ "pmset", "displaysleepnow" }},
+    },
+    .{
+        .name = "Empty Trash",
+        .keywords = &.{ "bin", "delete" },
+        .runs = &.{&.{ "osascript", "-e", "tell application \"Finder\" to empty trash" }},
+    },
 };
 
 pub const linux_table = volumes(linuxVolume) ++ [_]Command{
@@ -63,17 +95,41 @@ pub const linux_table = volumes(linuxVolume) ++ [_]Command{
         &.{ "pactl", "set-sink-mute", "@DEFAULT_SINK@", "0" },
     } },
     .{ .name = "Sleep", .keywords = &.{"suspend"}, .runs = &.{&.{ "systemctl", "suspend" }} },
-    .{ .name = "Lock Screen", .keywords = &.{"lock"}, .runs = &.{&.{ "loginctl", "lock-session" }} },
-    .{ .name = "Dark Mode", .keywords = &.{ "appearance", "theme" }, .runs = &.{&.{ "gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-dark" }} },
-    .{ .name = "Light Mode", .keywords = &.{ "appearance", "theme" }, .runs = &.{&.{ "gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "default" }} },
+    .{
+        .name = "Lock Screen",
+        .keywords = &.{"lock"},
+        .runs = &.{&.{ "loginctl", "lock-session" }},
+    },
+    .{
+        .name = "Dark Mode",
+        .keywords = &.{ "appearance", "theme" },
+        .runs = &.{
+            &.{ "gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-dark" },
+        },
+    },
+    .{
+        .name = "Light Mode",
+        .keywords = &.{ "appearance", "theme" },
+        .runs = &.{
+            &.{ "gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "default" },
+        },
+    },
 };
 
 /// Absolute, so a rundll32.bat in the working directory is never found first.
 const rundll32 = "C:\\Windows\\System32\\rundll32.exe";
 
 pub const windows_table = [_]Command{
-    .{ .name = "Sleep", .keywords = &.{ "suspend", "hibernate" }, .runs = &.{&.{ rundll32, "powrprof.dll,SetSuspendState", "0,1,0" }} },
-    .{ .name = "Lock Screen", .keywords = &.{"lock"}, .runs = &.{&.{ rundll32, "user32.dll,LockWorkStation" }} },
+    .{
+        .name = "Sleep",
+        .keywords = &.{ "suspend", "hibernate" },
+        .runs = &.{&.{ rundll32, "powrprof.dll,SetSuspendState", "0,1,0" }},
+    },
+    .{
+        .name = "Lock Screen",
+        .keywords = &.{"lock"},
+        .runs = &.{&.{ rundll32, "user32.dll,LockWorkStation" }},
+    },
 };
 
 /// This OS's commands.
@@ -98,11 +154,22 @@ pub fn init(io: std.Io, env: *const std.process.Environ.Map) void {
 }
 
 fn onPath(io: std.Io, path: []const u8, program: []const u8) bool {
-    if (std.fs.path.isAbsolute(program)) return if (std.Io.Dir.accessAbsolute(io, program, .{ .execute = !windows })) true else |_| false;
+    if (std.fs.path.isAbsolute(program)) return if (std.Io.Dir.accessAbsolute(
+        io,
+        program,
+        .{ .execute = !windows },
+    ))
+        true
+    else |_|
+        false;
     var dirs = std.mem.tokenizeScalar(u8, path, if (windows) ';' else ':');
     var buf: [1024]u8 = undefined;
     while (dirs.next()) |dir| {
-        const file = std.fmt.bufPrint(&buf, "{s}{c}{s}{s}", .{ dir, std.fs.path.sep, program, if (windows) ".exe" else "" }) catch continue;
+        const file = std.fmt.bufPrint(
+            &buf,
+            "{s}{c}{s}{s}",
+            .{ dir, std.fs.path.sep, program, if (windows) ".exe" else "" },
+        ) catch continue;
         if (!std.fs.path.isAbsolute(file)) continue;
         if (std.Io.Dir.accessAbsolute(io, file, .{ .execute = !windows })) return true else |_| {}
     }
@@ -170,7 +237,16 @@ pub const Runner = struct {
         r.index = i;
         r.err_len = 0;
         const argv = all[i].runs[chosen[i]];
-        const child = std.process.spawn(r.io, .{ .argv = argv, .stdin = .ignore, .stdout = .ignore, .stderr = .pipe, .create_no_window = windows }) catch
+        const child = std.process.spawn(
+            r.io,
+            .{
+                .argv = argv,
+                .stdin = .ignore,
+                .stdout = .ignore,
+                .stderr = .pipe,
+                .create_no_window = windows,
+            },
+        ) catch
             return r.fail("could not be started");
         r.child = child;
         const err = child.stderr.?;
@@ -183,7 +259,11 @@ pub const Runner = struct {
     }
 
     fn fail(r: *Runner, why: []const u8) void {
-        const text = std.fmt.bufPrint(&r.said, "{s}: {s}", .{ all[r.index].name, why }) catch all[r.index].name;
+        const text = std.fmt.bufPrint(
+            &r.said,
+            "{s}: {s}",
+            .{ all[r.index].name, why },
+        ) catch all[r.index].name;
         r.hooks.footer(r.hooks.ctx, text);
     }
 
@@ -216,7 +296,11 @@ pub const Runner = struct {
         var buf: [48]u8 = undefined;
         const why = lastLine(r.err[0..r.err_len]);
         r.fail(if (why.len > 0) why else if (term) |t| switch (t) {
-            .exited => |code| std.fmt.bufPrint(&buf, "exited with code {d}", .{code}) catch "failed",
+            .exited => |code| std.fmt.bufPrint(
+                &buf,
+                "exited with code {d}",
+                .{code},
+            ) catch "failed",
             else => "was stopped",
         } else "failed");
     }
@@ -241,7 +325,11 @@ fn keepTail(buf: []u8, len: usize, bytes: []const u8) usize {
 /// The last non-empty line.
 fn lastLine(text: []const u8) []const u8 {
     const t = std.mem.trimEnd(u8, text, " \r\n");
-    return std.mem.trim(u8, if (std.mem.lastIndexOfScalar(u8, t, '\n')) |nl| t[nl + 1 ..] else t, " \r");
+    return std.mem.trim(
+        u8,
+        if (std.mem.lastIndexOfScalar(u8, t, '\n')) |nl| t[nl + 1 ..] else t,
+        " \r",
+    );
 }
 
 /// Marks every command of this OS as installed, or none (for tests).
@@ -271,8 +359,28 @@ test "tables hold what the spec lists for each OS" {
             return false;
         }
     }.has;
-    for ([_][]const u8{ "Toggle Dark Mode", "Set Volume to 0%", "Set Volume to 25%", "Set Volume to 50%", "Set Volume to 75%", "Set Volume to 100%", "Mute", "Unmute", "Sleep", "Sleep Display", "Empty Trash" }) |n| try t.expect(names(&mac_table, n));
-    for ([_][]const u8{ "Set Volume to 50%", "Mute", "Unmute", "Sleep", "Lock Screen", "Dark Mode", "Light Mode" }) |n| try t.expect(names(&linux_table, n));
+    for ([_][]const u8{
+        "Toggle Dark Mode",
+        "Set Volume to 0%",
+        "Set Volume to 25%",
+        "Set Volume to 50%",
+        "Set Volume to 75%",
+        "Set Volume to 100%",
+        "Mute",
+        "Unmute",
+        "Sleep",
+        "Sleep Display",
+        "Empty Trash",
+    }) |n| try t.expect(names(&mac_table, n));
+    for ([_][]const u8{
+        "Set Volume to 50%",
+        "Mute",
+        "Unmute",
+        "Sleep",
+        "Lock Screen",
+        "Dark Mode",
+        "Light Mode",
+    }) |n| try t.expect(names(&linux_table, n));
     // Volume falls back from wpctl to pactl.
     try t.expectEqualStrings("wpctl", linux_table[2].runs[0][0]);
     try t.expectEqualStrings("0.50", linux_table[2].runs[0][3]);
