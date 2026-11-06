@@ -265,6 +265,8 @@ zig build -Dnix=true                    # a Nix-managed build: no updater, no Op
 
 The icon is drawn by `tools/icon.py`. `src/backdrop.jpg` (the film's cover art) was made with OpenAI's image model.
 
+New and changed Zig code follows [TigerStyle](docs/TIGER_STYLE.md).
+
 ## License
 
 MIT
