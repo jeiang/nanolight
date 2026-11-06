@@ -51,16 +51,21 @@ pub fn versionOfTag(tag: []const u8) []const u8 {
     return if (std.mem.startsWith(u8, tag, "v")) tag[1..] else tag;
 }
 
-/// The file a build for `os` and `arch` updates itself from. The Mac's
-/// update is the one Apple silicon app; a build no release carries asks
-/// for a file no manifest names, and finds nothing.
+/// The file a build for `os` and `arch` updates itself from: that of the
+/// shipped build it runs. A build no release carries asks for a file no
+/// manifest names, and finds nothing.
 pub fn updateAsset(
     os: std.Target.Os.Tag,
     arch: std.Target.Cpu.Arch,
     buffer: *[name_bytes_max]u8,
 ) []const u8 {
-    if (os == .macos) return macos_update;
-    const platform: Platform = .{ .os = os, .arch = arch };
+    const platform: Platform = switch (os) {
+        // The one Apple silicon app.
+        .macos => return macos_update,
+        // Windows on ARM runs the x86_64 build (emulated).
+        .windows => .{ .os = .windows, .arch = .x86_64 },
+        else => .{ .os = os, .arch = arch },
+    };
     return platform.archiveName(buffer);
 }
 
@@ -277,6 +282,8 @@ test "each build updates from its own release file, and a tag names its version"
     try testing.expectEqualStrings(macos_update, updateAsset(.macos, .x86_64, &buffer));
     const linux = updateAsset(.linux, .aarch64, &buffer);
     try testing.expectEqualStrings("nanolight-linux-aarch64.tar.gz", linux);
+    const windows = updateAsset(.windows, .aarch64, &buffer);
+    try testing.expectEqualStrings("nanolight-windows-x86_64.zip", windows);
     try testing.expectEqualStrings("0.2.7", versionOfTag("v0.2.7"));
     try testing.expectEqualStrings("0.2.7", versionOfTag("0.2.7"));
 }
