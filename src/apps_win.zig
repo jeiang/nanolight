@@ -29,7 +29,8 @@ pub fn scanDir(ix: *Index, io: std.Io, path: []const u8, depth: u8) void {
 
 fn visit(ix: *Index, f: apps.Found) apps.Step {
     const ext = std.fs.path.extension(f.entry.name);
-    if (!std.ascii.eqlIgnoreCase(ext, ".lnk") and !std.ascii.eqlIgnoreCase(ext, ".url")) return .descend;
+    const link = std.ascii.eqlIgnoreCase(ext, ".lnk") or std.ascii.eqlIgnoreCase(ext, ".url");
+    if (!link) return .descend;
     const name = f.entry.name[0 .. f.entry.name.len - ext.len];
     if (skipped(name)) return .next;
     const parent = std.fs.path.basename(f.folder);

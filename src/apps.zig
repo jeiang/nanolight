@@ -118,7 +118,13 @@ pub fn walk(
     var stack: [max_scan_depth + 1]Frame = undefined;
     if (root.len > max_scan_path) return;
     const first = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch return;
-    stack[0] = .{ .dir = first, .it = first.iterate(), .path = undefined, .len = root.len, .depth = depth };
+    stack[0] = .{
+        .dir = first,
+        .it = first.iterate(),
+        .path = undefined,
+        .len = root.len,
+        .depth = depth,
+    };
     @memcpy(stack[0].path[0..root.len], root);
     var n: usize = 1;
     defer for (stack[0..n]) |*f| f.dir.close(io);
@@ -131,7 +137,8 @@ pub fn walk(
         };
         const folder = top.path[0..top.len];
         var buf: [max_scan_path]u8 = undefined;
-        const full = std.fmt.bufPrint(&buf, "{s}{c}{s}", .{ folder, std.fs.path.sep, e.name }) catch continue;
+        const parts = .{ folder, std.fs.path.sep, e.name };
+        const full = std.fmt.bufPrint(&buf, "{s}{c}{s}", parts) catch continue;
         switch (visit(ctx, .{ .dir = top.dir, .folder = folder, .full = full, .entry = e })) {
             .next => {},
             .stop => return,
@@ -139,7 +146,13 @@ pub fn walk(
                 if (top.depth == 0 or e.kind != .directory) continue;
                 const sub = top.dir.openDir(io, e.name, .{ .iterate = true }) catch continue;
                 assert(n < stack.len);
-                stack[n] = .{ .dir = sub, .it = sub.iterate(), .path = undefined, .len = full.len, .depth = top.depth - 1 };
+                stack[n] = .{
+                    .dir = sub,
+                    .it = sub.iterate(),
+                    .path = undefined,
+                    .len = full.len,
+                    .depth = top.depth - 1,
+                };
                 @memcpy(stack[n].path[0..full.len], full);
                 n += 1;
             },
@@ -249,7 +262,9 @@ pub const Index = struct {
     }
 
     pub fn find(ix: *const Index, name: []const u8) ?u32 {
-        for (ix.apps.items, 0..) |a, i| if (std.ascii.eqlIgnoreCase(a.name, name)) return @intCast(i);
+        for (ix.apps.items, 0..) |a, i| {
+            if (std.ascii.eqlIgnoreCase(a.name, name)) return @intCast(i);
+        }
         return null;
     }
 
@@ -300,14 +315,18 @@ pub const Index = struct {
         defer list.deinit(ix.gpa);
         // best effort: out of memory leaves the stored counts as they were.
         list.ensureTotalCapacity(ix.gpa, ix.apps.items.len + ix.missed.items.len) catch return;
-        for (ix.apps.items) |a| if (a.launches > 0) list.appendAssumeCapacity(.{ .key = a.path, .count = a.launches });
+        for (ix.apps.items) |a| if (a.launches > 0) {
+            list.appendAssumeCapacity(.{ .key = a.path, .count = a.launches });
+        };
         list.appendSliceAssumeCapacity(ix.missed.items);
         const kept = mostOpened(list.items);
         var aw: std.Io.Writer.Allocating = .init(ix.gpa);
         defer aw.deinit();
         // best effort: out of memory leaves the stored counts as they were.
         for (kept) |l| aw.writer.print("{s}\t{d}\n", .{ l.key, l.count }) catch return;
-        kv.set(store_key, aw.written()) catch |err| std.log.warn("nanolight: launch counts not saved: {t}", .{err});
+        kv.set(store_key, aw.written()) catch |err| {
+            std.log.warn("nanolight: launch counts not saved: {t}", .{err});
+        };
     }
 
     /// The counts `opened` kept. Keys are app paths; older rows used
@@ -362,10 +381,13 @@ pub const Index = struct {
             .none => return null,
             .unloaded => {},
         }
-        const png = switch (builtin.os.tag) {
+        const png = png: switch (builtin.os.tag) {
             .macos => iconPng(ix.gpa, app.path),
             .windows => @import("apps_win.zig").icon(ix.gpa, app.path),
-            else => @import("apps_linux.zig").icon(ix.gpa, std.Io.Threaded.global_single_threaded.io(), app.path),
+            else => {
+                const io = std.Io.Threaded.global_single_threaded.io();
+                break :png @import("apps_linux.zig").icon(ix.gpa, io, app.path);
+            },
         };
         app.icon = if (png) |p| .{ .png = p } else .none;
         return png;

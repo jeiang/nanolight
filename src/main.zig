@@ -165,7 +165,7 @@ pub const Live = struct {
     fn snapshot(ctx: *anyopaque, arena: std.mem.Allocator) Settings {
         const l: *Live = @ptrCast(@alignCast(ctx));
         const ix = l.s.index;
-        var list: std.ArrayList(@import("settings.zig").Launch) = .empty;
+        var list: std.ArrayList(settings_mod.Launch) = .empty;
         for (ix.apps.items) |a| if (a.launches > 0) {
             const one: settings_mod.Launch = .{ .name = a.name, .path = a.path, .count = a.launches };
             list.append(arena, one) catch break;
