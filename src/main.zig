@@ -175,8 +175,12 @@ pub const Live = struct {
         for (ix.apps.items, ix.launches.items) |a, n| if (n > 0) list.append(arena, .{ .name = a.name, .path = a.path, .count = n }) catch break;
         var at: i64 = 0;
         if (l.kv.get(arena, sync_at_key) catch null) |v| at = std.fmt.parseInt(i64, v, 10) catch 0;
-        const name = arena.create([32]u8) catch return .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.ql_custom };
-        return .{ .hotkey = l.choice.name(name), .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.ql_custom };
+        var out: Settings = .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at };
+        out.launches = list.items;
+        out.quicklinks = l.ql_custom;
+        const name = arena.create([shortcut.name_max]u8) catch return out;
+        out.hotkey = l.choice.name(name);
+        return out;
     }
 
     /// Lists `list` (those with an http or https address) in the panel, or
@@ -281,7 +285,7 @@ pub const Live = struct {
         const a = l.app.gpa.create(Ask) catch return l.s.unanswered(q);
         a.* = .{ .live = l, .len = q.len };
         @memcpy(a.text[0..q.len], q);
-        var buf: [512]u8 = undefined;
+        var buf: [suggest.url_max]u8 = undefined;
         nanoui.http.fetch(l.app.gpa, .{
             .url = suggest.url(&buf, q),
             .headers = &.{.{ .name = "Accept", .value = "application/json" }},

@@ -25,9 +25,28 @@ pub const Choice = struct {
     pub const ctrl_space: Choice = .{ .mods = hotkey.control };
     pub const opt_cmd_space: Choice = .{ .mods = hotkey.option | hotkey.cmd };
 
-    pub const all = [_]Choice{ cmd_space, opt_space, ctrl_space, opt_cmd_space };
-    /// The names the offered ones are kept and synced by (as before).
-    const names = [_][]const u8{ "cmd_space", "opt_space", "ctrl_space", "opt_cmd_space" };
+    /// An offered key: the name it is kept and synced by (as before), and
+    /// the modifiers it stands for on a PC.
+    const Preset = struct { choice: Choice, name: []const u8, pc: Pc };
+    /// The four offered, in their order. The PC's sit where the Mac's do
+    /// on a PC keyboard: Alt where ⌘ is (PowerToys Run and KRunner open on
+    /// Alt Space).
+    const presets = [_]Preset{
+        .{ .choice = cmd_space, .name = "cmd_space", .pc = .{ .alt = true } },
+        .{ .choice = opt_space, .name = "opt_space", .pc = .{ .ctrl = true, .alt = true } },
+        .{ .choice = ctrl_space, .name = "ctrl_space", .pc = .{ .ctrl = true } },
+        .{
+            .choice = opt_cmd_space,
+            .name = "opt_cmd_space",
+            .pc = .{ .ctrl = true, .shift = true },
+        },
+    };
+
+    pub const all = blk: {
+        var out: [presets.len]Choice = undefined;
+        for (presets, &out) |p, *c| c.* = p.choice;
+        break :blk out;
+    };
 
     pub fn eql(a: Choice, b: Choice) bool {
         return a.code == b.code and a.mods == b.mods;
@@ -64,17 +83,15 @@ pub const Choice = struct {
         return .{ .code = c.code, .ch = c.ch };
     }
 
-    /// The modifiers held on a PC (Windows, Linux). The four offered sit
-    /// where the Mac's do on a PC keyboard: Alt where ⌘ is (PowerToys Run
-    /// and KRunner open on Alt Space). Anything else, by its bits.
+    /// The modifiers held on a PC (Windows, Linux): an offered key's from
+    /// its preset; anything else, by its bits.
     pub fn pc(c: Choice) Pc {
-        if (c.preset()) |i| return switch (i) {
-            0 => .{ .alt = true },
-            1 => .{ .ctrl = true, .alt = true },
-            2 => .{ .ctrl = true },
-            else => .{ .ctrl = true, .shift = true },
+        if (c.preset()) |i| return presets[i].pc;
+        return .{
+            .ctrl = c.mods & (hotkey.cmd | hotkey.control) != 0,
+            .alt = c.mods & hotkey.option != 0,
+            .shift = c.mods & hotkey.shift != 0,
         };
-        return .{ .ctrl = c.mods & (hotkey.cmd | hotkey.control) != 0, .alt = c.mods & hotkey.option != 0, .shift = c.mods & hotkey.shift != 0 };
     }
 
     /// AppKit's modifier flags, as the system's shortcut table keeps them.
@@ -95,14 +112,16 @@ pub const Choice = struct {
     }
 
     /// How it is kept and synced: an offered one's name, else
-    /// "key:<code>:<mods>:<char>" (older versions ignore it).
-    pub fn name(c: Choice, buf: *[32]u8) []const u8 {
-        if (c.preset()) |i| return names[i];
-        return std.fmt.bufPrint(buf, "key:{d}:{d}:{d}", .{ c.code, c.mods, c.ch }) catch names[0];
+    /// "key:<code>:<mods>:<char>" (older versions ignore it). Only a
+    /// usable key is kept: its name always fits `name_max`.
+    pub fn name(c: Choice, buf: *[name_max]u8) []const u8 {
+        if (c.preset()) |i| return presets[i].name;
+        std.debug.assert(c.usable());
+        return std.fmt.bufPrint(buf, "key:{d}:{d}:{d}", .{ c.code, c.mods, c.ch }) catch unreachable;
     }
 
     pub fn parse(s: []const u8) ?Choice {
-        for (names, all) |n, p| if (std.mem.eql(u8, s, n)) return p;
+        for (presets) |p| if (std.mem.eql(u8, s, p.name)) return p.choice;
         // A Mac's recorded key is the Mac's key code: a PC keeps to the four.
         if (!mac or !std.mem.startsWith(u8, s, "key:")) return null;
         var it = std.mem.splitScalar(u8, s[4..], ':');
@@ -116,6 +135,17 @@ pub const Choice = struct {
 };
 
 const all_mods = hotkey.cmd | hotkey.shift | hotkey.option | hotkey.control;
+
+/// The longest name `Choice.name` gives: a usable recorded key's (code
+/// ≤ 127, `all_mods`, any char) and every preset's fit.
+pub const name_max = @import("settings.zig").hotkey_max;
+comptime {
+    const max_ch = std.math.maxInt(u21);
+    const longest = std.fmt.comptimePrint("key:{d}:{d}:{d}", .{ 127, all_mods, max_ch });
+    std.debug.assert(longest.len <= name_max);
+    for (Choice.presets) |p| std.debug.assert(p.name.len <= name_max);
+}
+
 /// In the order macOS draws them.
 const glyphs = [_]struct { u32, []const u8 }{
     .{ hotkey.control, "⌃" }, .{ hotkey.option, "⌥" }, .{ hotkey.shift, "⇧" }, .{ hotkey.cmd, "⌘" },
@@ -209,7 +239,7 @@ pub fn load(store: nanoui.kv.Store, gpa: std.mem.Allocator) Choice {
 }
 
 pub fn save(store: nanoui.kv.Store, c: Choice) void {
-    var buf: [32]u8 = undefined;
+    var buf: [name_max]u8 = undefined;
     store.set(store_key, c.name(&buf)) catch {};
 }
 
@@ -456,7 +486,7 @@ test "any key with ⌘, ⌥ or ⌃ can be recorded, kept and named" {
     const x = r.key;
     try t.expectEqual(@as(u32, 7), x.code);
     try t.expectEqual(hotkey.option, x.mods);
-    var buf: [32]u8 = undefined;
+    var buf: [name_max]u8 = undefined;
     try t.expectEqualStrings("⌥ X", try std.fmt.bufPrint(&buf, "{f}", .{x}));
     try t.expectEqual(@as(?usize, null), x.preset());
     // Kept as its code, so a layout's letters don't move it; read back.
