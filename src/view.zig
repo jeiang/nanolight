@@ -50,6 +50,17 @@ pub const Host = struct {
 
 pub const width: f32 = 680;
 
+/// The longest query kept: a longer paste is cut here, as math, ranking and
+/// hashing read the whole query each frame. It is the longest file path the
+/// field must hold (Tab takes a found file's whole path, `files_view.takeFile`),
+/// and room for any query Google is asked.
+pub const max_query_bytes = files.max_path;
+comptime {
+    std.debug.assert(max_query_bytes >= suggest.max_len);
+    // A found path is shorter than `files.max_path`; a folder's adds a "/".
+    std.debug.assert(max_query_bytes >= files.max_path);
+}
+
 /// The app's icon (icon.png, made smaller), for the panel.
 pub const icon_png = @embedFile("icon-256.png");
 
@@ -328,7 +339,15 @@ pub const Nanolight = struct {
             .placeholder_color = p.sub.alpha(0.75),
             .color = p.text,
         });
+        s.capQuery();
         return r.submitted;
+    }
+
+    fn capQuery(s: *Nanolight) void {
+        const q = s.query.text();
+        if (q.len <= max_query_bytes) return;
+        s.query.set(@import("clipboard.zig").clip(q, max_query_bytes));
+        std.debug.assert(s.query.text().len <= max_query_bytes);
     }
 
     /// What the query is the start of, drawn faintly after the caret; →
@@ -374,14 +393,20 @@ pub const Nanolight = struct {
         s.web.n = 0;
         const held = @max(s.held_h, s.rowsHeight());
         s.held_h = 0;
-        const asks = results.google(s.quicklinks) != null and results.keyed(s.quicklinks, std.mem.trim(u8, q, " ")) == null;
-        if (s.host) |host| if (host.suggest) |ask| if (asks and s.suggest_on and suggest.eligible(q) and @import("calc.zig").eval(q) == null and convert.answer(q, s.ratesTable()) == null) {
-            if (!s.cache.lookup(q, &s.web)) {
+        s.fill();
+        // Google is asked only for completions the rows would list: no card,
+        // no keyword (`res.google`), and no conversion waiting on rates.
+        const listed = s.res.google != null and !s.res.pending;
+        const asks = listed and s.suggest_on and suggest.eligible(q);
+        if (asks) if (s.host) |host| if (host.suggest) |ask| {
+            // The answer, or one to fewer letters, stands in meanwhile.
+            const cached = s.cache.lookup(q, &s.web);
+            if (s.web.n > 0) s.fill();
+            if (!cached) {
                 s.held_h = held;
                 ask(host.ctx, q);
             }
         };
-        s.fill();
         if (s.res.need_rates) if (s.host) |host| if (host.rates) |get| get(host.ctx);
         // The first row: an app, the answer, or the search for what was
         // typed; never a completion nobody picked (they come after it).

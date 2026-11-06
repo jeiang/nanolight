@@ -250,6 +250,68 @@ test "a pending currency card is not the default row, and Return acts on the sea
     try std.testing.expect(t.hasText("Copy Answer"));
 }
 
+test "math being typed asks Google nothing while its card shows" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var web: Web = .{};
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = web.host();
+    s.reveal();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = view.max_height,
+        .dark = true,
+    });
+    defer t.deinit();
+    t.settle(1);
+    // The answer so far, a conversion's, and one waiting on rates.
+    for ([_][]const u8{ "2 + 3 *", "10 km to mi *", "500 usd to eur *" }) |q| {
+        retype(&t, q);
+        try std.testing.expectEqual(results.Kind.calc, s.res.rows[0].kind);
+        try std.testing.expectEqual(@as(usize, 0), web.asked_len);
+    }
+    retype(&t, "2 + 3 is");
+    try std.testing.expectEqualStrings("2 + 3 is", web.asked[0..web.asked_len]);
+}
+
+fn retype(t: *ui.Tester, q: []const u8) void {
+    press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward }, .{ .insert = q } });
+}
+
+test "a long paste is cut to the longest query, on a character boundary, a whole path is not" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.reveal();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{
+        .width = view.width,
+        .height = 480,
+        .dark = true,
+    });
+    defer t.deinit();
+    t.settle(1);
+    // A file path as long as any found one is kept whole.
+    var path: [view.max_query_bytes]u8 = undefined;
+    path[0] = '/';
+    @memset(path[1..], 'a');
+    press(&t, &.{.{ .insert = &path }});
+    try std.testing.expectEqualStrings(&path, s.query.text());
+    press(&t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
+    var paste: [view.max_query_bytes + 1]u8 = undefined;
+    @memset(paste[0 .. view.max_query_bytes - 1], '(');
+    @memcpy(paste[view.max_query_bytes - 1 ..], "é");
+    press(&t, &.{.{ .insert = &paste }});
+    try std.testing.expectEqual(view.max_query_bytes - 1, s.query.text().len);
+    t.settle(1);
+    try std.testing.expect(s.res.n > 0);
+}
+
 test "Google's completions land below, and a search shows in the panel" {
     const gpa = std.testing.allocator;
     var ix: Index = .init(gpa);
@@ -410,13 +472,21 @@ test "the welcome: a key, pressed for real, then a first search" {
     try std.testing.expect(steps.done and !o.active);
     try std.testing.expect(t.hasText("3,072"));
 
-    // Esc skips from the first step, keeping the key shown there.
+    // Esc skips from the first step, keeping the key shown there: applied
+    // only when it is not the one in use already.
     steps = .{};
     o.start(.ctrl_space);
     t.settle(1);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(steps.done and !o.active);
-    try std.testing.expectEqual(shortcut.Choice.ctrl_space, steps.applied.?);
+    try std.testing.expect(steps.applied == null);
+    steps = .{};
+    o.start(.ctrl_space);
+    t.settle(1);
+    t.key(.right);
+    _ = t.shortcut(.{ .key = ui.Shortcut.escape });
+    try std.testing.expect(steps.done and !o.active);
+    try std.testing.expectEqual(shortcut.Choice.opt_cmd_space, steps.applied.?);
 }
 
 const SettingsHost = @import("settings_host.zig").SettingsHost;
@@ -427,6 +497,8 @@ pub const Prefs = struct {
     key: shortcut.Choice = .cmd_space,
     applied: ?shortcut.Choice = null,
     recording: bool = false,
+    /// Whether the recorder can start (an event monitor the system refused).
+    can_record: bool = true,
     login_on: bool = false,
     suggest_sets: u8 = 0,
     searches_out: ?bool = null,
@@ -435,6 +507,8 @@ pub const Prefs = struct {
     clip_on: ?bool = null,
     clip_cleared: u8 = 0,
     box: SettingsHost = undefined,
+    /// The panel whose suggestions and searches the app's host would set.
+    nl: ?*view.Nanolight = null,
 
     pub fn init(p: *Prefs) void {
         p.box = .{
@@ -475,19 +549,25 @@ pub const Prefs = struct {
         p.applied = c;
         p.key = c;
     }
-    fn record(ctx: *anyopaque, on: bool) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).recording = on;
+    fn record(ctx: *anyopaque, on: bool) bool {
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.recording = on and p.can_record;
+        return p.recording;
     }
     fn login(ctx: *anyopaque, set: ?bool) bool {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
         if (set) |on| p.login_on = on;
         return p.login_on;
     }
-    fn suggestSet(ctx: *anyopaque, _: bool) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).suggest_sets += 1;
+    fn suggestSet(ctx: *anyopaque, on: bool) void {
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.suggest_sets += 1;
+        if (p.nl) |s| s.suggest_on = on;
     }
     fn searchesOut(ctx: *anyopaque, on: bool) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).searches_out = on;
+        const p: *Prefs = @ptrCast(@alignCast(ctx));
+        p.searches_out = on;
+        if (p.nl) |s| s.searches_out = on;
     }
     fn themeSet(ctx: *anyopaque, t: @import("palette.zig").Theme) void {
         @as(*Prefs, @ptrCast(@alignCast(ctx))).theme = t;
@@ -528,6 +608,7 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     var s: view.Nanolight = .{ .index = &ix };
     defer s.query.deinit();
     s.host = prefs.host();
+    prefs.nl = &s;
     s.reveal();
     var t: ui.Tester = undefined;
     try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height, .dark = true });

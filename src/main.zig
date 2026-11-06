@@ -48,15 +48,15 @@ pub fn applyChoice(ctx: *anyopaque, choice: shortcut.Choice) void {
     Live.apply(ctx, choice);
 }
 
-pub fn recordKey(ctx: *anyopaque, on: bool) void {
-    Live.record(ctx, on);
+pub fn recordKey(ctx: *anyopaque, on: bool) bool {
+    return Live.record(ctx, on);
 }
 
 pub fn loginItem(ctx: *anyopaque, set: ?bool) bool {
     return Live.login(ctx, set);
 }
-/// The version 0.1.6 and before left when they restarted into an update
-/// themselves (nanoui's updater does it now, `autoRestart`).
+/// Left by a restart into an update off the Mac (`restartForUpdate`), and by
+/// 0.1.6 and before on the Mac (nanoui's updater says so itself now).
 pub const updated_key = "nanolight.updated";
 const sync_at_key = config.sync_at_key;
 const rates_at_key = "nanolight.rates.at";
@@ -176,8 +176,12 @@ pub const Live = struct {
         };
         var at: i64 = 0;
         if (l.kv.get(arena, sync_at_key) catch null) |v| at = std.fmt.parseInt(i64, v, 10) catch 0;
-        const name = arena.create([32]u8) catch return .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.ql_custom };
-        return .{ .hotkey = l.choice.name(name), .suggest = l.s.suggest_on, .at = at, .launches = list.items, .quicklinks = l.ql_custom };
+        var out: Settings = .{ .hotkey = "cmd_space", .suggest = l.s.suggest_on, .at = at };
+        out.launches = list.items;
+        out.quicklinks = l.ql_custom;
+        const name = arena.create([shortcut.name_max]u8) catch return out;
+        out.hotkey = l.choice.name(name);
+        return out;
     }
 
     /// Lists `list` (those with an http or https address) in the panel, or
@@ -223,10 +227,7 @@ pub const Live = struct {
             shortcut.save(l.kv, c);
             l.useKey(c);
         };
-        if (st.suggest != l.s.suggest_on) {
-            l.s.suggest_on = st.suggest;
-            l.kv.set(suggest_key, if (st.suggest) "1" else "0") catch {};
-        }
+        l.setSuggest(st.suggest, .synced);
         if (l.setQuicklinks(st.quicklinks)) config.saveQuicklinks(l.kv, l.app.gpa, l.ql_custom);
         const ix = l.s.index;
         for (st.launches) |la| {
@@ -285,7 +286,7 @@ pub const Live = struct {
         const a = l.app.gpa.create(Ask) catch return l.s.unanswered(q);
         a.* = .{ .live = l, .len = q.len };
         @memcpy(a.text[0..q.len], q);
-        var buf: [512]u8 = undefined;
+        var buf: [suggest.url_max]u8 = undefined;
         nanoui.http.fetch(l.app.gpa, .{
             .url = suggest.url(&buf, q),
             .headers = &.{.{ .name = "Accept", .value = "application/json" }},
@@ -368,13 +369,29 @@ pub const Live = struct {
         if (l.window) |w| w.redraw();
     }
 
-    pub fn toggleSuggest(l: *Live, item: *nanoui.menu.Item) void {
-        l.s.suggest_on = item.checked;
-        l.kv.set(suggest_key, if (item.checked) "1" else "0") catch {};
-        l.touched();
+    fn toggleSuggest(l: *Live, item: *nanoui.menu.Item) void {
+        l.setSuggest(item.checked, .here);
+    }
+
+    /// Where a change to a setting came from: this machine (synced on) or the account.
+    pub const Origin = enum { here, synced };
+
+    /// Google's suggestions on or off: the one writer (the menu, Settings, sync).
+    pub fn setSuggest(l: *Live, on: bool, origin: Origin) void {
+        if (on == l.s.suggest_on) return;
+        l.s.suggest_on = on;
+        // best effort: the choice holds for this run; the next launch falls back to on.
+        l.kv.set(suggest_key, if (on) "1" else "0") catch {};
+        if (origin == .here) l.touched();
         // The rows again, with or without them.
         l.s.built = 1;
         if (l.window) |w| w.redraw();
+        // The menu's checkbox follows; never rebuilt inside its own click.
+        nanoui.App.after(0, l, struct {
+            fn f(c: ?*anyopaque) callconv(.c) void {
+                menu(@ptrCast(@alignCast(c.?)));
+            }
+        }.f);
     }
 
     pub fn setSearchesOut(l: *Live, on: bool) void {
@@ -420,9 +437,18 @@ pub const Live = struct {
 
     fn updateNow(l: *Live, _: *nanoui.menu.Item) void {
         const u = l.updater orelse return;
-        if (u.ready() != null) {
-            if (u.restart()) l.app.quit();
-        } else u.checkNow();
+        if (u.ready() != null) l.restartForUpdate() else u.checkNow();
+    }
+
+    /// Restarts into the update that is ready, if one is. Off the Mac the
+    /// new copy learns it was updated from `updated_key` (the Mac's
+    /// updater says so itself, `updatedFrom`).
+    pub fn restartForUpdate(l: *Live) void {
+        const u = l.updater orelse return;
+        const v = u.ready() orelse return;
+        // best effort: without the note the new copy only skips "Updated to".
+        if (!mac) l.kv.set(updated_key, v) catch {};
+        if (u.restart()) l.app.quit() else if (!mac) l.kv.remove(updated_key);
     }
 
     fn updated(ctx: *anyopaque) void {
@@ -437,7 +463,7 @@ pub const Live = struct {
     fn keyChanged(ctx: *anyopaque, w: *nanoui.Window) void {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (w.isFocused()) return;
-        if (l.recorder.active()) record(l, false);
+        if (l.recorder.active()) _ = record(l, false);
         l.s.hid(account.now());
         l.through.stop();
         l.s.note = "";
@@ -504,17 +530,20 @@ pub const Live = struct {
     }
 
     /// Settings records a key: until it has one, keys pressed go to it,
-    /// and the current key is let go (pressed, it is recorded too).
-    pub fn record(ctx: *anyopaque, on: bool) void {
+    /// and the current key is let go (pressed, it is recorded too) once
+    /// the recorder runs. Whether it is recording now.
+    pub fn record(ctx: *anyopaque, on: bool) bool {
         const l: *Live = @ptrCast(@alignCast(ctx));
         if (on) {
+            // No recorder, no recording: the key stays registered.
+            if (!l.recorder.start(.{ .ctx = l, .func = recorded })) return false;
             hotkey.unregister();
-            l.recorder.start(.{ .ctx = l, .func = recorded });
-            return;
+            return true;
         }
         l.recorder.stop();
-        l.s.settings_ui.recording = false;
+        l.s.settings_ui.key_input = .idle;
         l.useKey(l.choice);
+        return false;
     }
 
     fn recorded(ctx: *anyopaque, r: shortcut.Recorded) void {
@@ -577,7 +606,8 @@ pub const Live = struct {
                 const live: *Live = @ptrCast(@alignCast(ctx.?));
                 const w = live.window orelse return;
                 if (!(w.isVisible() and w.isFocused())) toggle(live);
-                live.o.active = false;
+                // Over the welcome: skipped, kept as done, its key not taken.
+                live.o.end(.drop_choice);
                 live.s.openSettings();
                 w.redraw();
             }

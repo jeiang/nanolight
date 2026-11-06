@@ -1,6 +1,7 @@
 # The `programs.nanolight` options every client module (NixOS, nix-darwin,
 # home-manager) shares.
 self: {
+  config,
   lib,
   pkgs,
   ...
@@ -28,6 +29,14 @@ in {
         }
       '';
       description = "Written as config.toml. In-app changes win over it; see the README for the keys.";
+    };
+    configFile = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      internal = true;
+      default = toml.generate "nanolight-config.toml" config.programs.nanolight.settings;
+      defaultText = lib.literalExpression "config.toml generated from settings";
+      description = "The config.toml each module installs, from `settings`.";
     };
   };
 }

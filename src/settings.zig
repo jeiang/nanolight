@@ -62,12 +62,15 @@ pub fn encode(gpa: std.mem.Allocator, s: Settings) ![]u8 {
     return std.json.Stringify.valueAlloc(gpa, s, .{});
 }
 
+/// The longest key name a record carries (shortcut.zig's `Choice.name`).
+pub const hotkey_max = 32;
+
 /// A record's body, or null when it isn't one of ours. Past `max_launches`,
 /// the least opened apps are left out.
 pub fn decode(arena: std.mem.Allocator, body: []const u8) ?Settings {
     const options: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
     var s = std.json.parseFromSliceLeaky(Settings, arena, body, options) catch return null;
-    if (s.v < 1 or s.v > 2 or s.hotkey.len == 0 or s.hotkey.len > 32) return null;
+    if (s.v < 1 or s.v > 2 or s.hotkey.len == 0 or s.hotkey.len > hotkey_max) return null;
     s.launches = mostOpened(arena, s.launches) catch return null;
     if (s.quicklinks.len > max_quicklinks) return null;
     for (s.quicklinks) |q| {

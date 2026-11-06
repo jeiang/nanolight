@@ -11,6 +11,8 @@ const Anchor = @import("anchor.zig").Anchor;
 /// row it was on, wherever that row now is: Return a moment after
 /// typing does what the panel showed, not a completion that just came.
 pub fn answered(s: *Nanolight, typed: []const u8, said: *const suggest.List) void {
+    // Turned off while it was on its way: nothing of it is kept or listed.
+    if (!s.suggest_on) return unanswered(s, typed);
     s.cache.put(typed, said);
     if (!suggest.same(typed, s.query.text())) return;
     const was: Anchor = .of(s);

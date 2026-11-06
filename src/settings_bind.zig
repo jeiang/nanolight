@@ -36,9 +36,7 @@ fn choice(ctx: *anyopaque) shortcut.Choice {
 }
 
 fn suggest(ctx: *anyopaque, on: bool) void {
-    var item: nanoui.menu.Item = undefined;
-    item.checked = on;
-    l(ctx).toggleSuggest(&item);
+    l(ctx).setSuggest(on, .here);
 }
 
 fn searchesOut(ctx: *anyopaque, on: bool) void {
@@ -85,9 +83,7 @@ fn check(ctx: *anyopaque) void {
 }
 
 fn restart(ctx: *anyopaque) void {
-    const live = l(ctx);
-    const u = live.updater orelse return;
-    if (u.ready() != null and u.restart()) live.app.quit();
+    l(ctx).restartForUpdate();
 }
 
 fn welcome(ctx: *anyopaque) void {

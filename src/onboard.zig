@@ -50,6 +50,9 @@ pub const Onboard = struct {
     active: bool = false,
     step: Step = .key,
     choice: Choice = .cmd_space,
+    /// The key in use: the one at `start`, then the one applied. Only a
+    /// different choice is applied (applying syncs it, over another Mac's).
+    kept: Choice = .cmd_space,
     hooks: ?Hooks = null,
     system_buf: [96]shortcut.SystemKey = undefined,
     system: []const shortcut.SystemKey = &.{},
@@ -66,6 +69,7 @@ pub const Onboard = struct {
         o.active = true;
         o.step = if (o.skip_key) .try_it else .key;
         o.choice = choice;
+        o.kept = choice;
         o.closed = false;
         o.reopened = false;
         o.reopened_at = null;
@@ -91,12 +95,25 @@ pub const Onboard = struct {
         if (visible) o.closed = true else if (o.closed) o.reopened = true;
     }
 
+    /// Each step's height; the key step is taller by a line while the key clashes.
+    const key_h: f32 = 330;
+    const clash_h: f32 = 30;
+    const try_h: f32 = 318;
+    const done_h: f32 = 350;
+    const login_h: f32 = 46;
+    comptime {
+        // The window is never resized: every step fits in it.
+        const tallest = @max(key_h + clash_h, try_h, done_h + login_h);
+        std.debug.assert(tallest <= panel.max_height);
+    }
+
     pub fn height(o: *const Onboard) f32 {
         const c = o.clash();
+        const asks_login = o.hooks != null and o.hooks.?.login != null;
         return switch (o.step) {
-            .key => 330 + @as(f32, if (c.clear()) 0 else 30),
-            .try_it => 318,
-            .done => if (o.hooks != null and o.hooks.?.login != null) 396 else 350,
+            .key => key_h + @as(f32, if (c.clear()) 0 else clash_h),
+            .try_it => try_h,
+            .done => done_h + @as(f32, if (asks_login) login_h else 0),
         };
     }
 
@@ -330,18 +347,86 @@ pub const Onboard = struct {
         // This frame drew the old step: the new one is drawn now too.
         c.changed = true;
         c.animationFrame();
-        if (o.step == .key) if (o.hooks) |h| h.apply(h.ctx, o.choice);
+        if (o.step == .key) o.useChoice();
         o.step = step;
+    }
+
+    /// Applies the key chosen, if it is not the one in use.
+    fn useChoice(o: *Onboard) void {
+        if (o.choice.eql(o.kept)) return;
+        o.kept = o.choice;
+        if (o.hooks) |h| h.apply(h.ctx, o.choice);
+    }
+
+    /// How the welcome ends: with the key shown on the key step, or
+    /// without it (Settings opened from the menu bar over it).
+    pub const Exit = enum { take_choice, drop_choice };
+
+    /// The welcome's one way out: done, and kept as done. Nothing when it
+    /// isn't showing.
+    pub fn end(o: *Onboard, exit: Exit) void {
+        if (!o.active) return;
+        if (exit == .take_choice and o.step == .key) o.useChoice();
+        o.active = false;
+        if (o.hooks) |h| h.done(h.ctx);
     }
 
     /// Over: into the launcher, with `query` typed (a first search) or not.
     pub fn finish(o: *Onboard, s: *panel.Nanolight, query: []const u8) void {
-        if (o.step == .key) if (o.hooks) |h| h.apply(h.ctx, o.choice);
-        o.active = false;
-        if (o.hooks) |h| h.done(h.ctx);
+        o.end(.take_choice);
         if (query.len > 0) s.query.set(query) else s.query.clear();
         s.built = 1;
         s.revealed = 0;
         s.query.focus();
     }
 };
+
+const TestHooks = struct {
+    applied: ?Choice = null,
+    ended: u8 = 0,
+
+    fn hooks(t: *TestHooks) Hooks {
+        return .{ .ctx = t, .apply = apply, .fix = fix, .done = done };
+    }
+    fn apply(ctx: *anyopaque, c: Choice) void {
+        @as(*TestHooks, @ptrCast(@alignCast(ctx))).applied = c;
+    }
+    fn fix(_: *anyopaque, _: shortcut.Clash) void {}
+    fn done(ctx: *anyopaque) void {
+        @as(*TestHooks, @ptrCast(@alignCast(ctx))).ended += 1;
+    }
+};
+
+test "Settings opened over the welcome skips it: done, and no key applied" {
+    var o: Onboard = .{};
+    // Hooks only once started: the system's shortcuts are not read in tests.
+    o.start(.cmd_space);
+    var th: TestHooks = .{};
+    o.hooks = th.hooks();
+    o.choice = .opt_space;
+    o.end(.drop_choice);
+    try std.testing.expect(!o.active);
+    try std.testing.expectEqual(@as(u8, 1), th.ended);
+    try std.testing.expect(th.applied == null);
+    // Already over: ending again does nothing.
+    o.end(.take_choice);
+    try std.testing.expectEqual(@as(u8, 1), th.ended);
+    try std.testing.expect(th.applied == null);
+}
+
+test "the welcome applies its key only when it changed" {
+    var o: Onboard = .{};
+    o.start(.ctrl_space);
+    var th: TestHooks = .{};
+    o.hooks = th.hooks();
+    o.end(.take_choice);
+    try std.testing.expect(th.applied == null);
+    try std.testing.expectEqual(@as(u8, 1), th.ended);
+    o.hooks = null;
+    o.start(.ctrl_space);
+    o.hooks = th.hooks();
+    o.choice = .opt_space;
+    o.end(.take_choice);
+    try std.testing.expectEqual(Choice.opt_space, th.applied.?);
+    try std.testing.expectEqual(@as(u8, 2), th.ended);
+}
