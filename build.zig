@@ -110,7 +110,13 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/check_config.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+            .imports = &.{.{
+                .name = "nanoui",
+                .module = b.dependency("nanoui", .{
+                    .target = target,
+                    .optimize = optimize,
+                }).module("nanoui"),
+            }},
         }),
     });
     b.step("check-config", "Build zig-out/bin/nanolight-check-config")
