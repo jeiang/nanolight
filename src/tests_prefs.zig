@@ -226,3 +226,33 @@ test "the panel's height lands at once, and keeps Google's room between keys" {
     try std.testing.expectEqual(s.height(), s.last_h);
     try std.testing.expectEqual(@as(f32, 0), s.held_h);
 }
+
+test "Google's answer landing after suggestions are turned off lists nothing" {
+    const gpa = std.testing.allocator;
+    var ix: Index = .init(gpa);
+    defer ix.deinit();
+    var web: tests.Web = .{};
+    var s: view.Nanolight = .{ .index = &ix };
+    defer s.query.deinit();
+    s.host = web.host();
+    s.reveal();
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, view.Nanolight.view), .{ .width = view.width, .height = view.max_height });
+    defer t.deinit();
+    t.frame();
+    t.textOps(&.{.{ .insert = "liq" }});
+    t.frame();
+    // Asked while on; turned off (the menu, Settings or sync) before it lands.
+    s.suggest_on = false;
+    s.built = 1;
+    var said: suggest.List = .{};
+    for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
+    s.answered("liq", &said);
+    t.settle(1);
+    try std.testing.expectEqual(@as(usize, 0), s.web.n);
+    try std.testing.expect(!t.hasText("liquid glass"));
+    try std.testing.expectEqual(@as(f32, 0), s.held_h);
+    // Nor is it kept for when they come back on.
+    var cached: suggest.List = .{};
+    try std.testing.expect(!s.cache.lookup("liq", &cached));
+}

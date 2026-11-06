@@ -222,10 +222,7 @@ pub const Live = struct {
             shortcut.save(l.kv, c);
             l.useKey(c);
         };
-        if (st.suggest != l.s.suggest_on) {
-            l.s.suggest_on = st.suggest;
-            l.kv.set(suggest_key, if (st.suggest) "1" else "0") catch {};
-        }
+        l.setSuggest(st.suggest, .synced);
         if (l.setQuicklinks(st.quicklinks)) config.saveQuicklinks(l.kv, l.app.gpa, l.ql_custom);
         const ix = l.s.index;
         for (st.launches) |la| {
@@ -374,13 +371,29 @@ pub const Live = struct {
         if (l.window) |w| w.redraw();
     }
 
-    pub fn toggleSuggest(l: *Live, item: *nanoui.menu.Item) void {
-        l.s.suggest_on = item.checked;
-        l.kv.set(suggest_key, if (item.checked) "1" else "0") catch {};
-        l.touched();
+    fn toggleSuggest(l: *Live, item: *nanoui.menu.Item) void {
+        l.setSuggest(item.checked, .here);
+    }
+
+    /// Where a change to a setting came from: this machine (synced on) or the account.
+    pub const Origin = enum { here, synced };
+
+    /// Google's suggestions on or off: the one writer (the menu, Settings, sync).
+    pub fn setSuggest(l: *Live, on: bool, origin: Origin) void {
+        if (on == l.s.suggest_on) return;
+        l.s.suggest_on = on;
+        // best effort: the choice holds for this run; the next launch falls back to on.
+        l.kv.set(suggest_key, if (on) "1" else "0") catch {};
+        if (origin == .here) l.touched();
         // The rows again, with or without them.
         l.s.built = 1;
         if (l.window) |w| w.redraw();
+        // The menu's checkbox follows; never rebuilt inside its own click.
+        nanoui.App.after(0, l, struct {
+            fn f(c: ?*anyopaque) callconv(.c) void {
+                menu(@ptrCast(@alignCast(c.?)));
+            }
+        }.f);
     }
 
     pub fn setSearchesOut(l: *Live, on: bool) void {

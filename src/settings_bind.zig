@@ -36,9 +36,7 @@ fn choice(ctx: *anyopaque) shortcut.Choice {
 }
 
 fn suggest(ctx: *anyopaque, on: bool) void {
-    var item: nanoui.menu.Item = undefined;
-    item.checked = on;
-    l(ctx).toggleSuggest(&item);
+    l(ctx).setSuggest(on, .here);
 }
 
 fn searchesOut(ctx: *anyopaque, on: bool) void {
