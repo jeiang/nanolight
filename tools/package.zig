@@ -437,7 +437,6 @@ test "the feed names every update made, Mac's and the others', and sums every fi
         .report = &report.writer,
     });
     const text = try tmp.dir.readFileAlloc(io, release.manifest_name, arena, .limited(4096));
-    // What was shown ends with the manifest, as `cat` showed it.
     try std.testing.expect(std.mem.endsWith(u8, report.written(), text));
     const manifest = try release.Manifest.parse(arena, text);
     try std.testing.expectEqualStrings("1.2.3", manifest.version);

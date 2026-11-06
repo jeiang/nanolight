@@ -17,7 +17,6 @@ pub const Sink = struct {
 };
 
 pub const Runner = struct {
-    /// The child, while it runs.
     live: ?Live = null,
 
     const Live = struct {

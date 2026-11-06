@@ -172,7 +172,6 @@ fn deflate(gpa: std.mem.Allocator, data: []const u8) ![]u8 {
     return out.toOwnedSlice();
 }
 
-/// Compresses `data` onto `writer` in `container`'s framing.
 fn compress(
     gpa: std.mem.Allocator,
     writer: *Io.Writer,

@@ -228,7 +228,6 @@ const Parser = struct {
         try p.put(t, path, try p.value());
     }
 
-    /// Sets the dotted key `path` of `t` to `v`.
     fn put(p: *Parser, t: *Table, path: []const []const u8, v: Value) Error!void {
         var dest = t;
         for (path[0 .. path.len - 1]) |k| dest = try p.into(dest, k, true);

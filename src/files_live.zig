@@ -35,7 +35,6 @@ pub const Files = struct {
     fn send(f: *Files) void {
         const core = f.core;
         if (!core.s.files_on) return;
-        // One search at a time, sent once the typing pauses, and once per query.
         if (f.busy) return;
         if (f.pause.waiting()) return;
         if (f.sent == f.epoch) return;

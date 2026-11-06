@@ -108,7 +108,6 @@ pub const unit_name_len = blk: {
     break :blk n;
 };
 
-/// The unit `name` is, in any case.
 fn unit(name: []const u8) ?*const Unit {
     if (name.len == 0) return null;
     for (&units) |*u| {
@@ -322,7 +321,6 @@ pub fn formatUnit(buf: []u8, a: UnitAnswer, grouped: bool) []const u8 {
     ) catch "";
 }
 
-/// The number of a unit answer, without its unit.
 pub fn formatUnitValue(buf: []u8, v: f64, grouped: bool) []const u8 {
     return if (v != 0 and @abs(v) < 1e-4) scientific(buf, v) else calc.format(buf, v, grouped);
 }
@@ -452,7 +450,6 @@ test "the parser splits on the first separator" {
     try testing.expect(parse("10 km to * 2") == null);
 }
 
-/// The rates the tests convert by.
 const sample_table = [_]struct { []const u8, f64 }{
     .{ "usd", 1 },
     .{ "ttd", 6.785 },
@@ -479,7 +476,6 @@ test "currencies cross through the dollar" {
     try testing.expectApproxEqRel(@as(f64, 100 * 0.75 / 0.86), x.value, 1e-12);
     try testing.expectApproxEqRel(@as(f64, 0.75 / 0.86), x.rate, 1e-12);
     try testing.expectEqualStrings("1 EUR = 0.872093 GBP · 2026-11-03", rateLine(&buf, x));
-    // Symbols.
     try testing.expectApproxEqRel(@as(f64, 86), answer("$100 to €", sample).?.money.value, 1e-12);
     try testing.expectApproxEqRel(@as(f64, 86), answer("100 $ to €", sample).?.money.value, 1e-12);
     try testing.expectApproxEqRel(
@@ -492,7 +488,6 @@ test "currencies cross through the dollar" {
         answer("£100 in usd", sample).?.money.value,
         1e-12,
     );
-    // A code the table lacks is not a conversion; no table is pending.
     try testing.expect(answer("100 usd to xyz", sample) == null);
     try testing.expect(answer("10 foo to bar", sample) == null);
     try testing.expect(answer("100 usd to ttd", null).? == .pending);
@@ -524,7 +519,6 @@ test "math around a conversion: the amount before it, the answer after it" {
     try testing.expectApproxEqRel(@as(f64, 51.6), e.value, 1e-12);
     try testing.expectEqualStrings("USD", &e.from);
     try testing.expectEqualStrings("EUR", &e.to);
-    // Parentheses, functions and precedence, on either side.
     try expectUnit(10000, "(2 + 3) * 2 km to m");
     try expectUnit(2, "(1,500 + 500) m to km");
     try expectUnit(4000, "sqrt(16) km to m");
@@ -575,7 +569,6 @@ test "math that doesn't compute is not a conversion, pending or not" {
         try testing.expect(answer(q, null) == null);
         try testing.expect(answer(q, sample) == null);
     }
-    // No table yet: math that computes waits for one, as a plain amount does.
     try testing.expect(answer("35 * 7 ttd to usd", null).? == .pending);
     try testing.expect(answer("12 ttd to usd * 12", null).? == .pending);
     try testing.expect(answer("$20 * 3 in eur", null).? == .pending);

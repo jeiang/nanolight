@@ -101,7 +101,6 @@ pub fn look(system_buf: []SystemKey) Holders {
     return .{ .system = systemKeys(system_buf), .running = runningLaunchers() };
 }
 
-/// The clash for `c`.
 pub fn clash(c: Choice, h: *const Holders) Clash {
     var out: Clash = .{};
     if (c.preset()) |i| if (h.taken[i]) {
@@ -245,7 +244,6 @@ pub fn quit(name: []const u8) void {
         );
 }
 
-/// The launchers that are running now.
 fn runningLaunchers() Launchers {
     var o: Launchers = .{};
     const pool = objc.Pool.push();
@@ -352,11 +350,9 @@ test "Spotlight holds ⌘Space unless the system's table says otherwise" {
         clash(.opt_cmd_space, &clean).system.?,
     );
     try std.testing.expect(clash(.ctrl_space, &clean).clear());
-    // Turned off.
     buf[0] = .{ .id = .spotlight, .enabled = false, .key = 0, .mods = 0 };
     const off: Holders = .{ .system = withDefaults(buf[0..1], &buf) };
     try std.testing.expect(clash(.cmd_space, &off).clear());
-    // Moved to another key.
     buf[0] = .{ .id = .spotlight, .enabled = true, .key = keys.space, .mods = keys.ns_ctrl };
     const moved: Holders = .{ .system = withDefaults(buf[0..1], &buf) };
     try std.testing.expect(clash(.cmd_space, &moved).clear());
@@ -383,7 +379,6 @@ test "a shortcut turned off is read, whatever else its entry lacks" {
     try std.testing.expect(clash(.cmd_space, &h).clear());
 }
 
-/// The property list `xml` describes.
 fn plist(xml: []const u8) ?objc.Object {
     const data = objc.msg(
         objc.Object,

@@ -217,7 +217,6 @@ test "any key with ⌘, ⌥ or ⌃ can be recorded and kept" {
     try t.expect(Choice.parse("key:7:0:120") == null);
     try t.expect(Choice.parse("key:7:2048") == null);
     try t.expect(Choice.parse("cmd_spaces") == null);
-    // Stepping from a recorded key lands on the offered ones.
     try t.expect(x.step(1).eql(.cmd_space));
     try t.expect(Choice.cmd_space.step(-1).eql(.opt_cmd_space));
 }

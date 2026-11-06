@@ -146,7 +146,6 @@ pub const pc_platforms = [_]Platform{
 };
 
 comptime {
-    // The Mac's three files and each other build's two fit one release.
     assert(3 + pc_platforms.len * 2 <= files_max);
 }
 
@@ -156,7 +155,6 @@ pub fn sha256Hex(bytes: []const u8) Sha256Hex {
     return std.fmt.bytesToHex(digest, .lower);
 }
 
-/// The sha256 of a file, in hex.
 pub fn sha256File(io: std.Io, dir: std.Io.Dir, path: []const u8) !Sha256Hex {
     return hashFile(sha256, io, dir, path);
 }

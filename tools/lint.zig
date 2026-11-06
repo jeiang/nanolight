@@ -173,7 +173,6 @@ fn problemsOf(source: []const u8, buffer: []Problem) []Problem {
     return buffer[0..count];
 }
 
-/// `piece` written `count` times, at compile time.
 fn repeated(comptime piece: []const u8, comptime count: usize) []const u8 {
     comptime var out: [piece.len * count]u8 = undefined;
     inline for (0..count) |index| @memcpy(out[index * piece.len ..][0..piece.len], piece);

@@ -73,7 +73,7 @@ pub fn main(init: std.process.Init) !void {
     command.say(io, "{s}", .{small_path});
 
     const iconset_parent = try command.temporaryFolder(arena, io, "nanolight-icon");
-    defer Io.Dir.cwd().deleteTree(io, iconset_parent) catch {}; // best effort: a temp folder.
+    defer Io.Dir.cwd().deleteTree(io, iconset_parent) catch {}; // best effort: macOS clears /tmp.
     const iconset = try std.fs.path.join(arena, &.{ iconset_parent, "AppIcon.iconset" });
     try Io.Dir.cwd().createDir(io, iconset, .default_dir);
     for (iconset_sides) |side| {

@@ -190,7 +190,6 @@ fn pngPixels(gpa: std.mem.Allocator, png: []const u8) Error!Rgba {
     if (raw.len != h * (row_len + 1)) return error.Corrupt;
     const px = try gpa.alloc(u8, w * h * 4);
     errdefer gpa.free(px);
-    // Unfilter in place, a row at a time.
     for (0..h) |y| {
         const row = raw[y * (row_len + 1) ..][0 .. row_len + 1];
         const cur = row[1..];

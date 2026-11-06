@@ -61,7 +61,6 @@ pub fn resize(_: *nanoui.Window, h: f32) void {
     objc.msg(void, g, "setFrame:", .{glassFrame(h)});
 }
 
-/// Whether the panel shows and has the keys.
 pub fn showing(w: *nanoui.Window) bool {
     return w.isVisible() and w.isFocused();
 }
@@ -114,7 +113,6 @@ fn backdrop(w: *nanoui.Window, radius: f64) ?objc.Object {
     objc.msg(void, v, "setMaterial:", .{@as(objc.NSInteger, 6)});
     objc.msg(void, v, "setBlendingMode:", .{@as(objc.NSInteger, 0)}); // behind the window
     objc.msg(void, v, "setState:", .{@as(objc.NSInteger, 1)}); // always active
-    // Rounded as the panel is.
     objc.msg(void, v, "setWantsLayer:", .{objc.YES});
     if (objc.msg(?objc.Object, v, "layer", .{})) |layer| {
         objc.msg(void, layer, "setCornerRadius:", .{radius});

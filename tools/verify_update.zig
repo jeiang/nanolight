@@ -132,7 +132,7 @@ pub fn main(init: std.process.Init) !void {
     const result = verify(&session);
     // best effort: the app may already be gone.
     _ = command.capture(arena, io, &.{ "pkill", "-f", program_pattern }, .{}) catch {};
-    // best effort: a temporary folder.
+    // best effort: the verdict is in; a leftover scratch folder only takes disk space.
     Io.Dir.cwd().deleteTree(io, session.work) catch {};
     result catch |err| switch (err) {
         error.Died => std.process.exit(1),
@@ -486,7 +486,6 @@ fn leftCopies(s: *Session) !?[]const u8 {
 
 // ----- the app, as the system sees it -----
 
-/// The app's copy in Applications, as the system sees it.
 fn trusted(s: *Session) !void {
     if (try macos.signed(s.arena, s.io, app)) |said| return s.die("signature: {s}", .{said});
     const assessment = [_][]const u8{ "-t", "exec" };
@@ -700,7 +699,6 @@ fn firstLines(text: []const u8, count: usize) []const u8 {
     return text;
 }
 
-/// The newest crash report of the app, if any.
 fn printNewestCrash(s: *const Session) void {
     const home = s.environ.get("HOME") orelse return;
     const reports = s.print("{s}/Library/Logs/DiagnosticReports", .{home});

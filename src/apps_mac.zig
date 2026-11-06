@@ -29,7 +29,6 @@ pub const starters: []const []const u8 = &.{
     finder,
 };
 
-/// The roots' apps, Finder, and those in ~/Applications.
 pub fn scan(sink: Sink, io: std.Io, env: *const std.process.Environ.Map) void {
     const first = sink.apps.items.len;
     for (roots) |r| scanDir(sink, io, r, 1);

@@ -83,11 +83,10 @@ pub fn main(init: std.process.Init) !void {
 
 fn cleanUp(v: *const Verifier) void {
     const mounted = v.path(&.{"mnt"});
-    // best effort: nothing is mounted when a check failed before the attach.
     const detach = [_][]const u8{ "hdiutil", "detach", mounted, "-quiet", "-force" };
-    // best effort: as above.
+    // best effort: nothing is mounted when a check failed before the attach.
     _ = command.capture(v.arena, v.io, &detach, .{}) catch {};
-    // best effort: a temporary folder.
+    // best effort: the folder in /tmp holds only downloads, and macOS clears /tmp.
     Io.Dir.cwd().deleteTree(v.io, v.work) catch {};
 }
 
