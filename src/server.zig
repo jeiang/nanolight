@@ -22,6 +22,10 @@ const exchange_deadline_ms = 10_000;
 /// The pause after a failed accept: its usual causes (no file descriptors or
 /// memory left) last a while, and retrying at once would spin.
 const accept_pause_ms = 100;
+/// The most one send hands the kernel. Poll reports room only once more than
+/// this is free (SO_SNDLOWAT, 2 KiB, on macOS; a third of the send buffer, which
+/// is at least about 4.5 KiB, on Linux), so a send this size never blocks after it.
+const max_write = 1024;
 const sha256 = std.crypto.hash.sha2.Sha256;
 
 pub const Token = struct {
@@ -214,16 +218,24 @@ const Timed = struct {
         return got.data_len;
     }
 
+    /// Sends at most `max_write` bytes: the deadline bounds only the wait for
+    /// room (poll), and a blocking send of more than the room it reported could
+    /// then wait on the client without limit.
     fn drainFn(w: *Io.Writer, data: []const []const u8, splat: usize) Io.Writer.Error!usize {
         const t: *Timed = @alignCast(@fieldParentPtr("writer", w));
+        const buffered = w.buffered();
+        const next: []const u8 = if (buffered.len > 0) buffered else for (data, 0..) |d, i| {
+            const repeats = if (i == data.len - 1) splat else 1;
+            if (d.len > 0 and repeats > 0) break d;
+        } else return 0;
+        const chunk = next[0..@min(next.len, max_write)];
         const op: Io.Operation = .{ .net_write = .{
             .socket_handle = t.stream.socket.handle,
-            .header = w.buffered(),
-            .data = data,
-            .splat = splat,
+            .data = &.{chunk},
         } };
         const done = t.io.operateTimeout(op, t.deadline) catch return error.WriteFailed;
         const n = done.net_write catch return error.WriteFailed;
+        std.debug.assert(n <= chunk.len);
         return w.consume(n);
     }
 };
@@ -597,7 +609,9 @@ test "a client that stops sending its request is cut off at the deadline, unansw
     const start: Io.Clock.Timestamp = .now(io, .awake);
     const serve: Serve = .{ .state = tmp.dir, .tokens = &.{}, .deadline_ms = 100 };
     serveOne(testing.allocator, io, l.peer, serve);
-    try testing.expect(elapsedMs(io, start) >= 100);
+    // Well under the default deadline; a little early is the clock's rounding.
+    const elapsed_ms = elapsedMs(io, start);
+    try testing.expect(elapsed_ms >= 50 and elapsed_ms < 5000);
     l.peer.close(io);
     try testing.expectEqualStrings("", try l.received(io, arena.allocator()));
 }
@@ -610,8 +624,13 @@ test "a client that stops reading the reply is cut off at the deadline" {
     var in_buf: [16]u8 = undefined;
     var out_buf: [16]u8 = undefined;
     var timed: Timed = .init(io, l.peer, .{ .in = &in_buf, .out = &out_buf }, 100);
+    // Far more than the socket buffers hold, in one slice as `respond` hands
+    // over a body, and the client reads none of it.
+    const reply = try testing.allocator.alloc(u8, 16 << 20);
+    defer testing.allocator.free(reply);
+    @memset(reply, 'x');
     const start: Io.Clock.Timestamp = .now(io, .awake);
-    // Far more than the socket buffers hold, and the client reads none of it.
-    try testing.expectError(error.WriteFailed, timed.writer.splatByteAll('x', 256 << 20));
-    try testing.expect(elapsedMs(io, start) >= 100);
+    try testing.expectError(error.WriteFailed, timed.writer.writeAll(reply));
+    const elapsed_ms = elapsedMs(io, start);
+    try testing.expect(elapsed_ms >= 50 and elapsed_ms < 5000);
 }
