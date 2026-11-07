@@ -38,6 +38,8 @@ const account_live = @import("account_live.zig");
 const update_live = @import("update_live.zig");
 const menu_live = @import("menu_live.zig");
 const settings_bind = @import("settings_bind.zig");
+const SettingsHost = @import("settings_host.zig").SettingsHost;
+const Host = @import("host.zig").Host;
 const version = @import("build_options").version;
 
 pub fn main(init: std.process.Init) !void {
@@ -50,8 +52,10 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "Nanolight", .quit_on_last_window_closed = false },
     );
     defer app.destroy();
-    const kv = nanoui.kv.standard();
     // A headless run is no one's: neither their config nor their settings.
+    var mem: nanoui.kv.Memory = .{ .gpa = init.gpa };
+    defer mem.deinit();
+    const kv = if (app.flags.hidden) mem.store() else nanoui.kv.standard();
     var cfg_arena: std.heap.ArenaAllocator = .init(init.gpa);
     defer cfg_arena.deinit();
     const loaded: config.Loaded = if (app.flags.hidden)
@@ -91,6 +95,10 @@ pub fn main(init: std.process.Init) !void {
         .toggles = undefined, // Settings' (`run`): their context.
     };
     o.hooks = core.welcomeHooks();
+    // The newest launch is the one that stays; it hears `--toggle`
+    // (single.zig). Before any feature writes: an older copy's clipboard,
+    // counts and switches are not both copies' to write.
+    if (!app.flags.hidden) claim(init.io, &core);
     try run(init, &core, loaded, &cfg, cfg_arena.allocator());
 }
 
@@ -132,47 +140,56 @@ fn run(
     };
     const settings = bind.host();
     core.toggles = bind.setter();
-    s.host = .{
-        .ctx = core,
-        .open = App.open,
-        .hide = App.hide,
-        .resize = App.resize,
-        .preview = if (platform.preview) App.showPage else null,
-        .suggest = sug.entry(),
-        .files = if (platform.files) files.entry() else null,
-        .settings = &settings,
-    };
+    const hidden = core.app.flags.hidden;
+    // Opened, or null: without its folder there is no history. Never headless.
+    if (!hidden) clip.open(loaded.clipboardConfig(), loaded != .unusable);
+    var scripts: script_live.Scripts = .init(core, init.environ_map, cfg);
+    defer scripts.deinit();
+    var cmds: commands_live.Commands = .init(core, init.environ_map);
+    defer cmds.deinit();
+    if (!hidden) s.scripts = &scripts.list;
+    s.host = host(core, &settings, sug.entry(), &files, &clip, &cmds);
     core.hooks = .{
         .showing = clip.showingHook(),
         .away = update.awayHook(),
         .menu = menu.menuHook(),
     };
-    if (core.app.flags.hidden) {
+    if (hidden) {
         ready(core, &bind, init.gpa);
-        var options = windowOptions(core);
-        // Snapshots: the panel alone; `setup`, which leaves room round it,
-        // never runs.
-        options.width = chrome.width;
-        options.height = view.height(s);
-        core.window = try core.app.newWindow(options);
+        core.window = try core.app.newWindow(windowOptions(core, .snapshot));
         return core.app.run();
     }
-    clip.open(loaded.clipboardConfig(), loaded != .unusable);
-    // Opened, or null: without its folder there is no history.
-    s.host.clipboard = clip.entry();
-    var scripts: script_live.Scripts = .init(core, init.environ_map, cfg);
-    defer scripts.deinit();
-    s.scripts = &scripts.list;
-    var cmds: commands_live.Commands = .init(core, init.environ_map);
-    defer cmds.deinit();
-    s.host.command = cmds.entry();
     core.hooks.rescan = scripts.rescanHook();
     core.hooks.popped = scripts.poppedHook();
     core.hooks.opens = scripts.opensHook();
     _ = sync.setQuicklinks(prefs.quicklinks(cfg_arena, core.kv));
     ready(core, &bind, init.gpa);
-    core.window = try core.app.newWindow(windowOptions(core));
+    core.window = try core.app.newWindow(windowOptions(core, .panel));
     try runShown(init, core, &menu, &update, &sync, cfg.sync);
+}
+
+/// What the panel asks of the app, once: the features it has on this
+/// machine, null where it has none (headless runs, a platform without).
+fn host(
+    core: *App,
+    settings: *const SettingsHost,
+    suggest: Host.Ask,
+    files: *files_live.Files,
+    clip: *clipboard_live.Clip,
+    cmds: *commands_live.Commands,
+) Host {
+    return .{
+        .ctx = core,
+        .open = App.open,
+        .hide = App.hide,
+        .resize = App.resize,
+        .preview = if (platform.preview) App.showPage else null,
+        .suggest = suggest,
+        .files = if (platform.files) files.entry() else null,
+        .settings = settings,
+        .clipboard = clip.entry(),
+        .command = cmds.entry(),
+    };
 }
 
 /// `nanolight --toggle`: the running copy's panel (Wayland's shortcut);
@@ -203,8 +220,11 @@ fn ready(core: *App, bind: *settings_bind.Bind, gpa: std.mem.Allocator) void {
 }
 
 /// The panel as a hotkey shows it, then its window's: hidden until its key
-/// or its menu shows it.
-fn windowOptions(core: *App) nanoui.WindowOptions {
+/// or its menu shows it. A snapshot is the panel alone: `setup`, which
+/// leaves room round it for the shadow, never runs.
+const Sized = enum { panel, snapshot };
+
+fn windowOptions(core: *App, sized: Sized) nanoui.WindowOptions {
     const s = core.s;
     _ = s.show(clock.now());
     // The rows first, so a snapshot is as tall as the panel.
@@ -219,11 +239,27 @@ fn windowOptions(core: *App) nanoui.WindowOptions {
         .content = .{ .view = .init(s, view.window) },
     };
     panel.adjust(&options);
+    if (sized == .snapshot) {
+        options.width = chrome.width;
+        options.height = view.height(s);
+    }
     return options;
 }
 
-/// A run with a person at it: one copy, the window round the panel, the
-/// key, the menu bar, updates and sync, then the app's loop.
+/// Asks an older copy to quit, and says what became of it.
+fn claim(io: std.Io, core: *App) void {
+    switch (shell.Single.claim(io, .{ .ctx = core, .func = App.command })) {
+        .none => {},
+        .quit => std.log.info("nanolight: asked an older copy to quit", .{}),
+        .stayed => std.log.warn(
+            "nanolight: an older copy didn't quit within {d} ms; both run",
+            .{single.quit_wait_ms},
+        ),
+    }
+}
+
+/// A run with a person at it: the window round the panel, the key, the menu
+/// bar, updates and sync, then the app's loop.
 fn runShown(
     init: std.process.Init,
     core: *App,
@@ -232,15 +268,6 @@ fn runShown(
     sync: *account_live.Sync,
     sync_cfg: account.Config,
 ) !void {
-    // The newest launch is the one that stays; it hears `--toggle` (single.zig).
-    switch (shell.Single.claim(init.io, .{ .ctx = core, .func = App.command })) {
-        .none => {},
-        .quit => std.log.info("nanolight: asked an older copy to quit", .{}),
-        .stayed => std.log.warn(
-            "nanolight: an older copy didn't quit within {d} ms; both run",
-            .{single.quit_wait_ms},
-        ),
-    }
     core.start();
     if (!prefs.has(core.kv, .onboarded)) core.welcome(.first_run);
     try menu.start();

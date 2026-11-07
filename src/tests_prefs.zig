@@ -177,6 +177,23 @@ test "recording a key: idle, recording, refused, and never without a recorder" {
     try std.testing.expect(!t.hasText(waiting) and !prefs.recording);
 }
 
+test "leaving Settings while recording a key stops the recorder" {
+    if (!platform.record) return error.SkipZigTest;
+    var prefs: support.Prefs = .{};
+    prefs.init();
+    var rig: Rig = undefined;
+    rig.init(std.testing.allocator);
+    defer rig.deinit();
+    const s = &rig.s;
+    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
+    support.press(&rig.t, &.{.{ .command = .insert_newline }});
+    try std.testing.expect(prefs.recording);
+    // Another screen over it (Welcome… is one): the key is the panel's again.
+    s.open(.clipboard);
+    try std.testing.expect(!prefs.recording);
+    try std.testing.expectEqual(settings_view.KeyInput.idle, s.settings_ui.key_input);
+}
+
 test "Settings' header picks the panel's theme, and keeps it" {
     const gpa = std.testing.allocator;
     var prefs: support.Prefs = .{};

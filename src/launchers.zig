@@ -181,6 +181,14 @@ pub const Tally = struct {
     counts: Counts = .{},
     /// Null in tests: the counts last the run.
     kv: ?nanoui.kv.Store = null,
+    /// Told after each opening is counted: sync sends it (account_live.zig).
+    /// Null without sync.
+    counted: ?Counted = null,
+
+    pub const Counted = struct {
+        ctx: *anyopaque,
+        func: *const fn (ctx: *anyopaque) void,
+    };
 
     pub fn deinit(t: *Tally, gpa: std.mem.Allocator) void {
         t.counts.deinit(gpa);
@@ -195,10 +203,11 @@ pub const Tally = struct {
         t.counts.parse(gpa, text);
     }
 
-    /// Counts an opening of `key`, and keeps it.
+    /// Counts an opening of `key`, keeps it, and says so (`counted`).
     pub fn bump(t: *Tally, gpa: std.mem.Allocator, key: []const u8) void {
         t.counts.bump(gpa, key);
         t.save(gpa);
+        if (t.counted) |c| c.func(c.ctx);
     }
 
     /// `key`'s count, at least `count` (another machine's); kept by `save`.
@@ -340,4 +349,21 @@ test "counts outlive a scan that missed their app, and follow its path" {
     // Without a store, an opening is counted for the run only.
     old.bump(t.allocator, "/Applications/Safari.app");
     try t.expectEqual(@as(u16, 5), old.counts.of("/Applications/Safari.app"));
+}
+
+test "an opening counted is told; another machine's count raised is not" {
+    const t = std.testing;
+    const Heard = struct {
+        n: u8 = 0,
+        fn one(ctx: *anyopaque) void {
+            const h: *@This() = @ptrCast(@alignCast(ctx));
+            h.n += 1;
+        }
+    };
+    var heard: Heard = .{};
+    var tally: Tally = .{ .counted = .{ .ctx = &heard, .func = Heard.one } };
+    defer tally.deinit(t.allocator);
+    tally.bump(t.allocator, "script:/s/greet.sh");
+    tally.raise(t.allocator, "/Applications/Safari.app", 3);
+    try t.expectEqual(@as(u8, 1), heard.n);
 }

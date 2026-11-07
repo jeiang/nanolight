@@ -43,6 +43,8 @@ pub const Sync = struct {
         };
         const a = &sy.acct.?;
         sy.core.acct = a;
+        // An app's or script's count went up: the other machines suggest it too.
+        sy.core.s.tally.counted = .{ .ctx = sy, .func = counted };
         a.load();
     }
 
@@ -90,6 +92,10 @@ pub const Sync = struct {
 
 fn from(ctx: *anyopaque) *Sync {
     return @ptrCast(@alignCast(ctx));
+}
+
+fn counted(ctx: *anyopaque) void {
+    from(ctx).acct.?.changed();
 }
 
 /// The quicklinks of `list` that can be listed, copied into `arena`.

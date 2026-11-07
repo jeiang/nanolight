@@ -217,9 +217,9 @@ pub const Settings = struct {
         s.cleared = .idle;
     }
 
-    /// Settings goes: no key is waited for.
-    pub fn leave(s: *Settings) void {
-        s.key_input = .idle;
+    /// Settings goes: no key is waited for, the host's recorder stopped.
+    pub fn leave(s: *Settings, h: *const SettingsHost) void {
+        s.stopRecording(h);
     }
 
     fn pull(s: *Settings, h: *const SettingsHost) void {
@@ -368,9 +368,16 @@ pub const Settings = struct {
     }
 
     /// Starts or stops waiting for a key of one's own. Recording only once
-    /// the host's recorder has started.
-    pub fn record(s: *Settings, h: *const SettingsHost, on: bool) void {
+    /// the host's recorder has started: `key_input` is the one word on
+    /// whether it runs.
+    fn record(s: *Settings, h: *const SettingsHost, on: bool) void {
         s.key_input = if (h.record(h.ctx, on)) .recording else .idle;
+    }
+
+    /// No key waited for any more (Settings goes, the panel loses the
+    /// keys): the recorder stops and the key is back.
+    pub fn stopRecording(s: *Settings, h: *const SettingsHost) void {
+        if (s.key_input != .idle) s.record(h, false);
     }
 
     /// A key pressed while recording: kept and used, or not.
@@ -388,7 +395,7 @@ pub const Settings = struct {
     }
 
     fn pick(s: *Settings, h: *const SettingsHost, ch: Choice) void {
-        if (s.key_input != .idle) s.record(h, false);
+        s.stopRecording(h);
         s.choice = ch;
         h.apply(h.ctx, ch);
     }
