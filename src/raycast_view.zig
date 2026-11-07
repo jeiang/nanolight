@@ -279,7 +279,12 @@ pub const Ext = struct {
     fn header(e: *Ext, c: *ui.Context, p: Palette, v: ?model.View) void {
         const bar = ui.div(c).row().wFull().h(chrome.header_h).px(18).gap(12).itemsCenter();
         defer bar.end();
-        const back = ui.div(c).size(26, 26).center().rounded(7).bg(p.tile).control();
+        const back = ui.div(c)
+            .size(chrome.box_size, chrome.box_size)
+            .center()
+            .rounded(7)
+            .bg(p.tile)
+            .control();
         if (back.clicked()) e.send(.pop);
         ui.icon(c, "chevron.left", .{ .size = 13, .weight = .semibold, .color = p.sub });
         back.end();

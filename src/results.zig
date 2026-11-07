@@ -312,7 +312,7 @@ pub fn math(words: []const u8, table: ?*const rates_table.Rates) ?Math {
 }
 
 /// A whole answer is shown in hexadecimal too below this, and its room.
-const hex_below = 1e15;
+const hex_below = calc.whole_below;
 const hex_len = std.fmt.comptimePrint("0x{X}", .{@as(u64, hex_below)}).len;
 /// Each of the card's lines: the answer, what Return copies, the expression.
 const line_len = 64;

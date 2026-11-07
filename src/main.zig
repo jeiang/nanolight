@@ -273,13 +273,12 @@ fn runShown(
     sync_cfg: account.Config,
 ) !void {
     core.start();
-    if (!prefs.has(core.kv, .onboarded)) core.welcome(.first_run);
+    if (!prefs.keptOn(core.kv, core.app.gpa, .onboarded)) core.welcome(.first_run);
     try menu.start();
     update.start(init);
     sync.start(sync_cfg);
     core.menuChanged();
-    var note_buf: [64]u8 = undefined;
-    greet(core, update, &note_buf);
+    greet(core, update);
     try core.app.run();
 }
 
@@ -295,8 +294,9 @@ fn ratesLanded(ctx: *anyopaque) void {
 /// next time it opens (in `note_buf`). Otherwise launching stays in the
 /// background, the key or the menu bar icon opening the panel, unless the
 /// welcome is due.
-fn greet(core: *App, update: *update_live.Update, note_buf: *[64]u8) void {
-    if (update.greeting(note_buf)) |note| {
-        core.s.note = note;
+fn greet(core: *App, update: *update_live.Update) void {
+    var buf: [64]u8 = undefined;
+    if (update.greeting(&buf)) |note| {
+        core.s.setNote(note);
     } else if (core.s.screen == .welcome) App.toggle(core);
 }

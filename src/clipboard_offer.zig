@@ -97,7 +97,7 @@ pub const Request = struct { step: Step, mime: []const u8, cap: usize };
 /// file paths, text, an image. The first that gives something is the entry.
 pub const Plan = struct {
     own: bool = false,
-    steps: [4]Request = undefined,
+    steps: [std.enums.values(Step).len]Request = undefined,
     n: usize = 0,
 
     fn add(p: *Plan, step: Step, mime: []const u8, cap: usize) void {

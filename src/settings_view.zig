@@ -207,7 +207,7 @@ pub const Settings = struct {
     cleared: enum { idle, done, failed } = .idle,
     /// The host's sync status, pulled each frame.
     sync: []const u8 = "",
-    version: []const u8 = @import("build_options").version,
+    version: []const u8 = "",
     ready: ?[]const u8 = null,
     theme: Theme = .system,
 

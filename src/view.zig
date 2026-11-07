@@ -285,7 +285,7 @@ fn row(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
         const hint = results.providers.get(r.kind).hint;
         ui.text(c, hint, .{ .size = 12, .weight = .medium, .color = p.sub });
         ui.kbd(c, "↩");
-    } else if (i < 9) ui.textf(c, p.hint(), "{s}{d}", .{ platform.mod, i + 1 });
+    } else if (i < chrome.number_keys) ui.textf(c, p.hint(), "{s}{d}", .{ platform.mod, i + 1 });
 }
 
 /// The matched letters, full strength and heavier.
@@ -338,7 +338,12 @@ fn footer(s: *Nanolight, c: *ui.Context, p: Palette) void {
     ui.spacer(c);
     {
         ui.key(c, "settings-gear");
-        const g = ui.div(c).size(26, 26).rounded(7).center().control().hover(p.sel);
+        const g = ui.div(c)
+            .size(chrome.box_size, chrome.box_size)
+            .rounded(7)
+            .center()
+            .control()
+            .hover(p.sel);
         defer g.end();
         if (g.clicked()) s.open(.settings);
         ui.icon(c, "gearshape", .{ .size = 13, .weight = .medium, .color = p.sub });

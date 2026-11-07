@@ -139,7 +139,12 @@ pub const Screen = struct {
     fn header(s: *Screen, c: *ui.Context, q: *Query, p: Palette) Head {
         const bar = ui.div(c).row().wFull().h(chrome.header_h).px(18).gap(12).itemsCenter();
         defer bar.end();
-        const chevron = ui.div(c).size(26, 26).center().rounded(7).bg(p.tile).control();
+        const chevron = ui.div(c)
+            .size(chrome.box_size, chrome.box_size)
+            .center()
+            .rounded(7)
+            .bg(p.tile)
+            .control();
         const back = chevron.clicked();
         ui.icon(c, "chevron.left", .{ .size = 13, .weight = .semibold, .color = p.sub });
         chevron.end();

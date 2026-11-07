@@ -189,6 +189,12 @@ pub fn has(kv: Store, comptime k: Key) bool {
     return kv.has(k.name());
 }
 
+/// Whether the flag at `k` is kept as on: the value the writer writes, not
+/// just any value at its key.
+pub fn keptOn(kv: Store, gpa: std.mem.Allocator, comptime k: Key) bool {
+    return flag(kv, gpa, k);
+}
+
 pub fn remove(kv: Store, comptime k: Key) void {
     kv.remove(k.name());
 }

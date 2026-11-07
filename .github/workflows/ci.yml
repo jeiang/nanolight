@@ -24,6 +24,7 @@ jobs:
       - run: zig build server
       - run: zig build -Dtarget=x86_64-windows-gnu --prefix zig-out/windows
       - run: zig build -Dtarget=x86_64-linux-gnu --prefix zig-out/linux
+      - run: zig build -Dtarget=aarch64-linux-gnu --prefix zig-out/linux-arm
       - run: zig build app -Dnix=true --prefix zig-out/nix-app
       - run: zig build -Dnix=true -Dtarget=x86_64-windows-gnu --prefix zig-out/nix-windows
 

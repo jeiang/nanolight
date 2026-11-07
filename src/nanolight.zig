@@ -89,6 +89,9 @@ pub const Nanolight = struct {
     revealed: u64 = 0,
     /// Said in the footer in place of the name ("Updated to 0.1.3"), if set.
     note: []const u8 = "",
+    /// What `note` says, when it is set here: its own bytes, not the
+    /// caller's.
+    note_buf: [64]u8 = undefined,
     /// Local file search is opt-in on this Mac.
     files_on: bool = false,
     found: files.List = .{},
@@ -138,6 +141,14 @@ pub const Nanolight = struct {
 
     /// What switch `t` is when the panel owns it (suggestions, file search,
     /// searches in the browser); null for another owner's.
+    /// Says `text` in the footer in place of the name ("Updated to 0.1.3"),
+    /// or nothing.
+    pub fn setNote(s: *Nanolight, text: []const u8) void {
+        const n = @min(text.len, s.note_buf.len);
+        @memcpy(s.note_buf[0..n], text[0..n]);
+        s.note = s.note_buf[0..n];
+    }
+
     pub fn switchOn(s: *const Nanolight, t: Toggle) ?bool {
         return switch (t) {
             .suggest => s.suggest_on,

@@ -91,9 +91,15 @@ pub fn moveUp(c: *ui.Context) bool {
         c.shortcut(.{ .key = 'k', .ctrl = true });
 }
 
-/// ⌘1…⌘`n` (at most 9): the place of the one pressed.
+/// A small round control's box: the gear, a back chevron, a key's tile.
+pub const box_size = 26;
+
+/// How many rows a number key reaches: ⌘1…⌘9.
+pub const number_keys = 9;
+
+/// ⌘1…⌘`n` (at most `number_keys`): the place of the one pressed.
 pub fn numberKey(c: *ui.Context, n: usize) ?usize {
-    for (0..@min(n, 9)) |k| {
+    for (0..@min(n, number_keys)) |k| {
         if (c.shortcut(.{ .key = @intCast('1' + k), .cmd = true })) return k;
     }
     return null;
@@ -197,14 +203,14 @@ pub fn nameDetail(
 
 /// A row's picture when it has no image of its own: a symbol on a quiet tile.
 pub fn tile(c: *ui.Context, p: Palette, icon: []const u8) void {
-    const box = ui.div(c).size(26, 26).rounded(7).bg(p.tile).center();
+    const box = ui.div(c).size(box_size, box_size).rounded(7).bg(p.tile).center();
     defer box.end();
     ui.icon(c, icon, .{ .size = 13, .weight = .medium, .color = p.text });
 }
 
 /// A row's picture: an app's or a file's icon, `key` naming it.
 pub fn iconImage(c: *ui.Context, key: []const u8, png: []const u8) void {
-    const box = ui.div(c).size(26, 26).center();
+    const box = ui.div(c).size(box_size, box_size).center();
     defer box.end();
     _ = ui.image(
         c,

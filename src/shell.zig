@@ -52,6 +52,22 @@ comptime {
     }
 }
 
+// The three OSes' `Single` answer the app's calls with the same types: a
+// seam that drifts fails the build, whichever OS it is built on.
+comptime {
+    const mac_single = @import("single_mac.zig");
+    for ([_]type{
+        @import("single_win.zig"),
+        @import("single_unix.zig"),
+    }) |S| {
+        for ([_][]const u8{ "claim", "send", "isSelf" }) |name| {
+            if (@TypeOf(@field(S, name)) != @TypeOf(@field(mac_single, name))) {
+                @compileError(@typeName(S) ++ "." ++ name ++ " differs from the Mac's");
+            }
+        }
+    }
+}
+
 /// `Stand` declares what `Real` does, each of the same type (a method's
 /// receiver its own), and only fields `Real` has.
 fn conforms(comptime Real: type, comptime Stand: type) void {

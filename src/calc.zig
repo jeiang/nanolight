@@ -375,12 +375,16 @@ pub const scientific_len = "-1.23456e-308".len;
 /// with thousands separators ("1,048,576"), others to 10 significant digits.
 /// When the grouped form doesn't fit `buf`, both forms are `scientific`, so
 /// the row and what it copies agree.
+/// Above this a whole number is written in scientific notation: it is
+/// longer than its plain form (results.zig draws the same bound).
+pub const whole_below = 1e15;
+
 pub fn format(buf: []u8, v: f64, grouped: bool) []const u8 {
     assert(buf.len >= scientific_len);
-    if (@abs(v) < 1e15 and v == @round(v)) {
+    if (@abs(v) < whole_below and v == @round(v)) {
         const n: i64 = @intFromFloat(v);
         var digits: [24]u8 = undefined;
-        // Below 1e15 a whole number is at most 16 characters.
+        // Below `whole_below` a whole number is at most 16 characters.
         const d = std.fmt.bufPrint(&digits, "{d}", .{n}) catch unreachable;
         const g = group(buf, d) orelse return scientific(buf, v);
         if (grouped) return g;
