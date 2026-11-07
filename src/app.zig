@@ -17,7 +17,8 @@ const single = @import("single.zig");
 const account = @import("account.zig");
 const clock = @import("clock.zig");
 const apps = @import("apps.zig");
-const Target = @import("results.zig").Target;
+const results = @import("results.zig");
+const Target = results.Target;
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 const after = @import("after.zig");
@@ -48,8 +49,7 @@ pub const Hook = struct {
 /// A feature that opens script commands' rows (script_live.zig).
 pub const Opens = struct {
     ctx: *anyopaque,
-    /// A script (`Target.script`) or their folder (`Target.folder`).
-    func: *const fn (ctx: *anyopaque, target: Target) void,
+    func: *const fn (ctx: *anyopaque, target: results.ScriptTarget) void,
 };
 
 /// Where the features join the panel's comings and goings.
@@ -128,7 +128,7 @@ pub const App = struct {
         switch (target) {
             .url => |u| _ = nanoui.shell.openUrl(u),
             .pane => |i| _ = nanoui.shell.openUrl(settings_panes.urls[i]),
-            .script, .folder => if (a.hooks.opens) |h| h.func(h.ctx, target),
+            .script => |t| if (a.hooks.opens) |h| h.func(h.ctx, t),
             .app => |path| {
                 if (shell.Single.isSelf(path)) {
                     // Nanolight is already open: the panel comes back, empty,

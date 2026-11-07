@@ -104,12 +104,12 @@ pub const Screen = struct {
             s.refresh(n, x);
             if (submitted) s.paste(x);
         }
-        ui.div(c).wFull().h(1).bg(p.hair).end();
+        chrome.hairline(c, p);
         const rows = ui.div(c).column().wFull().h(list_h).p(chrome.list_pad).clip();
         if (hh) |x| s.list(c, p, x) else empty(c, p, "Clipboard history is not available here.");
         rows.end();
         if (hh) |x| s.sel_hash = if (s.selected(x)) |e| e.hash else 0;
-        ui.div(c).wFull().h(1).bg(p.hair).end();
+        chrome.hairline(c, p);
         if (hh) |x| s.detail(c, p, x);
         s.footer(c, p, hh);
     }
@@ -248,16 +248,14 @@ pub const Screen = struct {
         } else ui.text(c, chrome.clipboard_title, p.caption());
         ui.spacer(c);
         const h = hh orelse return;
-        if (!h.copy_only) {
-            chrome.footerKey(c, p, "Paste", "↩", true);
-            chrome.keySep(c, p);
-        }
         const copy_key = if (h.copy_only) "↩" else platform.mod ++ "↩";
-        chrome.footerKey(c, p, "Copy", copy_key, h.copy_only);
-        chrome.keySep(c, p);
-        chrome.footerKey(c, p, "Delete", platform.mod ++ "⌫", false);
-        chrome.keySep(c, p);
-        chrome.footerKey(c, p, "Close", "esc", false);
+        const says = [_]chrome.Key{
+            .{ .what = "Paste", .key = "↩", .first = true },
+            .{ .what = "Copy", .key = copy_key, .first = h.copy_only },
+            .{ .what = "Delete", .key = platform.mod ++ "⌫" },
+        };
+        // Copy only: Return copies, and nothing pastes.
+        chrome.footerKeys(c, p, says[@intFromBool(h.copy_only)..]);
     }
 };
 

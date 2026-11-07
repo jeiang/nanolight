@@ -41,8 +41,10 @@ pub fn lasts(kind: Kind, why: Why) bool {
 pub const Away = struct {
     /// Seconds; null while it is up.
     at: ?i64 = null,
-    /// Seconds; 0 is never.
-    pop_after: u32,
+    /// Seconds; 0 is never. config.toml's `pop_to_root_seconds` sets it.
+    pop_after: u32 = default_pop_after,
+
+    pub const default_pop_after = 90;
 
     pub fn hid(a: *Away, now: i64) void {
         a.at = now;

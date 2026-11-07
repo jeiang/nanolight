@@ -6,7 +6,7 @@ const nanoui = @import("nanoui");
 const sc = @import("script_commands.zig");
 const apps = @import("apps.zig");
 const config = @import("config.zig");
-const Target = @import("results.zig").Target;
+const ScriptTarget = @import("results.zig").ScriptTarget;
 const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
 const Opens = @import("app.zig").Opens;
@@ -67,7 +67,7 @@ pub const Scripts = struct {
 
     /// A command's row was chosen: it runs in the panel, which stays up
     /// (results.zig `Target.opensScreen`).
-    fn start(sx: *Scripts, target: Target) void {
+    fn start(sx: *Scripts, target: ScriptTarget) void {
         const gpa = sx.core.app.gpa;
         switch (target) {
             .folder => {
@@ -75,11 +75,10 @@ pub const Scripts = struct {
                 defer gpa.free(d);
                 _ = nanoui.shell.openPath(d);
             },
-            .script => |i| {
+            .command => |i| {
                 const x = sx.list.items.items[i];
                 sx.runner.start(.{ .file = x.file.?, .title = x.title, .icon = sx.list.icon(i) });
             },
-            .app, .url, .pane => unreachable, // The core opens these itself.
         }
     }
 
@@ -119,7 +118,7 @@ fn from(ctx: *anyopaque) *Scripts {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn open(ctx: *anyopaque, target: Target) void {
+fn open(ctx: *anyopaque, target: ScriptTarget) void {
     from(ctx).start(target);
 }
 

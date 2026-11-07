@@ -1,5 +1,5 @@
 //! System commands (sleep, lock, volume, dark mode), built in and found like
-//! apps. Each OS has its own table of fixed argument lists (nothing a user
+//! apps. Each is written once, with each OS's fixed argument lists (nothing a user
 //! types reaches them, and no shell runs them); a command whose program is
 //! not on the PATH is never listed, which is looked at once at startup.
 //! A failure's message goes in the panel's footer.
@@ -13,130 +13,166 @@ const proc = @import("proc.zig");
 const search = @import("search.zig");
 const windows = @import("os.zig").windows;
 
+/// Argument lists to try in order: the first whose program is on the PATH runs.
+const Argvs = []const []const []const u8;
+
+/// A command as this machine lists it.
 pub const Command = struct {
     name: []const u8,
     /// Other words for it, matched a little lower than its name.
     keywords: []const []const u8 = &.{},
-    /// Argument lists to try in order: the first whose program is on the PATH runs.
-    runs: []const []const []const u8,
+    runs: Argvs,
 };
 
+/// How one OS runs a command.
+const Way = struct {
+    runs: Argvs,
+    /// Words only this OS's way answers to.
+    keywords: []const []const u8 = &.{},
+};
+
+/// A command, written once: its name and words, and how each OS runs it
+/// (null: not listed there).
+const Entry = struct {
+    name: []const u8,
+    keywords: []const []const u8 = &.{},
+    mac: ?Way = null,
+    linux: ?Way = null,
+    windows: ?Way = null,
+};
+
+const sound = [_][]const u8{ "volume", "audio", "sound" };
 const levels = [_]u8{ 0, 25, 50, 75, 100 };
 
-fn volumes(comptime make: fn (comptime u8) []const []const []const u8) [levels.len]Command {
-    var out: [levels.len]Command = undefined;
+fn volumes() [levels.len]Entry {
+    var out: [levels.len]Entry = undefined;
     for (levels, 0..) |v, i| out[i] = .{
         .name = std.fmt.comptimePrint("Set Volume to {d}%", .{v}),
-        .keywords = &.{ "volume", "audio", "sound", std.fmt.comptimePrint("volume {d}", .{v}) },
-        .runs = make(v),
+        .keywords = &(sound ++ .{std.fmt.comptimePrint("volume {d}", .{v})}),
+        .mac = .{ .runs = &.{&.{
+            "osascript",
+            "-e",
+            std.fmt.comptimePrint("set volume output volume {d}", .{v}),
+        }} },
+        .linux = .{ .runs = &.{
+            &.{
+                "wpctl",
+                "set-volume",
+                "@DEFAULT_AUDIO_SINK@",
+                std.fmt.comptimePrint("{d}.{d:0>2}", .{ v / 100, v % 100 }),
+            },
+            &.{ "pactl", "set-sink-volume", "@DEFAULT_SINK@", std.fmt.comptimePrint("{d}%", .{v}) },
+        } },
     };
     return out;
 }
 
-fn macVolume(comptime v: u8) []const []const []const u8 {
-    return &.{&.{ "osascript", "-e", std.fmt.comptimePrint("set volume output volume {d}", .{v}) }};
-}
+/// Absolute, so a rundll32.bat in the working directory is never found first.
+const rundll32 = "C:\\Windows\\System32\\rundll32.exe";
 
-fn linuxVolume(comptime v: u8) []const []const []const u8 {
-    return &.{
-        &.{
-            "wpctl",
-            "set-volume",
-            "@DEFAULT_AUDIO_SINK@",
-            std.fmt.comptimePrint("{d}.{d:0>2}", .{ v / 100, v % 100 }),
-        },
-        &.{ "pactl", "set-sink-volume", "@DEFAULT_SINK@", std.fmt.comptimePrint("{d}%", .{v}) },
-    };
-}
-
-pub const mac_table = volumes(macVolume) ++ [_]Command{
+/// Every OS's commands, in the order each lists its own.
+const entries = volumes() ++ [_]Entry{
     .{
         .name = "Toggle Dark Mode",
         .keywords = &.{ "appearance", "theme", "light mode" },
-        .runs = &.{
+        .mac = .{ .runs = &.{
             &.{
                 "osascript",
                 "-e",
                 "tell application \"System Events\" to tell appearance preferences to set dark " ++
                     "mode to not dark mode",
             },
-        },
+        } },
     },
     .{
         .name = "Mute",
-        .keywords = &.{ "volume", "audio", "sound" },
-        .runs = &.{&.{ "osascript", "-e", "set volume output muted true" }},
+        .keywords = &sound,
+        .mac = .{ .runs = &.{&.{ "osascript", "-e", "set volume output muted true" }} },
+        .linux = .{ .runs = &.{
+            &.{ "wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "1" },
+            &.{ "pactl", "set-sink-mute", "@DEFAULT_SINK@", "1" },
+        } },
     },
     .{
         .name = "Unmute",
-        .keywords = &.{ "volume", "audio", "sound" },
-        .runs = &.{&.{ "osascript", "-e", "set volume output muted false" }},
+        .keywords = &sound,
+        .mac = .{ .runs = &.{&.{ "osascript", "-e", "set volume output muted false" }} },
+        .linux = .{ .runs = &.{
+            &.{ "wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0" },
+            &.{ "pactl", "set-sink-mute", "@DEFAULT_SINK@", "0" },
+        } },
     },
-    .{ .name = "Sleep", .keywords = &.{"suspend"}, .runs = &.{&.{ "pmset", "sleepnow" }} },
+    .{
+        .name = "Sleep",
+        .keywords = &.{"suspend"},
+        .mac = .{ .runs = &.{&.{ "pmset", "sleepnow" }} },
+        .linux = .{ .runs = &.{&.{ "systemctl", "suspend" }} },
+        // It hibernates when hibernation is on.
+        .windows = .{
+            .runs = &.{&.{ rundll32, "powrprof.dll,SetSuspendState", "0,1,0" }},
+            .keywords = &.{"hibernate"},
+        },
+    },
     .{
         .name = "Sleep Display",
         .keywords = &.{ "display off", "screen off" },
-        .runs = &.{&.{ "pmset", "displaysleepnow" }},
+        .mac = .{ .runs = &.{&.{ "pmset", "displaysleepnow" }} },
+    },
+    .{
+        .name = "Lock Screen",
+        .keywords = &.{"lock"},
+        .linux = .{ .runs = &.{&.{ "loginctl", "lock-session" }} },
+        .windows = .{ .runs = &.{&.{ rundll32, "user32.dll,LockWorkStation" }} },
     },
     .{
         .name = "Empty Trash",
         .keywords = &.{ "bin", "delete" },
-        .runs = &.{&.{ "osascript", "-e", "tell application \"Finder\" to empty trash" }},
-    },
-};
-
-pub const linux_table = volumes(linuxVolume) ++ [_]Command{
-    .{ .name = "Mute", .keywords = &.{ "volume", "audio", "sound" }, .runs = &.{
-        &.{ "wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "1" },
-        &.{ "pactl", "set-sink-mute", "@DEFAULT_SINK@", "1" },
-    } },
-    .{ .name = "Unmute", .keywords = &.{ "volume", "audio", "sound" }, .runs = &.{
-        &.{ "wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0" },
-        &.{ "pactl", "set-sink-mute", "@DEFAULT_SINK@", "0" },
-    } },
-    .{ .name = "Sleep", .keywords = &.{"suspend"}, .runs = &.{&.{ "systemctl", "suspend" }} },
-    .{
-        .name = "Lock Screen",
-        .keywords = &.{"lock"},
-        .runs = &.{&.{ "loginctl", "lock-session" }},
+        .mac = .{ .runs = &.{
+            &.{ "osascript", "-e", "tell application \"Finder\" to empty trash" },
+        } },
     },
     .{
         .name = "Dark Mode",
         .keywords = &.{ "appearance", "theme" },
-        .runs = &.{
+        .linux = .{ .runs = &.{
             &.{ "gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-dark" },
-        },
+        } },
     },
     .{
         .name = "Light Mode",
         .keywords = &.{ "appearance", "theme" },
-        .runs = &.{
+        .linux = .{ .runs = &.{
             &.{ "gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "default" },
-        },
+        } },
     },
 };
 
-/// Absolute, so a rundll32.bat in the working directory is never found first.
-const rundll32 = "C:\\Windows\\System32\\rundll32.exe";
+const Os = enum { mac, linux, windows };
 
-pub const windows_table = [_]Command{
-    .{
-        .name = "Sleep",
-        .keywords = &.{ "suspend", "hibernate" },
-        .runs = &.{&.{ rundll32, "powrprof.dll,SetSuspendState", "0,1,0" }},
-    },
-    .{
-        .name = "Lock Screen",
-        .keywords = &.{"lock"},
-        .runs = &.{&.{ rundll32, "user32.dll,LockWorkStation" }},
-    },
-};
+/// The commands `os` lists, in table order.
+pub fn table(comptime os: Os) []const Command {
+    return comptime blk: {
+        var n: usize = 0;
+        for (entries) |e| {
+            if (@field(e, @tagName(os)) != null) n += 1;
+        }
+        var out: [n]Command = undefined;
+        var i: usize = 0;
+        for (entries) |e| {
+            const way = @field(e, @tagName(os)) orelse continue;
+            out[i] = .{ .name = e.name, .keywords = e.keywords ++ way.keywords, .runs = way.runs };
+            i += 1;
+        }
+        const done = out;
+        break :blk &done;
+    };
+}
 
-pub const all: []const Command = switch (builtin.os.tag) {
-    .macos => &mac_table,
-    .windows => &windows_table,
-    else => &linux_table,
-};
+pub const all = table(switch (builtin.os.tag) {
+    .macos => .mac,
+    .windows => .windows,
+    else => .linux,
+});
 
 const none = 0xff;
 
@@ -275,14 +311,14 @@ pub const Runner = struct {
 
 test "every table has named commands with fixed, non-empty argument lists" {
     const t = std.testing;
-    for ([_][]const Command{ &mac_table, &linux_table, &windows_table }) |table| {
-        for (table, 0..) |c, i| {
+    for ([_][]const Command{ table(.mac), table(.linux), table(.windows) }) |listed| {
+        for (listed, 0..) |c, i| {
             try t.expect(c.name.len > 0 and c.runs.len > 0);
             for (c.runs) |argv| {
                 try t.expect(argv.len > 0 and argv[0].len > 0);
                 for (argv) |a| try t.expect(a.len > 0);
             }
-            for (table[0..i]) |other| try t.expect(!std.mem.eql(u8, c.name, other.name));
+            for (listed[0..i]) |other| try t.expect(!std.mem.eql(u8, c.name, other.name));
         }
     }
 }

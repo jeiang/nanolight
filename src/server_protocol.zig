@@ -93,8 +93,8 @@ pub fn handle(
     tokens: []const Token,
     req: Request,
 ) Reply {
-    const is_get = std.mem.eql(u8, req.method, "GET");
-    const is_put = std.mem.eql(u8, req.method, "PUT");
+    const is_get = std.mem.eql(u8, req.method, protocol.method_get);
+    const is_put = std.mem.eql(u8, req.method, protocol.method_put);
     if (std.mem.eql(u8, req.path, protocol.health_path)) {
         return if (is_get) .{ .status = 200, .body = "ok" } else .{ .status = 405 };
     }
@@ -214,7 +214,21 @@ fn testTokens(arena: std.mem.Allocator) ![]Token {
 }
 
 const bearer = protocol.bearer_prefix ++ test_token;
-const get: Request = .{ .method = "GET", .path = protocol.path, .authorization = bearer };
+const get: Request = .{
+    .method = protocol.method_get,
+    .path = protocol.path,
+    .authorization = bearer,
+};
+
+/// A PUT of `body` with the test token.
+fn putOf(body: []const u8) Request {
+    return .{
+        .method = protocol.method_put,
+        .path = protocol.path,
+        .authorization = bearer,
+        .body = body,
+    };
+}
 
 fn send(arena: std.mem.Allocator, dir: Io.Dir, tokens: []const Token, req: Request) Reply {
     return handle(arena, testing.io, dir, tokens, req);
@@ -241,7 +255,7 @@ test "a record round-trips with the right token, and is not there before the fir
         a,
         tmp.dir,
         tokens,
-        .{ .method = "PUT", .path = protocol.path, .authorization = bearer, .body = body },
+        putOf(body),
     );
     try testing.expectEqual(@as(u16, 200), put.status);
     try testing.expectEqualStrings("alice", put.account);
@@ -249,13 +263,16 @@ test "a record round-trips with the right token, and is not there before the fir
         a,
         tmp.dir,
         tokens,
-        .{ .method = "GET", .path = protocol.path, .authorization = bearer },
+        get,
     );
     try testing.expectEqual(@as(u16, 200), got.status);
     try testing.expect(settings.same(settings.decode(a, got.body).?, settings.decode(a, body).?));
     try testing.expectEqualStrings(
         "ok",
-        send(a, tmp.dir, tokens, .{ .method = "GET", .path = protocol.health_path }).body,
+        send(a, tmp.dir, tokens, .{
+            .method = protocol.method_get,
+            .path = protocol.health_path,
+        }).body,
     );
 }
 
@@ -274,7 +291,7 @@ test "a missing or wrong token is refused, and nothing is read or written" {
         "Basic " ++ test_token,
         test_token,
     }) |auth| {
-        for ([_][]const u8{ "GET", "PUT" }) |m| {
+        for ([_][]const u8{ protocol.method_get, protocol.method_put }) |m| {
             const r = send(
                 a,
                 tmp.dir,
@@ -305,7 +322,7 @@ test "a body that is not a record is a 400, and one over the limit a 413" {
                 a,
                 tmp.dir,
                 tokens,
-                .{ .method = "PUT", .path = protocol.path, .authorization = bearer, .body = b },
+                putOf(b),
             ).status,
         );
     }
@@ -317,7 +334,7 @@ test "a body that is not a record is a 400, and one over the limit a 413" {
             a,
             tmp.dir,
             tokens,
-            .{ .method = "PUT", .path = protocol.path, .authorization = bearer, .body = big },
+            putOf(big),
         ).status,
     );
     try testing.expectEqual(
@@ -354,7 +371,7 @@ test "a merge that outgrows the stored limit sheds apps and stays readable" {
             a,
             tmp.dir,
             tokens,
-            .{ .method = "PUT", .path = protocol.path, .authorization = bearer, .body = body },
+            putOf(body),
         );
         try testing.expectEqual(@as(u16, 200), put.status);
         try testing.expect(put.body.len <= protocol.max_stored);
@@ -362,7 +379,7 @@ test "a merge that outgrows the stored limit sheds apps and stays readable" {
             a,
             tmp.dir,
             tokens,
-            .{ .method = "GET", .path = protocol.path, .authorization = bearer },
+            get,
         );
         try testing.expectEqual(@as(u16, 200), got.status);
         const kept = settings.decode(a, got.body).?;
@@ -395,7 +412,7 @@ test "a first sync keeps the stored record, a later one the newer" {
                 dir,
                 t,
                 .{
-                    .method = "PUT",
+                    .method = protocol.method_put,
                     .path = protocol.path,
                     .authorization = bearer,
                     .first = first,
@@ -440,7 +457,7 @@ test "a write leaves no temp file, and an unreadable record is not overwritten" 
             a,
             tmp.dir,
             tokens,
-            .{ .method = "PUT", .path = protocol.path, .authorization = bearer, .body = body },
+            putOf(body),
         ).status,
     );
     var it = tmp.dir.iterate();
@@ -458,7 +475,7 @@ test "a write leaves no temp file, and an unreadable record is not overwritten" 
             a,
             tmp.dir,
             tokens,
-            .{ .method = "PUT", .path = protocol.path, .authorization = bearer, .body = body },
+            putOf(body),
         ).status,
     );
     const kept = try tmp.dir.readFileAlloc(testing.io, "alice.json", a, .limited(100));
@@ -481,7 +498,7 @@ test "the longest account name's record is written" {
         tmp.dir,
         tokens,
         .{
-            .method = "PUT",
+            .method = protocol.method_put,
             .path = protocol.path,
             .authorization = bearer,
             .body = try record(a, "cmd_space", 10),

@@ -54,9 +54,7 @@ pub const Target = union(enum) {
     /// An app, a file or a folder: its path.
     app: []const u8,
     url: []const u8,
-    /// A script command, its place in `script_commands.List`.
-    script: u32,
-    folder,
+    script: ScriptTarget,
     /// A pane of System Settings, its place in settings_panes.zig.
     pane: u16,
 
@@ -65,9 +63,18 @@ pub const Target = union(enum) {
     pub fn opensScreen(t: Target) bool {
         return switch (t) {
             .script => true,
-            .app, .url, .folder, .pane => false,
+            .app, .url, .pane => false,
         };
     }
+};
+
+/// A script command's row or their folder's: the host's script feature
+/// opens it (app.zig `Opens`).
+pub const ScriptTarget = union(enum) {
+    /// A script command, its place in `script_commands.List`.
+    command: u32,
+    /// Their folder.
+    folder,
 };
 
 /// The header over a provider's rows.
@@ -117,6 +124,8 @@ pub const Provider = struct {
     yields: bool = false,
     /// The query that puts its row first, past a much-opened app's.
     first_for: ?[]const u8 = null,
+    /// The most rows its `rank` lists.
+    cap: u8 = 0,
 };
 
 pub const providers = std.enums.EnumArray(Kind, Provider).init(.{
@@ -127,6 +136,7 @@ pub const providers = std.enums.EnumArray(Kind, Provider).init(.{
         .hint = "Open",
         .symbol = "app.dashed",
         .rank = rankLaunchers,
+        .cap = max_apps,
         .with_card = true,
     },
     .script = .{
@@ -143,6 +153,7 @@ pub const providers = std.enums.EnumArray(Kind, Provider).init(.{
         .symbol = "doc",
         .identity = .path,
         .rank = rankFiles,
+        .cap = files.max_rows,
     },
     .pane = .{
         .section = .local,
@@ -150,6 +161,7 @@ pub const providers = std.enums.EnumArray(Kind, Provider).init(.{
         .hint = "Open",
         .symbol = "app.dashed",
         .rank = rankPanes,
+        .cap = max_panes,
         .yields = true,
     },
     .command = .{
@@ -158,6 +170,7 @@ pub const providers = std.enums.EnumArray(Kind, Provider).init(.{
         .hint = "Run",
         .symbol = "terminal",
         .rank = rankCommands,
+        .cap = max_commands,
         .with_keyword = false,
         .yields = true,
     },
@@ -170,7 +183,8 @@ pub const providers = std.enums.EnumArray(Kind, Provider).init(.{
         .rank = rankSettings,
         .with_card = true,
         .own = true,
-        .first_for = "settings",
+        .first_for = settings_words[0],
+        .cap = 1,
     },
     .clipboard = .{
         .section = .local,
@@ -182,6 +196,7 @@ pub const providers = std.enums.EnumArray(Kind, Provider).init(.{
         .with_card = true,
         .own = true,
         .first_for = "clip",
+        .cap = 1,
     },
     // The footer names the quicklink after it: "Search Google".
     .quicklink = .{ .section = .web, .action = "Search", .hint = "Go", .symbol = "globe" },
@@ -198,8 +213,10 @@ pub const providers = std.enums.EnumArray(Kind, Provider).init(.{
 const local_order = [_]Kind{ .app, .settings, .clipboard, .pane, .command, .file };
 comptime {
     for (std.enums.values(Kind)) |k| {
+        const p = providers.get(k);
         const listed = std.mem.indexOfScalar(Kind, &local_order, k) != null;
-        assert(listed == (providers.get(k).rank != null));
+        assert(listed == (p.rank != null));
+        assert(listed == (p.cap > 0));
     }
 }
 
@@ -211,6 +228,7 @@ pub const Row = struct {
     match: search.Match = .{ .score = 0 },
 };
 
+/// Apps and scripts share this cap.
 pub const max_apps = 6;
 /// Per-kind caps within the shared, match-ranked local results.
 pub const max_panes = 3;
@@ -233,13 +251,12 @@ comptime {
     assert(max_heads == chrome.max_heads);
 }
 /// Every local candidate, and a card, fit before ranking keeps the best of
-/// them and trims the list to `max_rows`. Apps and scripts share `max_apps`.
-const max_candidates = 1 + max_apps + files.max_rows + max_panes + max_commands;
-comptime {
-    // The Settings and Clipboard History rows, two at most, are listed only
-    // in place of the panes and commands.
-    assert(max_panes + max_commands >= 2);
-}
+/// them and trims the list to `max_rows`.
+const max_candidates = blk: {
+    var n: usize = 1;
+    for (local_order) |k| n += providers.get(k).cap;
+    break :blk n;
+};
 
 /// "settings" and "preferences", the words people type for Nanolight's Settings.
 const settings_words = [_][]const u8{
@@ -253,7 +270,7 @@ const settings_words = [_][]const u8{
 
 /// The apps and script commands the words name, best first.
 fn rankLaunchers(r: *Results, in: *const Input) void {
-    var ranked: [max_apps]search.Ranked = undefined;
+    var ranked: [providers.get(.app).cap]search.Ranked = undefined;
     const n = in.from.rank(in.words, &ranked);
     for (ranked[0..n]) |x| r.push(launcherRow(in.from.at(x), x.match));
 }
@@ -275,25 +292,24 @@ fn rankSettings(r: *Results, in: *const Input) void {
     };
 }
 
-/// Clipboard History, when the host has it: for "clip", or a name's worth
-/// of its name (not a stray letter or two).
+/// Clipboard History, when the host has it: for a name's worth of its name
+/// (not a stray letter or two).
 fn rankClipboard(r: *Results, in: *const Input) void {
     if (!in.clip_on) return;
     const m = search.score(in.words, chrome.clipboard_title) orelse return;
-    const named = in.words.len >= 3 and m.score >= search.min_loose;
-    if (!named and !std.ascii.eqlIgnoreCase(in.words, "clip")) return;
+    if (in.words.len < 3 or m.score < search.min_loose) return;
     r.push(.{ .kind = .clipboard, .match = m });
 }
 
 fn rankPanes(r: *Results, in: *const Input) void {
-    var ranked: [max_panes]search.Ranked = undefined;
+    var ranked: [providers.get(.pane).cap]search.Ranked = undefined;
     const n = panes.rank(in.words, &r.panes, &ranked);
     for (ranked[0..n]) |x| r.push(.{ .kind = .pane, .item = x.index, .match = x.match });
 }
 
 fn rankCommands(r: *Results, in: *const Input) void {
     const installed = in.commands orelse return;
-    var ranked: [max_commands]search.Ranked = undefined;
+    var ranked: [providers.get(.command).cap]search.Ranked = undefined;
     const n = commands.rank(in.words, installed, &ranked);
     for (ranked[0..n]) |x| r.push(.{ .kind = .command, .item = x.index, .match = x.match });
 }
@@ -357,7 +373,8 @@ pub const Input = struct {
     completions: []const []const u8 = &.{},
     /// Currency rates, when in hand, and whether fetching them failed.
     rates: rates_table.Status = .{},
-    /// Clipboard History can be opened (the host has it): it is listed for "clip".
+    /// Clipboard History can be opened (the host has it): it is listed for
+    /// a name's worth of its name ("clip").
     clip_on: bool = false,
     /// The files and folders file search found for the words (files.zig),
     /// if it is on: local rows like the rest.

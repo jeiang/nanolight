@@ -14,8 +14,13 @@ pub const bearer_prefix = "Bearer ";
 /// the stored record wins. Header names match in any case.
 pub const first_header = "X-Nanolight-First";
 pub const first_value = "1";
-/// Of requests and replies alike.
+/// Of requests and replies alike, in `content_type_header`.
 pub const content_type = "application/json";
+pub const content_type_header = "Content-Type";
+/// Sends this machine's record; answered with the merge.
+pub const method_put = "PUT";
+/// Reads the account's record, and the health check.
+pub const method_get = "GET";
 
 /// A request body at most; a larger one is refused (413).
 pub const max_body = 256 * 1024;
