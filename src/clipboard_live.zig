@@ -7,7 +7,6 @@ const clipboard = @import("clipboard.zig");
 const types = @import("clipboard_types.zig");
 const Watcher = @import("clipboard_watcher.zig").Watcher;
 const Host = @import("host.zig").Host.Clipboard;
-const prefs = @import("prefs.zig");
 const paths = @import("paths.zig");
 const clock = @import("clock.zig");
 const log = @import("log.zig");
@@ -27,8 +26,9 @@ pub const Clip = struct {
     /// What the Clipboard History screen asks of the app; set with the store.
     host: ?Host = null,
 
-    /// Opens the store in `<data dir>/clipboard` and, when history is on,
-    /// starts the watcher. Without that folder history stays off (logged).
+    /// Opens the store in `<data dir>/clipboard`; its switch, loaded next
+    /// (settings_bind.zig `Bind.load`), starts the watcher. Without that
+    /// folder history stays off (logged).
     pub fn open(c: *Clip, cfg: clipboard.Config, config_ok: bool) void {
         const gpa = c.core.app.gpa;
         const io = c.core.app.io;
@@ -38,7 +38,6 @@ pub const Clip = struct {
         };
         c.store = .init(gpa, io, c.dir, cfg);
         const store = &c.store.?;
-        store.on = prefs.flagOr(c.core.kv, gpa, .clipboard, store.cfg.enabled orelse true);
         store.config_ok = config_ok;
         store.load(clock.now());
         c.host = .{
@@ -49,7 +48,6 @@ pub const Clip = struct {
             .paste = paste,
             .copy = copy,
         };
-        if (store.on) c.startWatching();
         nanoui.App.after(prune_every_ms, c, pruneTick);
     }
 
@@ -74,18 +72,19 @@ pub const Clip = struct {
         if (c.store != null) c.watcher.noteFrontmost();
     }
 
-    /// Settings' switch: whether history records; `set` changes it first (kept
-    /// in kv, so the app's change outlasts the config file's value; see
-    /// `clipboard.Store.turn`). Off on a system with no history.
-    pub fn enabled(c: *Clip, set: ?bool) bool {
+    /// Settings' switch: whether history records. Off on a system with no
+    /// history.
+    pub fn recording(c: *const Clip) bool {
         const store = if (c.store) |*s| s else return false;
-        if (set) |on| {
-            const was = store.on;
-            store.turn(on, prefs.setFlag(c.core.kv, .clipboard, on));
-            if (store.on == was) return was;
-            if (store.on) c.startWatching() else c.watcher.stop();
-        }
         return store.on;
+    }
+
+    /// History records, or not, as its switch says, `kept` when that was
+    /// kept (`clipboard.Store.turn`); the watcher follows.
+    pub fn turn(c: *Clip, on: bool, kept: bool) void {
+        const store = if (c.store) |*s| s else return;
+        store.turn(on, kept);
+        if (store.on) c.startWatching() else c.watcher.stop();
     }
 
     /// Settings' Clear History: false when something may be left on disk (logged).

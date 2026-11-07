@@ -148,7 +148,7 @@ pub fn keySep(c: *ui.Context, p: Palette) void {
 
 /// The footer's last key: Escape closes the screen.
 pub fn closeKey(c: *ui.Context, p: Palette) void {
-    footerKey(c, p, "Close", "esc", false);
+    footerKey(c, p, close.what, close.key, close.first);
 }
 
 pub const Key = struct {
@@ -156,14 +156,21 @@ pub const Key = struct {
     key: []const u8,
     first: bool = false,
 };
+const close: Key = .{ .what = "Close", .key = "esc" };
 
 /// A screen's own footer keys, a line between each, then Close.
 pub fn footerKeys(c: *ui.Context, p: Palette, keys: []const Key) void {
+    footerKeysThen(c, p, keys, close);
+}
+
+/// The footer's keys, a line between each, then `last`: Escape's, when it
+/// does other than close.
+pub fn footerKeysThen(c: *ui.Context, p: Palette, keys: []const Key, last: Key) void {
     for (keys) |k| {
         footerKey(c, p, k.what, k.key, k.first);
         keySep(c, p);
     }
-    closeKey(c, p);
+    footerKey(c, p, last.what, last.key, last.first);
 }
 
 /// A section's name, at the bottom of its head.
@@ -217,11 +224,13 @@ pub fn iconImage(c: *ui.Context, key: []const u8, png: []const u8) void {
 pub const Chip = struct { px: f32, size: f32 };
 pub const settings_chip: Chip = .{ .px = 14, .size = 13.5 };
 pub const welcome_chip: Chip = .{ .px = 16, .size = 14 };
+/// Every chip's height, whichever its size.
+pub const chip_h: f32 = 36;
 
 /// A shortcut to pick, `on` when it is the one in use, saying `label`.
 /// The caller keys it, reads its click, and ends it (after a key cap, if any).
 pub fn shortcutChip(c: *ui.Context, p: Palette, label: []const u8, on: bool, size: Chip) ui.Div {
-    const b = ui.div(c).row().h(36).px(size.px).gap(6).itemsCenter().rounded(10).control()
+    const b = ui.div(c).row().h(chip_h).px(size.px).gap(6).itemsCenter().rounded(10).control()
         .bg(if (on) p.sel else p.tile.alpha(0.5)).border(if (on) p.text.alpha(0.35) else p.rim);
     const weight: ui.Weight = if (on) .semibold else .medium;
     ui.text(c, label, .{ .size = size.size, .weight = weight, .color = if (on) p.text else p.sub });

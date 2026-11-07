@@ -13,6 +13,7 @@ const clipboard = @import("clipboard.zig");
 const account = @import("account.zig");
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
+const Toggle = @import("toggles.zig").Toggle;
 const Quicklink = @import("web.zig").Quicklink;
 const log = @import("log.zig");
 const Away = @import("screen.zig").Away;
@@ -47,8 +48,9 @@ pub const ScriptCommands = struct {
 };
 
 /// What a file key seeds in the app's own settings (prefs.zig), in this
-/// order, and the synced field it sets, if any. `key` is its path in `Config`
-/// ("table.key") and names its applied record.
+/// order, and the synced field it sets, if any: a switch's is its row's
+/// (toggles.zig). `key` is its path in `Config` ("table.key") and names
+/// its applied record.
 const Seed = struct {
     key: []const u8,
     rule: Rule,
@@ -56,17 +58,21 @@ const Seed = struct {
 
     /// Whether a change to it is a local change that syncs: it sets one of the `choices`.
     fn syncs(s: Seed) bool {
-        return if (s.setting) |f| settings.isChoice(f) else false;
+        const sets = switch (s.rule) {
+            .toggle => |t| t.row().syncs,
+            .hotkey, .quicklinks => s.setting,
+        };
+        return if (sets) |f| settings.isChoice(f) else false;
     }
 };
-const Rule = union(enum) { hotkey, quicklinks, flag: prefs.Key };
+const Rule = union(enum) { hotkey, quicklinks, toggle: Toggle };
 const seeds = [_]Seed{
     .{ .key = "hotkey", .rule = .hotkey, .setting = .hotkey },
     .{ .key = "quicklinks", .rule = .quicklinks, .setting = .quicklinks },
-    .{ .key = "suggestions", .rule = .{ .flag = .suggest }, .setting = .suggest },
-    .{ .key = "open_searches_in_browser", .rule = .{ .flag = .searches_out } },
-    .{ .key = "show_in_menu_bar", .rule = .{ .flag = .menu_bar } },
-    .{ .key = "clipboard.enabled", .rule = .{ .flag = .clipboard } },
+    .{ .key = "suggestions", .rule = .{ .toggle = .suggest } },
+    .{ .key = "open_searches_in_browser", .rule = .{ .toggle = .browser } },
+    .{ .key = "show_in_menu_bar", .rule = .{ .toggle = .menu_bar } },
+    .{ .key = "clipboard.enabled", .rule = .{ .toggle = .clipboard } },
 };
 
 pub const Loaded = union(enum) {
@@ -389,7 +395,8 @@ fn seed(store: nanoui.kv.Store, gpa: std.mem.Allocator, c: Config, now: i64) voi
 /// of the file, its record is forgotten.
 fn seedOne(store: nanoui.kv.Store, gpa: std.mem.Allocator, comptime s: Seed, value: anytype) bool {
     switch (s.rule) {
-        .flag => |k| {
+        .toggle => |t| {
+            const k = comptime t.row().pref.?;
             const on = value orelse {
                 forget(store, s.key);
                 return false;

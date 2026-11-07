@@ -383,7 +383,14 @@ const Steps = struct {
         p.applied = c;
     }
     fn hooks(p: *Steps) onboard.Hooks {
-        return .{ .ctx = p, .look = nobody, .apply = apply, .fix = fix, .done = finished };
+        return .{
+            .ctx = p,
+            .look = nobody,
+            .apply = apply,
+            .fix = fix,
+            .login = loginOff,
+            .done = finished,
+        };
     }
     /// The system's shortcuts are not read in tests: nobody holds a key.
     fn nobody(_: []shortcut_clash.SystemKey) shortcut_clash.Holders {
@@ -430,8 +437,7 @@ test "each welcome step fits the room its height gives it" {
         try std.testing.expect(!o.clash().clear());
         try std.testing.expect(fitsPanel(t, view.height(s)));
     }
-    // Asking about login: the last step's tallest.
-    o.hooks.login = Steps.loginOff;
+    // Asking about login, where Settings has its switch: the last step's tallest.
     t.key(.enter);
     t.settle(1);
     try std.testing.expect(t.containsText(" now"));
@@ -440,7 +446,7 @@ test "each welcome step fits the room its height gives it" {
     o.pressed(false);
     t.settle(2);
     try std.testing.expect(t.hasText("You're set."));
-    try std.testing.expect(t.hasText("Open Nanolight when you log in"));
+    try std.testing.expectEqual(platform.login_ui, t.hasText("Open Nanolight when you log in"));
     try std.testing.expect(fitsPanel(t, view.height(s)));
 }
 
@@ -596,11 +602,11 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expect(s.screen == .settings);
-    try std.testing.expectEqual(@as(u8, 1), prefs.suggest_sets);
+    try std.testing.expectEqual(@as(u8, 1), prefs.sets.get(.suggest));
     try std.testing.expect(!s.suggest_on);
     // Still on it: Return flips it back.
     press(t, &.{.{ .command = .insert_newline }});
-    try std.testing.expectEqual(@as(u8, 2), prefs.suggest_sets);
+    try std.testing.expectEqual(@as(u8, 2), prefs.sets.get(.suggest));
     try std.testing.expect(s.suggest_on);
     try std.testing.expect(view.height(s) <= chrome.max_height);
 }
@@ -704,6 +710,9 @@ test "a welcome whose key is set elsewhere skips the key step, in two steps" {
     t.settle(2);
     try std.testing.expect(t.hasText("You're set."));
     try std.testing.expect(t.containsText("2 of 2"));
+    // The key set elsewhere, opening at login is still asked, where
+    // Settings has its switch (DECISION D2).
+    try std.testing.expectEqual(platform.login_ui, t.hasText("Open Nanolight when you log in"));
     // Showing it again starts at the same step.
     o.start(.cmd_space);
     try std.testing.expectEqual(onboard.Step.try_it, o.step);

@@ -88,6 +88,7 @@ pub fn main(init: std.process.Init) !void {
         .o = &o,
         .kv = kv,
         .choice = prefs.hotkey(kv, init.gpa),
+        .toggles = undefined, // Settings' (`run`): their context.
     };
     o.hooks = core.welcomeHooks();
     try run(init, &core, loaded, &cfg, cfg_arena.allocator());
@@ -130,6 +131,7 @@ fn run(
         .update = &update,
     };
     const settings = bind.host();
+    core.toggles = bind.setter();
     s.host = .{
         .ctx = core,
         .open = App.open,
@@ -139,7 +141,6 @@ fn run(
         .suggest = sug.entry(),
         .files = if (platform.files) files.entry() else null,
         .settings = &settings,
-        .clipboard = clip.entry(),
     };
     core.hooks = .{
         .showing = clip.showingHook(),
@@ -147,7 +148,7 @@ fn run(
         .menu = menu.menuHook(),
     };
     if (core.app.flags.hidden) {
-        ready(core, init.gpa);
+        ready(core, &bind, init.gpa);
         var options = windowOptions(core);
         // Snapshots: the panel alone; `setup`, which leaves room round it,
         // never runs.
@@ -157,6 +158,8 @@ fn run(
         return core.app.run();
     }
     clip.open(loaded.clipboardConfig(), loaded != .unusable);
+    // Opened, or null: without its folder there is no history.
+    s.host.clipboard = clip.entry();
     var scripts: script_live.Scripts = .init(core, init.environ_map, cfg);
     defer scripts.deinit();
     s.scripts = &scripts.list;
@@ -167,7 +170,7 @@ fn run(
     core.hooks.popped = scripts.poppedHook();
     core.hooks.opens = scripts.opensHook();
     _ = sync.setQuicklinks(prefs.quicklinks(cfg_arena, core.kv));
-    ready(core, init.gpa);
+    ready(core, &bind, init.gpa);
     core.window = try core.app.newWindow(windowOptions(core));
     try runShown(init, core, &menu, &update, &sync, cfg.sync);
 }
@@ -190,21 +193,13 @@ fn answeredArgs(init: std.process.Init, args: []const [:0]const u8) !bool {
 }
 
 /// What the panel lists from, once all of it is there: the counts kept by
-/// name are their app's or script's, file search, and the settings kept
+/// name are their app's or script's, the switches and the theme kept
 /// outside the config.
-fn ready(core: *App, gpa: std.mem.Allocator) void {
+fn ready(core: *App, bind: *settings_bind.Bind, gpa: std.mem.Allocator) void {
     const s = core.s;
     s.tally.adopt(gpa, s.launchable());
-    files_live.load(core);
-    loadPreferences(s, core.kv, gpa);
-}
-
-/// The settings kept outside the config: Google's completions (on unless
-/// turned off in Settings), searches sent out, and the theme.
-fn loadPreferences(s: *Nanolight, kv: nanoui.kv.Store, gpa: std.mem.Allocator) void {
-    s.suggest_on = prefs.flag(kv, gpa, .suggest);
-    s.searches_out = prefs.flag(kv, gpa, .searches_out);
-    s.theme = prefs.theme(kv, gpa);
+    bind.load();
+    s.theme = prefs.theme(core.kv, gpa);
 }
 
 /// The panel as a hotkey shows it, then its window's: hidden until its key

@@ -217,10 +217,17 @@ pub const Nanolight = struct {
                 // Another screen over it skips it, without the key it shows.
                 o.end(if (why == .replaced) .drop_choice else .take_choice);
                 s.clearField();
-                // A first search (`Onboard.finish`) completes at once.
+                // A first search (`finishWelcome`) completes at once.
                 s.revealed = 0;
             },
         }
+    }
+
+    /// The welcome done (`Onboard.Outcome.finish`): into the launcher, with
+    /// `q` typed (a first search) or nothing.
+    pub fn finishWelcome(s: *Nanolight, q: []const u8) void {
+        s.leave(.closed);
+        if (q.len > 0) s.query.set(q);
     }
 
     /// Escape, on any screen: the screen goes, and the panel with it.
@@ -272,7 +279,7 @@ pub const Nanolight = struct {
 
     /// A key the host's recorder caught for Settings' shortcut.
     pub fn recorded(s: *Nanolight, r: key_choice.Recorded) void {
-        s.settings_ui.took(s, r);
+        s.settings_ui.took(s.host.settings, r);
     }
 
     pub fn ratesTable(s: *const Nanolight) ?*const rates_table.Rates {

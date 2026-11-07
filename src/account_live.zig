@@ -11,7 +11,6 @@ const web = @import("web.zig");
 const Quicklink = web.Quicklink;
 const keys = @import("keys.zig");
 const prefs = @import("prefs.zig");
-const suggest_live = @import("suggest_live.zig");
 const App = @import("app.zig").App;
 
 pub const off_text = "Sync: off (set [sync] in config.toml)";
@@ -169,7 +168,7 @@ const Take = struct {
     }
 
     pub fn suggest(t: *Take, on: bool) void {
-        suggest_live.set(t.sy.core, on, .synced);
+        t.sy.core.toggles.set(.suggest, on, .synced);
     }
 
     pub fn at(t: *Take, when: i64) void {

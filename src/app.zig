@@ -24,6 +24,7 @@ const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 const after = @import("after.zig");
 const PageKey = @import("preview.zig").Key;
+const Setter = @import("toggles.zig").Setter;
 
 /// A menu's item waits for the menu: it closes first, then the panel
 /// takes the keys.
@@ -88,6 +89,8 @@ pub const App = struct {
     /// The account settings sync through (account_live.zig); null without one.
     acct: ?*account.Account = null,
     hooks: Hooks = .{},
+    /// How the menu's checkbox and sync change a switch (settings_bind.zig).
+    toggles: Setter,
 
     pub fn from(ctx: *anyopaque) *App {
         return after.cast(*App, ctx);
@@ -116,15 +119,14 @@ pub const App = struct {
     }
 
     /// What the welcome asks of the app: who holds the keys, the key kept,
-    /// a holder made to let go, opening at login (unless the key is set
-    /// elsewhere), the welcome kept as done.
+    /// a holder made to let go, opening at login, the welcome kept as done.
     pub fn welcomeHooks(a: *App) onboard.Hooks {
         return .{
             .ctx = a,
             .look = shortcut_clash.look,
             .apply = apply,
             .fix = fix,
-            .login = if (a.o.skip_key) null else shell.Login.enabled,
+            .login = shell.Login.enabled,
             .done = done,
         };
     }
@@ -223,7 +225,7 @@ pub const App = struct {
         const a = from(ctx);
         if (w.isFocused()) return;
         // Recording ends through Settings, which shows it: the key is back.
-        if (a.recorder.active()) a.s.settings_ui.record(a.s, false);
+        if (a.recorder.active()) a.s.settings_ui.record(a.s.host.settings, false);
         a.s.hid(clock.now());
         a.through.stop();
         a.s.note = "";

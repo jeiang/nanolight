@@ -1,9 +1,9 @@
 //! The running app's side of Google's completions (suggest.zig): asked once
-//! typing pauses, the answer handed to the panel; and the switch for them.
+//! typing pauses, the answer handed to the panel. Their switch is one of
+//! toggles.zig's.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const suggest = @import("suggest.zig");
-const prefs = @import("prefs.zig");
 const Host = @import("host.zig").Host;
 const pipeline = @import("pipeline.zig");
 const after = @import("after.zig");
@@ -71,18 +71,3 @@ const Ask = struct {
         pipeline.answered(core.s, typed, if (said) &list else null);
     }
 };
-
-/// Where a change to a setting came from: this machine (synced on) or the account.
-pub const Origin = enum { here, synced };
-
-/// Google's suggestions on or off: the one writer (the menu, Settings, sync).
-pub fn set(core: *App, on: bool, origin: Origin) void {
-    if (on == core.s.suggest_on) return;
-    core.s.setSuggest(on);
-    // Unkept, the choice holds for this run; the next launch falls back to on.
-    prefs.keepFlag(core.kv, .suggest, on);
-    if (origin == .here) core.touched(.suggest);
-    core.redraw();
-    // The menu's checkbox follows; never rebuilt inside its own click.
-    after.oneShot(0, core, App.menuChanged);
-}

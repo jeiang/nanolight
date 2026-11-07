@@ -388,7 +388,7 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
     const gpa = testing.allocator;
     var prefs: support.Prefs = .{};
     prefs.init();
-    prefs.clip_on = true;
+    prefs.on.set(.clipboard, true);
     var f: Fake = undefined;
     f.init();
     defer f.deinit();
@@ -401,23 +401,26 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
     const t = &rig.t;
     try rig.mount(.{ .host = host, .screen = .settings });
     try testing.expect(t.hasText("Record Copied Items"));
-    // Its section is as tall as the height it adds says. The heading's line
-    // is measured in the Mac's system font; elsewhere it is whichever font
-    // is installed, and only the rest of the sum is known.
+    // Its section is as tall as the height it adds says. The heading's and
+    // the notes' lines are measured in the Mac's system font; elsewhere
+    // they are whichever font is installed, and only the rest is known.
     const mac = @import("builtin").os.tag == .macos;
     const head = t.findText("Clipboard History").?;
     const next = t.findText(if (mac) "Sync Across Macs" else "Sync Across Computers").?;
-    if (mac) try testing.expectEqual(settings_view.heading_h, head.h);
+    if (mac) {
+        try testing.expectEqual(settings_view.heading_h, head.h);
+        try testing.expectEqual(settings_view.note_h, t.findText(support.sync_status).?.h);
+    }
     try testing.expectEqual(
-        settings_view.clip_height - settings_view.heading_h + head.h,
+        settings_view.height(true) - settings_view.height(false) - settings_view.heading_h + head.h,
         next.y - head.y,
     );
     try t.clickText("Record Copied Items");
     t.settle(1);
-    try testing.expectEqual(false, prefs.clip_on);
+    try testing.expectEqual(false, prefs.on.get(.clipboard));
     try t.clickText("Record Copied Items");
     t.settle(1);
-    try testing.expectEqual(true, prefs.clip_on);
+    try testing.expectEqual(true, prefs.on.get(.clipboard));
     try t.clickText("Clear History");
     t.settle(1);
     try testing.expectEqual(@as(u8, 1), prefs.clip_cleared);
@@ -428,9 +431,11 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
     t.settle(1);
     try testing.expectEqual(@as(u8, 2), prefs.clip_cleared);
     try testing.expect(t.hasText("Could Not Clear History"));
-    // Everything fits in the window.
+    // Everything fits in the window, the footer's keys too.
     const quit = t.findText("Quit Nanolight").?;
     try testing.expect(quit.y + quit.h <= view.height(s));
+    const close = t.findText("Close").?;
+    try testing.expect(close.y + close.h <= view.height(s));
     try testing.expect(view.height(s) <= chrome.max_height);
 }
 
@@ -445,7 +450,9 @@ test "Settings: no clipboard rows where the system has no history, and a shorter
     const t = &rig.t;
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try testing.expect(!t.hasText("Record Copied Items") and !t.hasText("Clear History"));
-    try testing.expect(view.height(s) < settings_view.height);
+    try testing.expect(view.height(s) < settings_view.height(true));
     const quit = t.findText("Quit Nanolight").?;
     try testing.expect(quit.y + quit.h <= view.height(s));
+    const close = t.findText("Close").?;
+    try testing.expect(close.y + close.h <= view.height(s));
 }
