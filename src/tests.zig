@@ -45,6 +45,7 @@ test {
     _ = @import("keys.zig");
     _ = @import("shortcut.zig");
     _ = @import("shortcut_clash.zig");
+    _ = @import("shortcut_holders.zig");
     _ = @import("settings_panes.zig");
     _ = @import("commands.zig");
     _ = @import("proc.zig");

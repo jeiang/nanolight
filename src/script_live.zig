@@ -34,8 +34,8 @@ pub const Scripts = struct {
     ) Scripts {
         const gpa = core.app.gpa;
         const ix = core.s.index;
-        var list: sc.List = .init(gpa);
-        sc.scan(&list, core.app.io, ix.apps.items, ix.env, cfg.script_commands.dirs);
+        var list: sc.List = .init(gpa, core.app.io, ix.env);
+        sc.scan(&list, ix.apps.items, cfg.script_commands.dirs);
         list.finish();
         return .{
             .core = core,
@@ -99,10 +99,9 @@ pub const Scripts = struct {
 
     /// The apps first: a script whose title an app has is not listed.
     fn fill(sx: *Scripts, ix: *apps.Index, list: *sc.List) void {
-        const io = sx.core.app.io;
-        apps.scan(ix, io, sx.env, sx.cfg.apps.extra_dirs);
+        apps.scan(ix, sx.cfg.apps.extra_dirs);
         ix.finish();
-        sc.scan(list, io, ix.apps.items, ix.env, sx.cfg.script_commands.dirs);
+        sc.scan(list, ix.apps.items, sx.cfg.script_commands.dirs);
         list.finish();
     }
 
@@ -132,8 +131,8 @@ fn refresh(ctx: *anyopaque) void {
     const sx = from(ctx);
     const s = sx.core.s;
     const gpa = sx.core.app.gpa;
-    var fresh: apps.Index = .init(gpa);
-    var list: sc.List = .init(gpa);
+    var fresh: apps.Index = .init(gpa, sx.core.app.io, sx.env);
+    var list: sc.List = .init(gpa, sx.core.app.io, sx.env);
     sx.fill(&fresh, &list);
     if (s.index.same(&fresh) and sx.list.same(&list)) {
         fresh.deinit();

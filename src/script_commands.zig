@@ -16,7 +16,10 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const app_scan = @import("app_scan.zig");
 const model = @import("raycast_model.zig");
+const paths = @import("paths.zig");
+const cachedIcon = @import("apps.zig").cachedIcon;
 const windows = @import("os.zig").windows;
+const test_apps = @import("test_apps.zig");
 
 pub const Mode = enum { silent, compact, full_output, inline_ };
 
@@ -141,7 +144,7 @@ fn parseMode(value: []const u8) Mode {
 
 /// `<data dir>/script-commands`, made if missing. Caller frees it.
 pub fn dir(gpa: std.mem.Allocator, io: std.Io) ![]u8 {
-    return @import("paths.zig").subdir(gpa, io, "script-commands", .default_dir);
+    return paths.subdir(gpa, io, "script-commands", .default_dir);
 }
 
 /// A script command found, or the row that opens their folder: listed among
@@ -171,11 +174,11 @@ pub const List = struct {
     /// Scripts found but left out: memory ran out.
     lost: u32 = 0,
     /// The Io and environment the apps were found with, for the icons.
-    io: ?std.Io = null,
-    env: ?*const std.process.Environ.Map = null,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
 
-    pub fn init(gpa: std.mem.Allocator) List {
-        return .{ .gpa = gpa, .arena = .init(gpa) };
+    pub fn init(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) List {
+        return .{ .gpa = gpa, .arena = .init(gpa), .io = io, .env = env };
     }
 
     pub fn deinit(l: *List) void {
@@ -252,21 +255,14 @@ pub const List = struct {
     /// for its key, which names no file (the Mac's blank document).
     pub fn icon(l: *List, i: u32) ?[]const u8 {
         const s = &l.items.items[i];
-        return @import("apps.zig").cachedIcon(&s.icon, l.gpa, l.io, l.env, s.key);
+        return cachedIcon(&s.icon, l.gpa, l.io, l.env, s.key);
     }
 };
 
 /// Lists the row that opens the folder, then each script command in the
 /// folder and in `extra` (a folder down too), past the titles `apps` has.
-pub fn scan(
-    l: *List,
-    io: std.Io,
-    apps: []const app_scan.App,
-    env: ?*const std.process.Environ.Map,
-    extra: []const []const u8,
-) void {
-    l.io = io;
-    l.env = env;
+pub fn scan(l: *List, apps: []const app_scan.App, extra: []const []const u8) void {
+    const io = l.io;
     l.add(apps, "Script Commands Folder", "Raycast", null);
     if (dir(l.gpa, io)) |root| {
         defer l.gpa.free(root);
@@ -429,7 +425,7 @@ test "a folder named in config.toml is scanned for script commands, a folder dow
     try tmp.dir.writeFile(t.io, .{ .sub_path = "sub/old/far.sh", .data = header ++ "Two Down\n" });
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const path = try @import("test_tmp.zig").path(&buf, &tmp);
-    var l: List = .init(t.allocator);
+    var l: List = .init(t.allocator, t.io, &test_apps.no_env);
     defer l.deinit();
     scanDir(&l, t.io, &.{}, path);
     try t.expectEqual(@as(usize, 2), l.items.items.len);
@@ -444,7 +440,7 @@ test "a folder named in config.toml is scanned for script commands, a folder dow
 test "a script whose title an app or another script has is not listed again" {
     const t = std.testing;
     const apps = [_]app_scan.App{.{ .name = "Safari", .path = "/A/Safari.app", .folder = "A" }};
-    var l: List = .init(t.allocator);
+    var l: List = .init(t.allocator, t.io, &test_apps.no_env);
     defer l.deinit();
     l.add(&apps, "safari", "Mine", "/s/safari.sh");
     l.add(&apps, "Script Commands Folder", "Raycast", null);

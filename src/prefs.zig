@@ -4,7 +4,6 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const Quicklink = @import("web.zig").Quicklink;
-const Theme = @import("palette.zig").Theme;
 const keys = @import("keys.zig");
 const Choice = keys.Choice;
 const log = @import("log.zig");
@@ -26,7 +25,7 @@ pub const Key = enum {
     onboarded,
     /// The key that opens the panel: keys.Choice's name.
     hotkey,
-    /// The panel's tint: a `Theme`'s name.
+    /// The panel's tint: a palette `Theme`'s name.
     theme,
     /// The quicklinks in use, as JSON: the config's, or what sync last brought.
     quicklinks,
@@ -194,17 +193,6 @@ pub fn remove(kv: Store, comptime k: Key) void {
     kv.remove(k.name());
 }
 
-/// The theme kept on this machine; `.system` when none is.
-pub fn theme(kv: Store, gpa: std.mem.Allocator) Theme {
-    const v = text(kv, gpa, .theme) orelse return .system;
-    defer gpa.free(v);
-    return std.meta.stringToEnum(Theme, v) orelse .system;
-}
-
-pub fn keepTheme(kv: Store, t: Theme) void {
-    keepText(kv, .theme, @tagName(t));
-}
-
 /// The key that opens the panel; ⌘Space (Alt Space on a PC) when none is
 /// kept, or one this OS can't take.
 pub fn hotkey(kv: Store, gpa: std.mem.Allocator) Choice {
@@ -299,17 +287,6 @@ test "a number is kept as decimal text" {
     try testing.expectEqual(@as(i64, 1500), int(kv, testing.allocator, .sync_at));
     try kv.set(Key.sync_at.name(), "soon");
     try testing.expectEqual(@as(i64, 0), int(kv, testing.allocator, .sync_at));
-}
-
-test "the theme is kept by name" {
-    var m: nanoui.kv.Memory = .{ .gpa = testing.allocator };
-    defer m.deinit();
-    const kv = m.store();
-    try testing.expectEqual(Theme.system, theme(kv, testing.allocator));
-    keepTheme(kv, .forest);
-    try testing.expectEqual(Theme.forest, theme(kv, testing.allocator));
-    try kv.set(Key.theme.name(), "plaid");
-    try testing.expectEqual(Theme.system, theme(kv, testing.allocator));
 }
 
 test "the key is kept by name" {

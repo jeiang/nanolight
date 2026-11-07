@@ -58,7 +58,7 @@ pub const Rig = struct {
 
     /// An empty index and a panel over it; nothing drawn until `mount`.
     pub fn init(r: *Rig, gpa: std.mem.Allocator) void {
-        r.ix = .init(gpa);
+        r.ix = .init(gpa, std.testing.io, &test_apps.no_env);
         r.probe = .{};
         r.kv = .{ .gpa = gpa };
         r.money = .{

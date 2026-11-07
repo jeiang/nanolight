@@ -279,7 +279,7 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/prefs.zig`, `src/paths.zig` | The app's own settings in the kv store (every key, its type and its default); paths as typed and shown, and where Nanolight keeps its files |
 | `src/settings_view.zig`, `src/settings_host.zig`, `src/settings_panes.zig` | Settings in the panel, and what it asks of the app; System Settings' panes, found by name (the Mac) |
 | `src/keys.zig`, `src/shortcut.zig` | The key that opens the panel as a value (the four offered, kept names, Carbon and AppKit codes), and how it reads |
-| `src/onboard.zig`, `src/shortcut_clash.zig`, `src/recorder.zig` | The welcome, which key is free, recording one's own |
+| `src/onboard.zig`, `src/shortcut_clash.zig`, `src/shortcut_holders.zig`, `src/recorder.zig` | The welcome, which key is free (the rules; who holds which keys on this machine), recording one's own |
 | `src/tests*.zig`, `src/test_support.zig`, `src/test_tmp.zig` | The tests: the parts, and the panel driven through a Tester (Clipboard History, script screens, file search, prefs); what they share, and a test's temporary folder as a path |
 | `flake.nix`, `nix/` | The packages, the NixOS, nix-darwin and home-manager modules, the server module, and the flake's checks |
 

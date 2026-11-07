@@ -2,6 +2,7 @@
 //! theme other than `system` tints them with its hue, light or dark still
 //! as the system is (nanoui's own controls follow the system too). And the
 //! roles text plays on every screen, each one style.
+const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 
@@ -54,7 +55,7 @@ pub const Palette = struct {
     }
 };
 
-const pc = @import("builtin").os.tag != .macos;
+const pc = !@import("os.zig").mac;
 
 /// The panel's tint, chosen in Settings (`nanolight.theme`).
 pub const Theme = enum {
@@ -97,6 +98,12 @@ pub const Theme = enum {
         const n: i8 = all.len;
         const i: i8 = @intCast(@backingInt(t));
         return all[@intCast(@mod(i + dir, n))];
+    }
+
+    /// The theme kept by `name` (`nanolight.theme`); `system` for none, or
+    /// one this build doesn't know.
+    pub fn parse(name: ?[]const u8) Theme {
+        return std.meta.stringToEnum(Theme, name orelse return .system) orelse .system;
     }
 };
 
@@ -150,9 +157,15 @@ fn grey(dark: bool) Palette {
 }
 
 test "a theme tints the greys and steps round" {
-    const t = @import("std").testing;
-    try t.expect(!@import("std").meta.eql(grey(true).sel, palette(true, .ocean).sel));
+    const t = std.testing;
+    try t.expect(!std.meta.eql(grey(true).sel, palette(true, .ocean).sel));
     try t.expectEqual(Theme.violet, Theme.system.step(-1));
     try t.expectEqual(Theme.system, Theme.violet.step(1));
     try t.expectEqual(Theme.ocean, Theme.system.step(1));
+}
+
+test "a theme is kept by name" {
+    try std.testing.expectEqual(Theme.system, Theme.parse(null));
+    try std.testing.expectEqual(Theme.forest, Theme.parse(@tagName(Theme.forest)));
+    try std.testing.expectEqual(Theme.system, Theme.parse("plaid"));
 }

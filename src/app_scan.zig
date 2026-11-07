@@ -30,7 +30,7 @@ pub fn conforms(comptime Backend: type) void {
     _ = @as(*const fn (Sink, std.Io, []const u8, u8) void, &Backend.scanDir);
     _ = @as(*const fn (std.Io, []const u8) bool, &Backend.launch);
     _ = @as(
-        *const fn (std.mem.Allocator, std.Io, ?*const Env, []const u8) ?[]u8,
+        *const fn (std.mem.Allocator, std.Io, *const Env, []const u8) ?[]u8,
         &Backend.icon,
     );
 }

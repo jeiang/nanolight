@@ -42,7 +42,7 @@ fn handle(_: ?*anyopaque, _: ?*anyopaque, _: ?*anyopaque) callconv(.c) i32 {
 
 /// Calls `on` on the main thread each time `choice` is pressed. One hot
 /// key per app: registering again replaces it. Carbon grants it even when
-/// another app holds the same keys (`shortcut_clash.zig` looks for those).
+/// another app holds the same keys (`shortcut_holders.zig` looks for those).
 pub fn register(choice: keys.Choice, on: keys.Pressed) !void {
     pressed = on;
     if (!installed) {
@@ -78,7 +78,7 @@ pub fn unregister() void {
 }
 
 /// None: Carbon grants a key another app holds (`register`), so the
-/// system's shortcut table says instead (shortcut_clash.zig).
+/// system's shortcut table says instead (shortcut_holders.zig).
 pub fn taken(_: keys.Choice) bool {
     return false;
 }

@@ -26,11 +26,9 @@ pub const starters = backend.starters;
 
 /// Finds this machine's apps, and those in the folders config.toml names,
 /// found as this OS finds its own. `Index.finish` comes after the last scan.
-pub fn scan(ix: *Index, io: std.Io, env: *const Env, extra_dirs: []const []const u8) void {
-    ix.io = io;
-    ix.env = env;
-    backend.scan(ix.sink(), io, env);
-    for (extra_dirs) |d| backend.scanDir(ix.sink(), io, d, 1);
+pub fn scan(ix: *Index, extra_dirs: []const []const u8) void {
+    backend.scan(ix.sink(), ix.io, ix.env);
+    for (extra_dirs) |d| backend.scanDir(ix.sink(), ix.io, d, 1);
 }
 
 /// Opens an app `scan` found (or a file, a folder).
@@ -39,12 +37,12 @@ pub fn launch(io: std.Io, path: []const u8) bool {
 }
 
 /// The icon kept in `slot`, asked of the system for `path` (as PNG, `gpa`
-/// owning it) the first time; none asked without an `io`.
+/// owning it) the first time.
 pub fn cachedIcon(
     slot: *app_scan.Icon,
     gpa: std.mem.Allocator,
-    io: ?std.Io,
-    env: ?*const Env,
+    io: std.Io,
+    env: *const Env,
     path: []const u8,
 ) ?[]const u8 {
     switch (slot.*) {
@@ -52,7 +50,7 @@ pub fn cachedIcon(
         .none => return null,
         .unloaded => {},
     }
-    const png = backend.icon(gpa, io orelse return null, env, path);
+    const png = backend.icon(gpa, io, env, path);
     slot.* = if (png) |p| .{ .png = p } else .none;
     return png;
 }
@@ -63,12 +61,12 @@ pub const Index = struct {
     apps: std.ArrayList(App) = .empty,
     /// Apps a scan found but memory left out (`finish` says so).
     lost: u32 = 0,
-    /// The Io and environment the apps were found with, for their icons.
-    io: ?std.Io = null,
-    env: ?*const Env = null,
+    /// The Io and environment the apps are found with, and their icons.
+    io: std.Io,
+    env: *const Env,
 
-    pub fn init(gpa: std.mem.Allocator) Index {
-        return .{ .gpa = gpa, .arena = .init(gpa) };
+    pub fn init(gpa: std.mem.Allocator, io: std.Io, env: *const Env) Index {
+        return .{ .gpa = gpa, .arena = .init(gpa), .io = io, .env = env };
     }
 
     pub fn deinit(ix: *Index) void {
@@ -148,7 +146,7 @@ const test_apps = @import("test_apps.zig");
 
 test "names are kept once and sorted" {
     const t = std.testing;
-    var ix: Index = .init(t.allocator);
+    var ix: Index = .init(t.allocator, t.io, &test_apps.no_env);
     defer ix.deinit();
     try test_apps.add(ix.sink(), "Safari", "/Applications/Safari.app");
     try test_apps.add(ix.sink(), "notes", "/System/Applications/Notes.app");
@@ -163,7 +161,7 @@ test "names are kept once and sorted" {
 
 test "an icon stays with its app through a sort" {
     const t = std.testing;
-    var ix: Index = .init(t.allocator);
+    var ix: Index = .init(t.allocator, t.io, &test_apps.no_env);
     defer ix.deinit();
     try test_apps.add(ix.sink(), "Mail", "/Applications/Mail.app");
     try test_apps.add(ix.sink(), "Zed", "/Applications/Zed.app");
@@ -190,20 +188,20 @@ test "a second look tells an app installed since from no change (#15)" {
     var env: Env = .init(t.allocator);
     defer env.deinit();
     try env.put("HOME", home);
-    var ix: Index = .init(t.allocator);
+    var ix: Index = .init(t.allocator, t.io, &env);
     defer ix.deinit();
-    scan(&ix, t.io, &env, &.{});
+    scan(&ix, &.{});
     ix.finish();
-    var again: Index = .init(t.allocator);
+    var again: Index = .init(t.allocator, t.io, &env);
     defer again.deinit();
-    scan(&again, t.io, &env, &.{});
+    scan(&again, &.{});
     again.finish();
     try t.expect(ix.same(&again));
     // DOSBox-X, installed while Nanolight ran.
     try tmp.dir.createDirPath(t.io, "Applications/DOSBox-X.app");
-    var later: Index = .init(t.allocator);
+    var later: Index = .init(t.allocator, t.io, &env);
     defer later.deinit();
-    scan(&later, t.io, &env, &.{});
+    scan(&later, &.{});
     later.finish();
     try t.expect(!ix.same(&later));
     try t.expect(later.find("DOSBox-X") != null);
@@ -211,7 +209,7 @@ test "a second look tells an app installed since from no change (#15)" {
 
 test "pinyin keys find CJK display names" {
     const t = std.testing;
-    var ix = Index.init(t.allocator);
+    var ix = Index.init(t.allocator, t.io, &test_apps.no_env);
     defer ix.deinit();
     try test_apps.add(ix.sink(), "WeChat", "/Applications/WeChat.app");
     const a = ix.arena.allocator();

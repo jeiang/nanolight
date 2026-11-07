@@ -27,6 +27,7 @@ const account = @import("account.zig");
 const clock = @import("clock.zig");
 const config = @import("config.zig");
 const prefs = @import("prefs.zig");
+const Theme = @import("palette.zig").Theme;
 const App = @import("app.zig").App;
 const suggest_live = @import("suggest_live.zig");
 const rates = @import("rates.zig");
@@ -61,9 +62,9 @@ pub fn main(init: std.process.Init) !void {
     const cfg = loaded.config();
     config.apply(kv, init.gpa, loaded, clock.now());
     // The apps, once: the config names folders to look in besides.
-    var index: Index = .init(init.gpa);
+    var index: Index = .init(init.gpa, init.io, init.environ_map);
     defer index.deinit();
-    apps.scan(&index, init.io, init.environ_map, cfg.apps.extra_dirs);
+    apps.scan(&index, cfg.apps.extra_dirs);
     index.finish();
     // The key is the config's or the Nix module's: the welcome does not ask.
     // `config.parse` lets through only a hotkey this system can use.
@@ -199,7 +200,9 @@ fn ready(core: *App, bind: *settings_bind.Bind, gpa: std.mem.Allocator) void {
     const s = core.s;
     s.tally.adopt(gpa, s.launchable());
     bind.load();
-    s.theme = prefs.theme(core.kv, gpa);
+    const name = prefs.text(core.kv, gpa, .theme);
+    defer if (name) |n| gpa.free(n);
+    s.theme = Theme.parse(name);
 }
 
 /// The panel as a hotkey shows it, then its window's: hidden until its key

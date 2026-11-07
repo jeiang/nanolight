@@ -10,6 +10,7 @@ const onboard = @import("onboard.zig");
 const keys = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
 const shortcut_clash = @import("shortcut_clash.zig");
+const shortcut_holders = @import("shortcut_holders.zig");
 const settings_panes = @import("settings_panes.zig");
 const hotkey = @import("hotkey.zig");
 const shell = @import("shell.zig");
@@ -123,7 +124,7 @@ pub const App = struct {
     pub fn welcomeHooks(a: *App) onboard.Hooks {
         return .{
             .ctx = a,
-            .look = shortcut_clash.look,
+            .look = shortcut_holders.look,
             .apply = apply,
             .fix = fix,
             .login = shell.Login.enabled,
@@ -296,7 +297,7 @@ pub const App = struct {
         const a = from(ctx);
         if (clash.system != null) {
             _ = nanoui.shell.openUrl(keyboard_pane);
-        } else for (clash.launchers.slice()) |name| shortcut_clash.quit(name);
+        } else for (clash.launchers.slice()) |name| shortcut_holders.quit(name);
         after.oneShot(launcher_quits_ms, a, lookAgain);
     }
 

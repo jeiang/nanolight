@@ -19,14 +19,13 @@ pub const starters: []const []const u8 = &.{
     "Text Editor",
 };
 
-/// The data directories, most personal first; with no environment (an
-/// index not scanned), the system's.
-fn dataDirs(env: ?*const Env, buf: *[16][]const u8, home_buf: []u8) [][]const u8 {
+/// The data directories, most personal first.
+fn dataDirs(env: *const Env, buf: *[16][]const u8, home_buf: []u8) [][]const u8 {
     var n: usize = 0;
-    if (variable(env, "XDG_DATA_HOME")) |d| {
+    if (env.get("XDG_DATA_HOME")) |d| {
         buf[n] = d;
         n += 1;
-    } else if (variable(env, "HOME")) |h| {
+    } else if (env.get("HOME")) |h| {
         // A home past 512 bytes has no data directory of its own.
         if (std.fmt.bufPrint(home_buf, "{s}/.local/share", .{h})) |p| {
             buf[n] = p;
@@ -35,7 +34,7 @@ fn dataDirs(env: ?*const Env, buf: *[16][]const u8, home_buf: []u8) [][]const u8
     }
     var it = std.mem.tokenizeScalar(
         u8,
-        variable(env, "XDG_DATA_DIRS") orelse "/usr/local/share:/usr/share",
+        env.get("XDG_DATA_DIRS") orelse "/usr/local/share:/usr/share",
         ':',
     );
     while (it.next()) |d| if (n < buf.len - 2) {
@@ -45,11 +44,6 @@ fn dataDirs(env: ?*const Env, buf: *[16][]const u8, home_buf: []u8) [][]const u8
     buf[n] = "/var/lib/flatpak/exports/share";
     n += 1;
     return buf[0..n];
-}
-
-fn variable(env: ?*const Env, name: []const u8) ?[]const u8 {
-    const e = env orelse return null;
-    return e.get(name);
 }
 
 pub fn scan(sink: Sink, io: std.Io, env: *const Env) void {
@@ -231,7 +225,7 @@ const sizes = [_][]const u8{
 const themes = [_][]const u8{ "hicolor", "Adwaita", "breeze", "Papirus" };
 
 /// The icon file for `name` (a path, or a name in the icon themes).
-fn findIcon(io: std.Io, env: ?*const Env, name: []const u8, out: []u8) ?[]const u8 {
+fn findIcon(io: std.Io, env: *const Env, name: []const u8, out: []u8) ?[]const u8 {
     const cwd = std.Io.Dir.cwd();
     if (std.fs.path.isAbsolute(name)) return if (cwd.access(io, name, .{})) |_| name else |_| null;
     var dirs: [16][]const u8 = undefined;
@@ -294,7 +288,7 @@ fn pixbuf() ?Pb {
 }
 
 /// The icon of the desktop file at `path`, as a 64-pixel PNG.
-pub fn icon(gpa: std.mem.Allocator, io: std.Io, env: ?*const Env, path: []const u8) ?[]u8 {
+pub fn icon(gpa: std.mem.Allocator, io: std.Io, env: *const Env, path: []const u8) ?[]u8 {
     var text: [16 * 1024]u8 = undefined;
     const bytes = std.Io.Dir.cwd().readFile(io, path, &text) catch return null;
     const e = parse(bytes);
