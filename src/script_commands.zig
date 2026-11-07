@@ -142,12 +142,7 @@ fn parseMode(value: []const u8) Mode {
 
 /// `<data dir>/script-commands`, made if missing. Caller frees it.
 pub fn dir(gpa: std.mem.Allocator, io: std.Io) ![]u8 {
-    const data = try @import("prefs.zig").dataDir(gpa);
-    defer gpa.free(data);
-    const d = try std.fs.path.join(gpa, &.{ data, "script-commands" });
-    // best effort: a folder that can't be made just lists no scripts.
-    std.Io.Dir.cwd().createDirPath(io, d) catch {};
-    return d;
+    return @import("paths.zig").subdir(gpa, io, "script-commands", .default_dir);
 }
 
 /// A script command found, or the row that opens their folder: listed among

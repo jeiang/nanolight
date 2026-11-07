@@ -6,6 +6,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const prefs = @import("prefs.zig");
+const paths = @import("paths.zig");
 const rates_table = @import("rates_table.zig");
 const Rates = rates_table.Rates;
 const Status = rates_table.Status;
@@ -139,11 +140,7 @@ pub const Live = struct {
     }
 
     fn path(env: Env) ?[]u8 {
-        const data = prefs.dataDir(env.gpa) catch return null;
-        defer env.gpa.free(data);
-        // best effort: without the folder no rates are read, and the write says why.
-        std.Io.Dir.cwd().createDirPath(env.io, data) catch {};
-        return std.fs.path.join(env.gpa, &.{ data, "rates.json" }) catch null;
+        return paths.dataFile(env.gpa, env.io, "rates.json") catch null;
     }
 
     /// The table and its day as the last fetch left them, if any.

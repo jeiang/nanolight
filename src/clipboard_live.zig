@@ -8,6 +8,7 @@ const types = @import("clipboard_types.zig");
 const Watcher = @import("clipboard_watcher.zig").Watcher;
 const clipboard_view = @import("clipboard_view.zig");
 const prefs = @import("prefs.zig");
+const paths = @import("paths.zig");
 const clock = @import("clock.zig");
 const log = @import("log.zig");
 const App = @import("app.zig").App;
@@ -113,11 +114,8 @@ pub const Clip = struct {
 
 /// The store's directory, made if missing.
 fn openDir(gpa: std.mem.Allocator, io: std.Io) !std.Io.Dir {
-    const data = try prefs.dataDir(gpa);
-    defer gpa.free(data);
-    const path = try std.fs.path.join(gpa, &.{ data, "clipboard" });
+    const path = try paths.subdir(gpa, io, "clipboard", clipboard.private_dir);
     defer gpa.free(path);
-    _ = try std.Io.Dir.cwd().createDirPathStatus(io, path, clipboard.private_dir);
     // best effort: an existing folder keeps its mode; its files are created private anyway.
     std.Io.Dir.cwd().setFilePermissions(io, path, clipboard.private_dir, .{}) catch {};
     return std.Io.Dir.cwd().openDir(io, path, .{});
