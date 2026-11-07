@@ -78,6 +78,7 @@ test {
             _ = @import("apps_mac.zig");
             _ = @import("single_mac.zig");
             _ = @import("clickthrough.zig");
+            _ = @import("ime_level.zig");
             _ = @import("hotkey_mac.zig");
             _ = @import("recorder.zig");
         },

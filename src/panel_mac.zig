@@ -8,6 +8,7 @@ const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const chrome = @import("chrome.zig");
 const after = @import("after.zig");
+const ime_level = @import("ime_level.zig");
 
 /// The system's glass under the panel, which the window's views keep.
 var glass: ?objc.Object = null;
@@ -33,6 +34,8 @@ pub fn setup(w: *nanoui.Window) chrome.Fit {
     // mode gets a hard black outline round its pixels.
     objc.msg(void, w.nswindow, "setHasShadow:", .{objc.NO});
     glass = backdrop(w, 18);
+    // Pinyin's candidates over the panel, not behind it (#39).
+    if (w.surface) |surface| _ = ime_level.answerWindowLevel(surface.nsview);
     return .{ .margin = chrome.shadow_margin, .window_fades = true };
 }
 
