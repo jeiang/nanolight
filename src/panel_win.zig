@@ -20,9 +20,12 @@ pub fn adjust(o: *nanoui.WindowOptions) void {
 }
 
 /// The panel fills the window: no margin, and an entrance of its own.
-pub fn setup(_: *nanoui.Window) chrome.Fit {
+pub fn setup(_: *nanoui.Window, _: f32) chrome.Fit {
     return .{};
 }
+
+/// The panel draws its own corners here: nothing under it to round.
+pub fn corners(_: f32) void {}
 
 /// Whether the panel shows and has the keys.
 pub fn showing(w: *nanoui.Window) bool {
@@ -45,9 +48,14 @@ pub fn place(w: *nanoui.Window) void {
     );
 }
 
-pub fn resize(w: *nanoui.Window, h: f32) void {
+pub fn resize(w: *nanoui.Window, h: f32, _: *anyopaque) void {
     w.setSize(chrome.width, @ceil(h));
 }
 
 /// After `show`: nothing to tell the window manager.
 pub fn shown(_: *nanoui.Window) void {}
+
+/// A PC has no search page (`platform.preview`): nothing to show.
+pub fn showPage(_: *anyopaque, _: *nanoui.Window, _: []const u8, _: f32) void {}
+
+pub fn hidePage(_: *anyopaque, _: *nanoui.Window) void {}

@@ -27,6 +27,8 @@ pub fn prepare() void {
 
 /// The window, from the panel's size.
 pub fn adjust(o: *nanoui.WindowOptions) void {
+    // A theme.json's colors and font, or dark on a dark desktop.
+    o.theme = @import("linux_theme.zig").windowTheme();
     o.decorations = false;
     o.skip_taskbar = true;
     o.always_on_top = true;
@@ -34,7 +36,7 @@ pub fn adjust(o: *nanoui.WindowOptions) void {
 }
 
 /// The panel fills the window: no margin, and an entrance of its own.
-pub fn setup(w: *nanoui.Window) chrome.Fit {
+pub fn setup(w: *nanoui.Window, _: f32) chrome.Fit {
     // A Wayland session: nothing to follow here (the compositor says).
     if (display.session() == .x11) {
         window = w;
@@ -42,6 +44,9 @@ pub fn setup(w: *nanoui.Window) chrome.Fit {
     }
     return .{};
 }
+
+/// The panel draws its own corners here: nothing under it to round.
+pub fn corners(_: f32) void {}
 
 /// Whether the panel shows and has the keys: on X11 by the window
 /// manager's word.
@@ -78,7 +83,7 @@ pub fn place(w: *nanoui.Window) void {
     g.gdk_x11_window_set_user_time(gw, t);
 }
 
-pub fn resize(w: *nanoui.Window, h: f32) void {
+pub fn resize(w: *nanoui.Window, h: f32, _: *anyopaque) void {
     const height = @ceil(h);
     // GTK 3 under Wayland can keep a borderless window at its old size
     // after `gtk_window_resize`, and the bottom of the panel is cut off. A
@@ -89,6 +94,11 @@ pub fn resize(w: *nanoui.Window, h: f32) void {
 
 /// After `show`: on X11 the window manager is given the hot key's time, or
 /// it may refuse the panel the focus (focus stealing prevention).
+/// A PC has no search page (`platform.preview`): nothing to show.
+pub fn showPage(_: *anyopaque, _: *nanoui.Window, _: []const u8, _: f32) void {}
+
+pub fn hidePage(_: *anyopaque, _: *nanoui.Window) void {}
+
 pub fn shown(w: *nanoui.Window) void {
     const t = x11.last_press;
     if (t == 0) return;

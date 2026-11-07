@@ -115,8 +115,8 @@ pub const App = struct {
     /// the panel, its key, click-through, the page's keys.
     pub fn start(a: *App) void {
         const w = a.window.?;
-        a.s.fit = panel.setup(w);
-        panel.resize(w, view.height(a.s));
+        a.s.fit = panel.setup(w, a.s.theme.radius());
+        panel.resize(w, view.height(a.s), &a.preview);
         a.useKey(a.choice);
         a.through = .{ .window = w, .height = a.s.last_h };
         a.preview.watch(.{ .ctx = a, .func = pageKey });
@@ -170,11 +170,12 @@ pub const App = struct {
     /// The window (or the Mac's glass under the panel) to its height.
     pub fn resize(ctx: *anyopaque, h: f32) void {
         const a = from(ctx);
-        a.preview.fit(h);
         // The panel grew or shrank under a still pointer.
         a.through.height = h;
         a.through.update();
-        if (a.window) |w| panel.resize(w, h);
+        // The panel moves the glass and the page with the frame that shows
+        // them (`panel_mac.resize`); a PC's does nothing with the page.
+        if (a.window) |w| panel.resize(w, h, &a.preview);
     }
 
     pub fn toggle(ctx: *anyopaque) void {
@@ -207,7 +208,9 @@ pub const App = struct {
     pub fn showPage(ctx: *anyopaque, url: ?[]const u8) void {
         const a = from(ctx);
         const w = a.window orelse return;
-        if (url) |u| a.preview.show(w, u, a.s.last_h) else a.preview.hide();
+        if (url) |u| {
+            panel.showPage(&a.preview, w, u, a.s.last_h);
+        } else panel.hidePage(&a.preview, w);
     }
 
     /// Escape (the page gone, the panel with it) or ⌘↩ while the page has the keys.

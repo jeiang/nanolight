@@ -50,6 +50,8 @@ pub fn main(init: std.process.Init) !void {
     defer arena.deinit();
     if (try answeredArgs(init, try init.minimal.args.toSlice(arena.allocator()))) return;
     panel.prepare();
+    // Linux: the desktop's theme.json, read once (nothing on the Mac).
+    @import("linux_theme.zig").load(init.io, init.environ_map);
     const app = try nanoui.App.create(
         init,
         .{ .name = app_name, .quit_on_last_window_closed = false },

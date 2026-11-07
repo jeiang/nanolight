@@ -22,7 +22,7 @@ pub const Menu = struct {
 
     /// The icon, unless Settings took it away.
     pub fn start(m: *Menu) !void {
-        m.tray = try shell.Tray.make(m.core.app, "magnifyingglass", app_name);
+        m.tray = try shell.Tray.make(m.core.app, m.core.s.theme.glyph(), app_name);
         if (!m.wanted) m.showIcon(false);
     }
 
