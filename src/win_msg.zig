@@ -2,7 +2,8 @@
 //! hot key (WM_HOTKEY, hotkey_win.zig) and a second copy sends its command
 //! (`nanolight --toggle`, a newer copy asking this one to quit: single.zig).
 //! nanoui's message loop dispatches to it like to any window of the thread.
-//! Made once, by `single_win.claim`, after it looked for another copy's.
+//! Made on first use (`ensure`), by `single_win.claim` or
+//! `hotkey_win.register`, whichever runs first.
 const std = @import("std");
 const single = @import("single.zig");
 
@@ -54,29 +55,31 @@ const class_name = std.unicode.utf8ToUtf16LeStringLiteral("NanolightMessages");
 /// HWND_MESSAGE: the parent of message-only windows.
 const message_parent: HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, -3))));
 
+/// What the window's messages call, each set by its owner.
 pub const Handlers = struct {
-    hotkey: *const fn () void,
-    command: *const fn (cmd: single.Command) void,
+    hotkey: ?*const fn () void = null,
+    command: ?*const fn (cmd: single.Command) void = null,
 };
 
 var hwnd: ?HWND = null;
-/// Set with `hwnd` (a window procedure has no context of its own).
-var handlers: Handlers = undefined;
+/// A window procedure has no context of its own.
+var handlers: Handlers = .{};
 
 fn proc(h: HWND, msg: u32, wp: usize, lp: isize) callconv(.winapi) isize {
     if (msg == wm_hotkey) {
-        handlers.hotkey();
+        if (handlers.hotkey) |f| f();
     } else if (single.Command.fromMessage(msg)) |cmd| {
-        handlers.command(cmd);
+        if (handlers.command) |f| f(cmd);
     } else return DefWindowProcW(h, msg, wp, lp);
     return 0;
 }
 
-/// Makes ours, once, after `other` (else ours would be found as the other
-/// copy's).
-pub fn create(on: Handlers) ?HWND {
-    std.debug.assert(hwnd == null);
-    handlers = on;
+/// Ours, made on the first call; `on`'s handlers are kept (those it leaves
+/// null stay as they were). Null when it can't be made.
+pub fn ensure(on: Handlers) ?HWND {
+    if (on.hotkey) |f| handlers.hotkey = f;
+    if (on.command) |f| handlers.command = f;
+    if (hwnd) |h| return h;
     const inst = GetModuleHandleW(null);
     _ = RegisterClassExW(
         &.{ .lpfnWndProc = &proc, .hInstance = inst, .lpszClassName = class_name },
@@ -85,14 +88,16 @@ pub fn create(on: Handlers) ?HWND {
     return hwnd;
 }
 
-/// Ours, once `create` made it.
+/// Ours, once `ensure` made it.
 pub fn window() ?HWND {
     return hwnd;
 }
 
-/// Another running copy's window.
+/// Another running copy's window: ours, whenever it was made, is skipped.
 pub fn other() ?HWND {
-    return FindWindowExW(message_parent, null, class_name, null);
+    const first = FindWindowExW(message_parent, null, class_name, null);
+    if (first == null or first != hwnd) return first;
+    return FindWindowExW(message_parent, hwnd, class_name, null);
 }
 
 pub fn post(to: HWND, cmd: single.Command) bool {

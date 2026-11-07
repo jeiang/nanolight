@@ -1,5 +1,5 @@
-//! Clipboard history on X11, over an Xlib connection of its own (libX11,
-//! libXfixes and libXtst, opened with dlopen) whose socket nanoui's loop
+//! Clipboard history on X11, over an Xlib connection of its own (x11.zig,
+//! with libXfixes and libXtst, opened with dlopen) whose socket nanoui's loop
 //! watches. XFixes says when the CLIPBOARD's owner changes; the copy is read
 //! from the owner into a hidden window of ours (TARGETS first, then the types
 //! clipboard_offer.zig's plan picks; INCR transfers too). A paste makes that
@@ -10,69 +10,16 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
 const offer = @import("clipboard_offer.zig");
+const dl = @import("dl.zig");
+const x11 = @import("x11.zig");
 
-const Display = opaque {};
-const Window = c_ulong;
-const Atom = c_ulong;
-const ErrorHandler = *const fn (*Display, *anyopaque) callconv(.c) c_int;
-
-const Xlib = struct {
-    XOpenDisplay: *const fn (?[*:0]const u8) callconv(.c) ?*Display,
-    XCloseDisplay: *const fn (*Display) callconv(.c) c_int,
-    XDefaultRootWindow: *const fn (*Display) callconv(.c) Window,
-    XConnectionNumber: *const fn (*Display) callconv(.c) c_int,
-    XPending: *const fn (*Display) callconv(.c) c_int,
-    XNextEvent: *const fn (*Display, *Event) callconv(.c) c_int,
-    XFlush: *const fn (*Display) callconv(.c) c_int,
-    XSync: *const fn (*Display, c_int) callconv(.c) c_int,
-    XSetErrorHandler: *const fn (?ErrorHandler) callconv(.c) ?ErrorHandler,
-    XCreateSimpleWindow: *const fn (
-        *Display,
-        Window,
-        c_int,
-        c_int,
-        c_uint,
-        c_uint,
-        c_uint,
-        c_ulong,
-        c_ulong,
-    ) callconv(.c) Window,
-    XSelectInput: *const fn (*Display, Window, c_long) callconv(.c) c_int,
-    XInternAtom: *const fn (*Display, [*:0]const u8, c_int) callconv(.c) Atom,
-    XGetAtomName: *const fn (*Display, Atom) callconv(.c) ?[*:0]u8,
-    XConvertSelection: *const fn (*Display, Atom, Atom, Atom, Window, c_ulong) callconv(.c) c_int,
-    XSetSelectionOwner: *const fn (*Display, Atom, Window, c_ulong) callconv(.c) c_int,
-    XGetSelectionOwner: *const fn (*Display, Atom) callconv(.c) Window,
-    XGetWindowProperty: *const fn (
-        *Display,
-        Window,
-        Atom,
-        c_long,
-        c_long,
-        c_int,
-        Atom,
-        *Atom,
-        *c_int,
-        *c_ulong,
-        *c_ulong,
-        *?[*]u8,
-    ) callconv(.c) c_int,
-    XChangeProperty: *const fn (
-        *Display,
-        Window,
-        Atom,
-        Atom,
-        c_int,
-        c_int,
-        [*]const u8,
-        c_int,
-    ) callconv(.c) c_int,
-    XDeleteProperty: *const fn (*Display, Window, Atom) callconv(.c) c_int,
-    XSendEvent: *const fn (*Display, Window, c_int, c_long, *Event) callconv(.c) c_int,
-    XKeysymToKeycode: *const fn (*Display, c_ulong) callconv(.c) u8,
-    XMaxRequestSize: *const fn (*Display) callconv(.c) c_long,
-    XFree: *const fn (?*anyopaque) callconv(.c) c_int,
-};
+const Display = x11.Display;
+const Window = x11.Window;
+const Atom = x11.Atom;
+const Event = x11.Event;
+const ErrorHandler = x11.ErrorHandler;
+const property_notify = x11.property_notify;
+const property_change_mask = x11.property_change_mask;
 
 const Xfixes = struct {
     XFixesQueryExtension: *const fn (*Display, *c_int, *c_int) callconv(.c) c_int,
@@ -84,8 +31,6 @@ const Xtst = struct {
     XTestFakeKeyEvent: *const fn (*Display, c_uint, c_int, c_ulong) callconv(.c) c_int,
 };
 
-/// XEvent: a union 24 longs long; `type` first.
-const Event = extern union { type: c_int, pad: [24]c_long };
 const SelectionEvent = extern struct {
     type: c_int,
     serial: c_ulong,
@@ -145,11 +90,9 @@ fn as(comptime T: type, ev: *const Event) *const T {
     return @ptrCast(ev);
 }
 
-const property_notify = 28;
 const selection_clear = 29;
 const selection_request = 30;
 const selection_notify = 31;
-const property_change_mask: c_long = 1 << 22;
 const property_new_value = 0;
 const property_delete = 1;
 const prop_mode_replace = 0;
@@ -171,7 +114,7 @@ fn onError(_: *Display, _: *anyopaque) callconv(.c) c_int {
 
 pub const X11 = struct {
     sink: ?clipboard.Sink = null,
-    xl: Xlib = undefined,
+    xl: x11.Lib = undefined,
     fx: Xfixes = undefined,
     xtst: ?Xtst = null,
     d: ?*Display = null,
@@ -218,8 +161,9 @@ pub const X11 = struct {
     const gpa = std.heap.c_allocator;
 
     pub fn open(x: *X11) error{ NoLibrary, NoConnection, NoXFixes }!void {
-        x.xl = offer.dlLoad(Xlib, "libX11.so.6") orelse return error.NoLibrary;
-        x.fx = offer.dlLoad(Xfixes, "libXfixes.so.3") orelse return error.NoLibrary;
+        x.xl = x11.load() orelse return error.NoLibrary;
+        const fixes = [_]dl.Lib{.{ .name = "libXfixes.so.3" }};
+        x.fx = dl.table(Xfixes, &fixes, "no X11 clipboard history") orelse return error.NoLibrary;
         const xl = x.xl;
         const d = xl.XOpenDisplay(null) orelse return error.NoConnection;
         x.d = d;
@@ -227,7 +171,7 @@ pub const X11 = struct {
         var err: c_int = 0;
         if (x.fx.XFixesQueryExtension(d, &base, &err) == 0) return error.NoXFixes;
         x.fixes_event = base;
-        if (offer.dlLoad(Xtst, "libXtst.so.6")) |t| {
+        if (dl.table(Xtst, &.{.{ .name = "libXtst.so.6" }}, "a paste only copies")) |t| {
             var a: c_int = 0;
             var b: c_int = 0;
             var c: c_int = 0;

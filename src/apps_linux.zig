@@ -7,6 +7,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const app_scan = @import("app_scan.zig");
+const dl = @import("dl.zig");
 const Sink = app_scan.Sink;
 const Env = std.process.Environ.Map;
 
@@ -284,18 +285,12 @@ var pb_tried = false;
 fn pixbuf() ?Pb {
     if (pb_tried) return pb;
     pb_tried = true;
-    const lib = std.c.dlopen("libgdk_pixbuf-2.0.so.0", .{ .NOW = true }) orelse return null;
-    const gobj = std.c.dlopen("libgobject-2.0.so.0", .{ .NOW = true }) orelse return null;
-    const glib = std.c.dlopen("libglib-2.0.so.0", .{ .NOW = true }) orelse return null;
-    var v: Pb = undefined;
-    inline for (@typeInfo(Pb).@"struct".field_names) |name| {
-        const from = if (std.mem.startsWith(u8, name, "gdk"))
-            lib
-        else if (std.mem.eql(u8, name, "g_free")) glib else gobj;
-        @field(v, name) = @ptrCast(@alignCast(std.c.dlsym(from, name) orelse return null));
-    }
-    pb = v;
-    return v;
+    pb = dl.table(Pb, &.{
+        .{ .name = "libgdk_pixbuf-2.0.so.0" },
+        .{ .name = "libgobject-2.0.so.0" },
+        .{ .name = "libglib-2.0.so.0" },
+    }, "only PNG app icons show");
+    return pb;
 }
 
 /// The icon of the desktop file at `path`, as a 64-pixel PNG.

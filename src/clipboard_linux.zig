@@ -1,10 +1,11 @@
-//! Clipboard history on Linux. Wayland first: a compositor that offers
-//! data-control (clipboard_wl.zig); else the X11 selections
-//! (clipboard_x11.zig); else history is unavailable and says why. This file
-//! is the choice between them; what both share is clipboard_offer.zig.
+//! Clipboard history on Linux, by display.zig's session. Wayland: a
+//! compositor that offers data-control (clipboard_wl.zig); else, and in an
+//! X11 session, the X11 selections (clipboard_x11.zig) when DISPLAY is set;
+//! else history is unavailable and says why. This file is the choice between
+//! them; what both share is clipboard_offer.zig.
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
-const offer = @import("clipboard_offer.zig");
+const display = @import("display.zig");
 const x11 = @import("clipboard_x11.zig");
 const wl = @import("clipboard_wl.zig");
 
@@ -25,10 +26,11 @@ pub const Watcher = struct {
         return w.why;
     }
 
-    /// Opens the Wayland connection if there is data-control, else X11.
+    /// In a Wayland session, the Wayland connection if there is
+    /// data-control; else X11 (XWayland in a Wayland session).
     fn pick(w: *Watcher) clipboard.StartError!void {
         w.why = "Clipboard history needs a display: neither WAYLAND_DISPLAY nor DISPLAY is set.";
-        if (offer.env("WAYLAND_DISPLAY") != null) {
+        if (display.session() == .wayland) {
             w.backend = .{ .wl = .{} };
             if (w.backend.wl.open()) |_| return w.opened("Wayland") else |e| {
                 w.backend.wl.close();
@@ -42,7 +44,7 @@ pub const Watcher = struct {
                 };
             }
         }
-        if (offer.env("DISPLAY") != null) {
+        if (display.env("DISPLAY") != null) {
             w.backend = .{ .x11 = .{} };
             if (w.backend.x11.open()) |_| return w.opened("X11") else |e| {
                 w.backend.x11.close();

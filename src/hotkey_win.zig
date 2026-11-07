@@ -1,7 +1,7 @@
 //! Windows: the panel's key, from any app (RegisterHotKey). The system
-//! sends WM_HOTKEY to Nanolight's message window (win_msg.zig, made by
-//! `single_win.claim`), which calls `pressed`; pressing it also lets
-//! Nanolight bring its window to the front.
+//! sends WM_HOTKEY to Nanolight's message window (win_msg.zig, made here if
+//! `single_win.claim` hasn't yet), which calls `pressed`; pressing it also
+//! lets Nanolight bring its window to the front.
 const std = @import("std");
 const keys = @import("keys.zig");
 const Choice = keys.Choice;
@@ -27,7 +27,7 @@ var registered = false;
 var current: u32 = 0;
 
 /// The message window's WM_HOTKEY.
-pub fn pressed() void {
+fn pressed() void {
     if (on_press) |p| p.func(p.ctx);
 }
 
@@ -44,7 +44,7 @@ fn modifiers(choice: Choice) u32 {
 
 pub fn register(choice: Choice, on: keys.Pressed) !void {
     on_press = on;
-    const h = msg.window() orelse return error.NoWindow;
+    const h = msg.ensure(.{ .hotkey = pressed }) orelse return error.NoWindow;
     if (registered) _ = UnregisterHotKey(h, id);
     registered = RegisterHotKey(h, id, modifiers(choice), vk_space) != 0;
     if (!registered) return error.HotKeyTaken;
@@ -55,7 +55,7 @@ pub fn register(choice: Choice, on: keys.Pressed) !void {
 pub fn taken(choice: Choice) bool {
     const m = modifiers(choice);
     if (registered and m == current) return false;
-    const h = msg.window() orelse return false;
+    const h = msg.ensure(.{ .hotkey = pressed }) orelse return false;
     if (RegisterHotKey(h, id + 1, m, vk_space) == 0) return true;
     _ = UnregisterHotKey(h, id + 1);
     return false;
