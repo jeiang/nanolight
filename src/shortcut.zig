@@ -3,7 +3,7 @@
 const std = @import("std");
 const keys = @import("keys.zig");
 const Choice = keys.Choice;
-const mac = @import("os.zig").mac;
+const pc_modifiers = @import("platform.zig").pc_modifiers;
 
 /// "⌥ ⌘ Space", "⌥ X": the modifiers, then the key. On a PC "Ctrl Alt Space".
 pub fn text(c: Choice) Text {
@@ -25,7 +25,7 @@ pub const Text = struct {
 
     pub fn format(t: Text, w: *std.Io.Writer) std.Io.Writer.Error!void {
         const c = t.choice;
-        if (!mac) return w.print("{f} {f}", .{ held(c), key(c) });
+        if (pc_modifiers) return w.print("{f} {f}", .{ held(c), key(c) });
         for (glyphs) |g| if (c.mods & g[0] != 0) try w.print("{s} ", .{g[1]});
         try w.print("{f}", .{key(c)});
     }
@@ -43,7 +43,7 @@ pub const Mods = struct {
     mods: u32,
 
     pub fn format(m: Mods, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        if (!mac) {
+        if (pc_modifiers) {
             const p = (Choice{ .mods = m.mods }).pc();
             var sep: []const u8 = "";
             for ([_]struct {
@@ -87,7 +87,7 @@ pub const Key = struct {
 };
 
 test "a key reads as its modifiers, then the key" {
-    if (!mac) return error.SkipZigTest;
+    if (pc_modifiers) return error.SkipZigTest;
     const t = std.testing;
     var buf: [keys.name_max]u8 = undefined;
     const x = keys.recorded(7, keys.ns_opt, 'x').key;

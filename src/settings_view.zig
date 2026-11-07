@@ -17,7 +17,6 @@ const Choice = key_choice.Choice;
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;
 const Theme = @import("palette.zig").Theme;
-const mac = @import("os.zig").mac;
 const platform = @import("platform.zig");
 
 /// Recording a key of one's own: not, waiting for one, or waiting after
@@ -93,7 +92,7 @@ const groups = [_]Group{
         .parts = switches(.clipboard) ++ [_]Part{.{ .button = .clear_clipboard }},
     },
     .{
-        .heading = if (mac) "Sync Across Macs" else "Sync Across Computers",
+        .heading = platform.sync_heading,
         .parts = &.{.{ .note = .sync }},
     },
     .{ .heading = "Updates", .parts = &.{ .{ .note = .version }, .{ .button = .updates } } },
@@ -156,7 +155,7 @@ fn shownRows(clip: bool) []const Row {
 
 /// The gap between Settings' parts, tighter on the Mac to fit its rows:
 /// with the clipboard's, 8 there was 5 points past the window (DECISION D1).
-const gap: f32 = if (mac) 7 else 10;
+const gap: f32 = if (platform.tight_text) 7 else 10;
 /// A switch's or a button's row.
 const row_h: f32 = 36;
 /// Room over the first part and under the last.

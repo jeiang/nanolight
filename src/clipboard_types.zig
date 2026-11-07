@@ -4,6 +4,10 @@
 //! this file takes none of them.
 const std = @import("std");
 
+/// Time for the window that had the keys to take them back before the
+/// paste's keystroke reaches it.
+pub const paste_delay_ms = 150;
+
 pub const Kind = enum {
     text,
     image,

@@ -12,7 +12,7 @@ const Choice = keys.Choice;
 
 /// XKeyEvent's `time`, after type, serial, send_event, display, window,
 /// root and subwindow.
-const time_offset = 7 * @sizeOf(c_long);
+const time_offset = x11.time_offset;
 
 const shift_mask: c_uint = 1;
 const lock_mask: c_uint = 2;

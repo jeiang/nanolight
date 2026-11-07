@@ -11,7 +11,7 @@ pub const Mac = struct {
     const objc = nanoui.objc;
     extern "c" fn objc_getClass(name: [*:0]const u8) ?objc.Class;
 
-    pub fn enabled(set: ?bool) bool {
+    pub fn enabled(_: std.Io, set: ?bool) bool {
         const cls = objc_getClass("SMAppService") orelse return false;
         const svc = objc.msg(objc.Object, cls, "mainAppService", .{});
         if (set) |on| _ = objc.msg(
@@ -59,7 +59,7 @@ pub const Windows = struct {
         size: u32,
     ) callconv(.winapi) u32;
 
-    pub fn enabled(set: ?bool) bool {
+    pub fn enabled(_: std.Io, set: ?bool) bool {
         if (set) |on| {
             if (on) {
                 // "C:\...\nanolight.exe", quoted for the spaces in paths.
@@ -77,11 +77,7 @@ pub const Windows = struct {
 };
 
 pub const Linux = struct {
-    fn io() std.Io {
-        return std.Io.Threaded.global_single_threaded.io();
-    }
-
-    pub fn enabled(set: ?bool) bool {
+    pub fn enabled(io: std.Io, set: ?bool) bool {
         var buf: [1024]u8 = undefined;
         const path = paths.autostartEntry(&buf) orelse return false;
         const cwd = std.Io.Dir.cwd();
@@ -99,14 +95,14 @@ pub const Linux = struct {
                     .{exe[0..@intCast(n)]},
                 ) catch return false;
                 // best effort: without the folder the write below fails and reports it off.
-                if (std.fs.path.dirname(path)) |dir| cwd.createDirPath(io(), dir) catch {};
-                cwd.writeFile(io(), .{ .sub_path = path, .data = text }) catch return false;
+                if (std.fs.path.dirname(path)) |dir| cwd.createDirPath(io, dir) catch {};
+                cwd.writeFile(io, .{ .sub_path = path, .data = text }) catch return false;
             } else {
                 // best effort: the access below reports the entry if it is still there.
-                cwd.deleteFile(io(), path) catch {};
+                cwd.deleteFile(io, path) catch {};
             }
         }
-        cwd.access(io(), path, .{}) catch return false;
+        cwd.access(io, path, .{}) catch return false;
         return true;
     }
 };

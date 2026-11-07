@@ -1,6 +1,7 @@
 //! This OS's parts, picked once: the Mac's own (panel_mac.zig, preview.zig,
 //! clickthrough.zig, recorder.zig, single_mac.zig), or Windows' and Linux's
-//! (panel_pc.zig, pc_stubs.zig, single_win.zig, single_unix.zig). The app
+//! (panel_win.zig, panel_x11.zig, pc_stubs.zig, single_win.zig,
+//! single_unix.zig). The app
 //! holds them; screens see only platform.zig's flags.
 const builtin = @import("builtin");
 const platform = @import("platform.zig");
@@ -11,12 +12,21 @@ const mac = @import("os.zig").mac;
 
 /// The panel's window: adjust, setup, place, resize, shown, showing,
 /// lostKeys, prepare.
-pub const panel = if (mac) @import("panel_mac.zig") else @import("panel_pc.zig");
+pub const panel = if (mac)
+    @import("panel_mac.zig")
+else if (os == .windows)
+    @import("panel_win.zig")
+else
+    @import("panel_x11.zig");
 pub const Preview = if (platform.preview) @import("preview.zig").Preview else stubs.Preview;
 /// Clicks round the panel reach what is under it: only the Mac's window
 /// is bigger than the panel.
 pub const ClickThrough = if (mac) @import("clickthrough.zig").ClickThrough else stubs.ClickThrough;
 pub const Recorder = if (platform.record) @import("recorder.zig").Recorder else stubs.Recorder;
+/// The menu bar icon and its menu: the Mac's (tray.zig); a PC has none yet
+/// (pc_stubs.zig's `Tray`, whose `make` says so: the two are different
+/// types, so they are not checked against each other).
+pub const Tray = if (platform.tray) @import("tray.zig").Tray else stubs.Tray;
 /// One copy at a time and commands from a second one (single.zig).
 pub const Single = switch (os) {
     .macos => @import("single_mac.zig"),
@@ -37,7 +47,8 @@ comptime {
         conforms(@import("preview.zig").Preview, stubs.Preview);
         conforms(@import("clickthrough.zig").ClickThrough, stubs.ClickThrough);
         conforms(@import("recorder.zig").Recorder, stubs.Recorder);
-        conforms(@import("panel_mac.zig"), @import("panel_pc.zig"));
+        conforms(@import("panel_mac.zig"), @import("panel_win.zig"));
+        conforms(@import("panel_mac.zig"), @import("panel_x11.zig"));
     }
 }
 

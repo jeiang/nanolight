@@ -85,7 +85,7 @@ pub const Bind = struct {
             .suggest => s.suggest_on,
             .files => s.files_on,
             .browser => s.searches_out,
-            .login => shell.Login.enabled(null),
+            .login => shell.Login.enabled(b.core.app.io, null),
             .menu_bar => b.menu.iconShown(),
             .clipboard => b.clip.recording(),
         };
@@ -107,7 +107,7 @@ pub const Bind = struct {
             .suggest => s.setSuggest(on),
             .files => s.setFiles(on),
             .browser => s.searches_out = on,
-            .login => _ = shell.Login.enabled(on),
+            .login => _ = shell.Login.enabled(b.core.app.io, on),
             .menu_bar => b.menu.showIcon(on),
             .clipboard => b.clip.turn(on, kept),
         }

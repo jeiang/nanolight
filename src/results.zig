@@ -270,7 +270,7 @@ fn rankClipboard(r: *Results, in: *const Input) void {
 
 fn rankPanes(r: *Results, in: *const Input) void {
     var ranked: [providers.get(.pane).cap]search.Ranked = undefined;
-    const n = panes.rank(in.words, &r.panes, &ranked);
+    const n = panes.rank(in.words, &r.panes, in.from.apps.io, &ranked);
     for (ranked[0..n]) |x| r.push(.{ .kind = .pane, .item = x.index, .match = x.match });
 }
 

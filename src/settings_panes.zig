@@ -5,7 +5,7 @@
 //! never listed.
 const std = @import("std");
 const search = @import("search.zig");
-const mac = @import("os.zig").mac;
+const platform = @import("platform.zig");
 
 pub const Pane = struct {
     name: []const u8,
@@ -309,14 +309,13 @@ pub const Present = struct {
     looked: bool = false,
     have: [all.len]bool = undefined,
 
-    pub fn has(p: *Present, i: usize) bool {
-        if (!mac) return false;
-        if (!p.looked) p.look();
+    pub fn has(p: *Present, io: std.Io, i: usize) bool {
+        if (!platform.panes) return false;
+        if (!p.looked) p.look(io);
         return p.have[i];
     }
 
-    fn look(p: *Present) void {
-        const io = std.Io.Threaded.global_single_threaded.io();
+    fn look(p: *Present, io: std.Io) void {
         var buf: [256]u8 = undefined;
         // Most panes are system extensions. General ships inside System
         // Settings itself before macOS 27.
@@ -359,20 +358,20 @@ fn strip(query: []const u8) []const u8 {
 
 /// The panes `query` asks for, among those `present`, best first (table
 /// order among equals), into `out`; how many.
-pub fn rank(query: []const u8, present: *Present, out: []search.Ranked) usize {
+pub fn rank(query: []const u8, present: *Present, io: std.Io, out: []search.Ranked) usize {
     const q = strip(query);
     if (q.len < 2) return 0;
     var top: search.Top = .init(out);
     for (all, 0..) |p, i| {
         const m = search.scoreNamed(q, p.name, p.keywords, search.min_loose) orelse continue;
-        if (!present.has(i)) continue;
+        if (!present.has(io, i)) continue;
         top.offer(.{ .index = @intCast(i), .match = m });
     }
     return top.n;
 }
 
 test "panes are found by name and by the words people use (#12)" {
-    if (!mac) return error.SkipZigTest;
+    if (!platform.panes) return error.SkipZigTest;
     const t = std.testing;
     var out: [3]search.Ranked = undefined;
     var here: Present = .{};
@@ -381,25 +380,25 @@ test "panes are found by name and by the words people use (#12)" {
             return all[r.index].name;
         }
     }.of;
-    try t.expect(rank("login items", &here, &out) > 0);
+    try t.expect(rank("login items", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Login Items & Extensions", name(out[0]));
-    try t.expect(rank("login settings", &here, &out) > 0);
+    try t.expect(rank("login settings", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Login Items & Extensions", name(out[0]));
-    try t.expect(rank("wifi", &here, &out) > 0);
+    try t.expect(rank("wifi", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Wi-Fi", name(out[0]));
-    try t.expect(rank("dark mode", &here, &out) > 0);
+    try t.expect(rank("dark mode", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Appearance", name(out[0]));
-    try t.expect(rank("bluetooth", &here, &out) > 0);
+    try t.expect(rank("bluetooth", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Bluetooth", name(out[0]));
     // Its name's letters light up; a keyword's light nothing.
-    try t.expect(rank("blue", &here, &out) > 0 and out[0].match.n == 4);
-    _ = rank("wifi", &here, &out);
+    try t.expect(rank("blue", &here, t.io, &out) > 0 and out[0].match.n == 4);
+    _ = rank("wifi", &here, t.io, &out);
     try t.expectEqual(@as(u8, 0), out[0].match.n);
     // Not for loose letters, nor one letter.
-    try t.expectEqual(@as(usize, 0), rank("saf", &here, &out));
-    try t.expectEqual(@as(usize, 0), rank("w", &here, &out));
+    try t.expectEqual(@as(usize, 0), rank("saf", &here, t.io, &out));
+    try t.expectEqual(@as(usize, 0), rank("w", &here, t.io, &out));
     // A pane's address is the one beside it in `urls`.
-    try t.expect(rank("login items", &here, &out) > 0);
+    try t.expect(rank("login items", &here, t.io, &out) > 0);
     try t.expectEqualStrings(
         url_prefix ++ "com.apple.LoginItems-Settings.extension",
         urls[out[0].index],
@@ -410,7 +409,8 @@ test "panes are found by name and by the words people use (#12)" {
 }
 
 test "every pane's extension is on this Mac's macOS, or is known not to be" {
-    if (!mac) return error.SkipZigTest;
+    if (!platform.panes) return error.SkipZigTest;
+    const t = std.testing;
     // The panes every Mac running Nanolight has (macOS 14 or later): a
     // typo in a bundle name here would hide its pane for good.
     var here: Present = .{};
@@ -429,11 +429,11 @@ test "every pane's extension is on this Mac's macOS, or is known not to be" {
         const i = for (all, 0..) |p, k| {
             if (std.mem.eql(u8, p.name, want)) break k;
         } else return error.NoPane;
-        if (!here.has(i)) {
+        if (!here.has(t.io, i)) {
             std.debug.print("pane not on this Mac: {s} ({s}.appex)\n", .{ want, all[i].appex });
             listLike(want);
         }
-        try std.testing.expect(here.has(i));
+        try std.testing.expect(here.has(t.io, i));
     }
 }
 

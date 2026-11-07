@@ -1,5 +1,5 @@
 //! The app around the panel: its window, shown and hidden (panel_mac.zig,
-//! panel_pc.zig), its key and its welcome. The features (`*_live.zig`)
+//! panel_win.zig and panel_x11.zig), its key and its welcome. The features (`*_live.zig`)
 //! keep the rest, and join in where the panel comes and goes through
 //! `Hooks`; main.zig wires them.
 const std = @import("std");
@@ -128,7 +128,7 @@ pub const App = struct {
             .look = shortcut_holders.look,
             .apply = apply,
             .fix = fix,
-            .login = shell.Login.enabled,
+            .login = login,
             .done = done,
         };
     }
@@ -307,6 +307,10 @@ pub const App = struct {
     fn lookAgain(a: *App) void {
         a.o.refresh();
         a.redraw();
+    }
+
+    fn login(ctx: *anyopaque, set: ?bool) bool {
+        return shell.Login.enabled(from(ctx).app.io, set);
     }
 
     fn done(ctx: *anyopaque) void {

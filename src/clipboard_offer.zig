@@ -52,8 +52,7 @@ pub const Timeout = struct {
     }
 };
 
-/// Time for the window that had the keys to take them back before Ctrl+V.
-pub const paste_delay_ms = 150;
+pub const paste_delay_ms = @import("clipboard_types.zig").paste_delay_ms;
 
 // ----- what to read -----
 

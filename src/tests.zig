@@ -404,7 +404,7 @@ const Steps = struct {
         p.done = true;
         p.ended += 1;
     }
-    fn loginOff(_: ?bool) bool {
+    fn loginOff(_: *anyopaque, _: ?bool) bool {
         return false;
     }
 };

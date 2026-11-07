@@ -47,7 +47,7 @@ pub fn webArea(h: f32) struct { y: f32, h: f32 } {
     return .{ .y = header_h + 1, .h = @max(0, h - header_h - footer_h - 2) };
 }
 
-/// How a platform's window holds the panel (panel_mac/panel_pc `setup`).
+/// How a platform's window holds the panel (panel_mac/panel_win/panel_x11 `setup`).
 pub const Fit = struct {
     /// Clear room round the panel in its window, for its shadow.
     margin: f32 = 0,

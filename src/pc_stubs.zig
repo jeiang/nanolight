@@ -26,6 +26,18 @@ pub const ClickThrough = struct {
     pub fn update(_: *ClickThrough) void {}
 };
 
+/// No menu bar icon yet: `make` says so, and the menu's code keeps none.
+pub const Tray = struct {
+    pub fn make(_: *nanoui.App, _: []const u8, _: []const u8) !Tray {
+        return error.Unavailable;
+    }
+    pub fn visible(_: Tray) bool {
+        return false;
+    }
+    pub fn show(_: Tray, _: bool) void {}
+    pub fn menu(_: Tray, _: []const u8, _: []const nanoui.menu.MenuItem) void {}
+};
+
 pub const Recorder = struct {
     pub fn start(_: *Recorder, _: recorder.Got) bool {
         return false;

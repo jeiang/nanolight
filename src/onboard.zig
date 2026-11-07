@@ -18,7 +18,6 @@ const keys = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
 const shortcut_clash = @import("shortcut_clash.zig");
 const platform = @import("platform.zig");
-const mac = @import("os.zig").mac;
 const Choice = keys.Choice;
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;
@@ -36,9 +35,8 @@ pub const Hooks = struct {
     apply: *const fn (ctx: *anyopaque, choice: Choice) void,
     /// Frees the shortcut: Keyboard Shortcuts opened, a launcher quit.
     fix: *const fn (ctx: *anyopaque, clash: shortcut_clash.Clash) void,
-    /// Whether it opens at login; `set` changes it first. The system keeps
-    /// it, so no context.
-    login: *const fn (set: ?bool) bool,
+    /// Whether it opens at login; `set` changes it first.
+    login: *const fn (ctx: *anyopaque, set: ?bool) bool,
     /// The welcome is over: keep that.
     done: *const fn (ctx: *anyopaque) void,
 };
@@ -55,16 +53,10 @@ const skip: chrome.Key = .{ .what = "Skip", .key = "esc" };
 /// The last step's main act.
 const start_key: chrome.Key = .{ .what = "Start searching", .key = "↩", .first = true };
 
-const Example = struct { q: []const u8, what: []const u8, icon: []const u8 };
-/// An app every machine of the kind has, math, and words for a quicklink;
-/// icons nanoui draws there (SF Symbols on the Mac, its own set elsewhere).
-const examples = [_]Example{
-    switch (@import("builtin").os.tag) {
-        .macos => .{ .q = "saf", .what = "Open Safari", .icon = "app.badge" },
-        .windows => .{ .q = "note", .what = "Open Notepad", .icon = "doc.text" },
-        else => .{ .q = "term", .what = "Open a terminal", .icon = "terminal" },
-    },
-    .{ .q = "2^10 * 3", .what = "Do math", .icon = if (mac) "plus.forwardslash.minus" else "plus" },
+/// An app every machine of the kind has, math, and words for a quicklink.
+const examples = [_]platform.Example{
+    platform.example_app,
+    .{ .q = "2^10 * 3", .what = "Do math", .icon = platform.math_icon },
     .{ .q = "liquid glass", .what = "Search the web", .icon = "sparkles" },
 };
 
@@ -98,7 +90,7 @@ pub const Onboard = struct {
     /// Looks again at who holds the keys (after a fix, on each showing).
     pub fn refresh(o: *Onboard) void {
         o.holders = o.hooks.look(&o.system_buf);
-        if (asks_login) o.login = o.hooks.login(null);
+        if (asks_login) o.login = o.hooks.login(o.hooks.ctx, null);
     }
 
     pub fn clash(o: *const Onboard) shortcut_clash.Clash {
@@ -235,7 +227,10 @@ pub const Onboard = struct {
             ui.textf(
                 c,
                 .{ .size = 13, .weight = .medium, .color = p.text },
-                if (mac) "macOS gives {s} to {s} first." else "{s} is held by {s}.",
+                if (platform.system_shortcuts)
+                    "macOS gives {s} to {s} first."
+                else
+                    "{s} is held by {s}.",
                 .{ keys_text, who },
             );
         } else {
@@ -251,8 +246,9 @@ pub const Onboard = struct {
             );
         }
         line.end();
-        // A PC has no one place to free a key: another one is the fix.
-        if (!mac and cl.system != null) {
+        // Without the system's table there is no one place to free a key:
+        // another one is the fix.
+        if (!platform.system_shortcuts and cl.system != null) {
             const r = ui.div(c).row().pl(22);
             ui.text(c, "Pick another key above.", p.detail());
             return r.end();
@@ -297,10 +293,10 @@ pub const Onboard = struct {
             if (mods.len > 0) {
                 // A PC's "Ctrl Alt" is words, not glyphs: wider per key.
                 const n: f32 = @floatFromInt(@popCount(ch.mods));
-                const w: f32 = if (mac)
-                    68 + 22 * @max(0, n - 2)
+                const w: f32 = if (platform.pc_modifiers)
+                    40 + 8 * @as(f32, @floatFromInt(mods.len))
                 else
-                    40 + 8 * @as(f32, @floatFromInt(mods.len));
+                    68 + 22 * @max(0, n - 2);
                 cap(c, p, mods, w, held_mod or o.reopened);
                 ui.text(c, "+", .{ .size = 20, .weight = .medium, .color = p.sub.alpha(0.6) });
             }
@@ -336,7 +332,7 @@ pub const Onboard = struct {
     /// Every modifier of `ch` is held now: on a PC by its preset's keys.
     fn modsHeld(ch: Choice, c: *const ui.Context) bool {
         const in = c.input;
-        if (!mac) {
+        if (platform.pc_modifiers) {
             const pc = ch.pc();
             if (pc.ctrl and !in.ctrl) return false;
             if (pc.alt and !in.alt) return false;
@@ -433,7 +429,7 @@ pub const Onboard = struct {
             tile.end();
             ui.text(
                 c,
-                "Settings are on " ++ platform.mod ++ ", and the gear" ++ if (mac)
+                "Settings are on " ++ platform.mod ++ ", and the gear" ++ if (platform.tray)
                     ". It also lives in your menu bar."
                 else
                     " at the bottom of the panel.",
@@ -441,7 +437,7 @@ pub const Onboard = struct {
             );
         }
         if (asks_login and ui.toggle(c, "Open Nanolight when you log in", &o.login)) {
-            o.login = o.hooks.login(o.login);
+            o.login = o.hooks.login(o.hooks.ctx, o.login);
         }
         return null;
     }
@@ -522,7 +518,7 @@ const TestHooks = struct {
         @as(*TestHooks, @ptrCast(@alignCast(ctx))).applied = c;
     }
     fn fix(_: *anyopaque, _: shortcut_clash.Clash) void {}
-    fn login(set: ?bool) bool {
+    fn login(_: *anyopaque, set: ?bool) bool {
         return set orelse false;
     }
     fn done(ctx: *anyopaque) void {

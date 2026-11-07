@@ -1,4 +1,4 @@
-//! The panel's window on Windows and Linux: borderless, over other windows,
+//! The panel's window on X11: borderless, over other windows,
 //! out of the taskbar, exactly the panel's size (it follows the panel's
 //! height). nanoui draws the panel on it; there is no system vibrancy
 //! under it, so the panel paints its own fill. The window is transparent
@@ -15,15 +15,13 @@ const chrome = @import("chrome.zig");
 const dl = @import("dl.zig");
 const display = @import("display.zig");
 const x11 = @import("x11.zig");
-const windows = @import("os.zig").windows;
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
-/// Before the app: on Linux GTK 3, where a window can be put somewhere
-/// (GTK 4 lets only the compositor place one), unless the user asked for
-/// another.
+/// Before the app: GTK 3, where a window can be put somewhere (GTK 4 lets
+/// only the compositor place one), unless the user asked for another.
 pub fn prepare() void {
-    if (!windows and std.c.getenv("NANOUI_GTK") == null) _ = setenv("NANOUI_GTK", "3", 0);
+    if (std.c.getenv("NANOUI_GTK") == null) _ = setenv("NANOUI_GTK", "3", 0);
 }
 
 /// The window, from the panel's size.
@@ -36,7 +34,8 @@ pub fn adjust(o: *nanoui.WindowOptions) void {
 
 /// The panel fills the window: no margin, and an entrance of its own.
 pub fn setup(w: *nanoui.Window) chrome.Fit {
-    if (!windows and display.session() == .x11) {
+    // A Wayland session: nothing to follow here (the compositor says).
+    if (display.session() == .x11) {
         window = w;
         follow();
     }
@@ -47,12 +46,15 @@ pub fn setup(w: *nanoui.Window) chrome.Fit {
 /// manager's word.
 pub fn showing(w: *nanoui.Window) bool {
     if (!w.isVisible()) return false;
-    if (!windows) if (panelActive()) |active| return active;
+    if (panelActive()) |active| return active;
     return w.isFocused();
 }
 
-/// The panel lost the keys: it goes, as another window took them.
+/// The panel lost the keys: it goes, as another window took them. The hot
+/// key's press time goes with it: the next open (a click, the menu) is not
+/// the hot key's, and the window manager would be told a time it never saw.
 pub fn lostKeys(w: *nanoui.Window) void {
+    x11.last_press = 0;
     if (w.isVisible()) w.hide();
 }
 
@@ -65,10 +67,9 @@ pub fn place(w: *nanoui.Window) void {
         @max(0, (m[0] - chrome.width) / 2),
         @max(0, @min(m[1] * 0.2, m[1] - chrome.max_height - 16)),
     );
-    // X11: the panel's user time is the hot key's, set before it maps, so a
+    // The panel's user time is the hot key's, set before it maps, so a
     // window manager that prevents focus stealing (Xfce, KDE) lets it take
     // the keys from the window that had them.
-    if (windows) return;
     const t = x11.last_press;
     if (t == 0) return;
     const g = gtk orelse return;
@@ -78,17 +79,16 @@ pub fn place(w: *nanoui.Window) void {
 
 pub fn resize(w: *nanoui.Window, h: f32) void {
     const height = @ceil(h);
-    // Linux: GTK 3 under Wayland can keep a borderless window at its old
-    // size after `gtk_window_resize`, and the bottom of the panel is cut
-    // off. A size request of the new height makes it take it.
-    if (!windows) w.setMinSize(chrome.width, height);
+    // GTK 3 under Wayland can keep a borderless window at its old size
+    // after `gtk_window_resize`, and the bottom of the panel is cut off. A
+    // size request of the new height makes it take it.
+    w.setMinSize(chrome.width, height);
     w.setSize(chrome.width, height);
 }
 
 /// After `show`: on X11 the window manager is given the hot key's time, or
 /// it may refuse the panel the focus (focus stealing prevention).
 pub fn shown(w: *nanoui.Window) void {
-    if (windows) return;
     const t = x11.last_press;
     if (t == 0) return;
     const g = gtk orelse return;
@@ -96,10 +96,8 @@ pub fn shown(w: *nanoui.Window) void {
     g.gtk_window_present_with_time(@ptrCast(win), t);
 }
 
-/// XPropertyEvent's `atom`, after type, serial, send_event, display and window.
-const atom_offset = 5 * @sizeOf(c_long);
-/// XA_WINDOW.
-const xa_window: x11.Atom = 33;
+const atom_offset = x11.atom_offset;
+const xa_window = x11.xa_window;
 
 /// GTK's and GDK's functions the panel uses on X11, looked up once from the
 /// libraries GTK 3 has loaded.

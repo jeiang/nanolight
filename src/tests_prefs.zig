@@ -14,6 +14,7 @@ const Rig = support.Rig;
 const test_apps = @import("test_apps.zig");
 const suggest = @import("suggest.zig");
 const platform = @import("platform.zig");
+const keys = @import("keys.zig");
 const placeholder = "Search apps, do math, search the web…";
 
 /// Where the field's placeholder is in the first frame after the panel
@@ -133,7 +134,7 @@ test "Settings' Open at Login flips what the system says, not a copy" {
 }
 
 test "recording a key: idle, recording, refused, and never without a recorder" {
-    if (!platform.record) return error.SkipZigTest;
+    if (!keys.any_key) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var prefs: support.Prefs = .{};
     prefs.init();
@@ -143,7 +144,6 @@ test "recording a key: idle, recording, refused, and never without a recorder" {
     const s = &rig.s;
     const t = &rig.t;
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
-    const keys = @import("keys.zig");
     const waiting = "Type a shortcut";
     const refused = "Add ⌘, ⌥ or ⌃";
     const enter: []const ui.TextOp = &.{.{ .command = .insert_newline }};

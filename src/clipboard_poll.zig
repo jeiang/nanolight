@@ -6,8 +6,7 @@ const nanoui = @import("nanoui");
 const clipboard = @import("clipboard_types.zig");
 
 const poll_ms = 500;
-/// Time for the woken app to take the keys before the keystroke reaches it.
-const paste_delay_ms = 120;
+const paste_delay_ms = clipboard.paste_delay_ms;
 
 /// `B` has, all called on the main thread:
 ///

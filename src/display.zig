@@ -8,7 +8,7 @@
 //!   (clipboard_linux.zig). The hot key reports that it can't be grabbed:
 //!   the desktop's keyboard settings run `nanolight --toggle`
 //!   (hotkey_x11.zig). GTK draws the panel over Wayland, so X11's active
-//!   window says nothing about it: GTK's focus is the panel's (panel_pc.zig).
+//!   window says nothing about it: GTK's focus is the panel's (panel_x11.zig).
 //! - X11: all three use X11.
 //! - None: clipboard history says why it is off; there is no hot key.
 const std = @import("std");

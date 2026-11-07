@@ -1,5 +1,5 @@
 //! libX11 as Nanolight uses it: the hot key's grab (hotkey_x11.zig), the
-//! panel's focus (panel_pc.zig) and clipboard history (clipboard_x11.zig),
+//! panel's focus (panel_x11.zig) and clipboard history (clipboard_x11.zig),
 //! each over a connection of its own. The library is opened once, with
 //! dlopen; its types and names are libX11's, not each user's.
 const dl = @import("dl.zig");
@@ -89,5 +89,22 @@ pub fn load() ?Lib {
 
 /// The X server's time of the last press of the panel's key, set by
 /// hotkey_x11.zig; 0 before one. Window managers refuse focus to a window
-/// shown without a recent one (panel_pc.zig).
+/// shown without a recent one (panel_x11.zig).
 pub var last_press: u32 = 0;
+
+// ----- where an event's fields are -----
+// Xlib's events are unions of C structs, so a field's place is its offset
+// in bytes: type, then the serial's padding, then the fields in order.
+
+/// XKeyEvent's `time`, after type, serial, send_event, display and window.
+pub const time_offset = 7 * @sizeOf(c_long);
+/// XPropertyEvent's `atom`, after type, serial, send_event, display and window.
+pub const atom_offset = 5 * @sizeOf(c_long);
+
+// ----- the atoms every client knows -----
+/// XA_ATOM.
+pub const xa_atom: Atom = 4;
+/// XA_STRING.
+pub const xa_string: Atom = 31;
+/// XA_WINDOW.
+pub const xa_window: Atom = 33;

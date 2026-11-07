@@ -14,13 +14,13 @@ const Launchers = shortcut_clash.Launchers;
 const Holders = shortcut_clash.Holders;
 const known_launchers = shortcut_clash.known_launchers;
 const clash = shortcut_clash.clash;
-const mac = @import("os.zig").mac;
+const platform = @import("platform.zig");
 const objc = nanoui.objc;
 
 /// The system's shortcuts and the running launchers now; `system_buf` holds
 /// the table.
 pub fn look(system_buf: []SystemKey) Holders {
-    if (!mac) {
+    if (!platform.system_shortcuts) {
         var h: Holders = .{};
         for (Choice.all, &h.taken) |c, *t| t.* = hotkey.taken(c);
         return h;
@@ -132,7 +132,7 @@ fn readTable(table_in: ?objc.Object, buf: []SystemKey) []SystemKey {
 
 /// Asks the launcher called `name` to quit, as its Quit menu item would.
 pub fn quit(name: []const u8) void {
-    if (!mac) return;
+    if (!platform.launchers) return;
     const pool = objc.Pool.push();
     defer pool.pop();
     const bundle = for (known_launchers) |l| {
@@ -168,7 +168,7 @@ fn runningLaunchers() Launchers {
 }
 
 test "the system's shortcuts are read past entries of the wrong type (#14)" {
-    if (!mac) return error.SkipZigTest;
+    if (!platform.system_shortcuts) return error.SkipZigTest;
     const pool = objc.Pool.push();
     defer pool.pop();
     // ⌘Space for Spotlight; then a boolean for an entry, for its value,
@@ -227,7 +227,7 @@ test "Spotlight holds ⌘Space unless the system's table says otherwise" {
 const unnamed: System = @fromBackingInt(@as(u32, 33));
 
 test "a shortcut turned off is read, whatever else its entry lacks" {
-    if (!mac) return error.SkipZigTest;
+    if (!platform.system_shortcuts) return error.SkipZigTest;
     const pool = objc.Pool.push();
     defer pool.pop();
     const xml =

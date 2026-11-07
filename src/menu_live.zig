@@ -3,6 +3,7 @@
 //! the sync status, and the update waiting, if one is.
 const nanoui = @import("nanoui");
 const platform = @import("platform.zig");
+const shell = @import("shell.zig");
 const update_live = @import("update_live.zig");
 const account_live = @import("account_live.zig");
 const App = @import("app.zig").App;
@@ -13,15 +14,14 @@ pub const Menu = struct {
     core: *App,
     update: *update_live.Update,
     sync: *account_live.Sync,
-    tray: ?*nanoui.Tray = null,
+    tray: ?shell.Tray = null,
     /// Whether the icon is to show, until the tray is made (its switch is
     /// loaded first: settings_bind.zig `Bind.load`).
     wanted: bool = true,
 
     /// The icon, unless Settings took it away.
     pub fn start(m: *Menu) !void {
-        if (comptime !platform.tray) return;
-        m.tray = try m.core.app.newTray(.{ .symbol = "magnifyingglass", .tooltip = "Nanolight" });
+        m.tray = try shell.Tray.make(m.core.app, "magnifyingglass", "Nanolight");
         if (!m.wanted) m.showIcon(false);
     }
 
@@ -31,10 +31,8 @@ pub const Menu = struct {
 
     /// Whether the menu bar icon shows.
     pub fn iconShown(m: *const Menu) bool {
-        if (comptime !platform.tray) return false;
-        const objc = nanoui.objc;
         const t = m.tray orelse return false;
-        return objc.msg(objc.BOOL, t.item, "isVisible", .{});
+        return t.visible();
     }
 
     /// Shows or hides the menu bar icon. Hidden, Nanolight is its key
@@ -42,11 +40,9 @@ pub const Menu = struct {
     /// shows the panel. The status item stays, only unseen (nanoui's App
     /// keeps its trays until it quits).
     pub fn showIcon(m: *Menu, on: bool) void {
-        if (comptime !platform.tray) return;
         m.wanted = on;
-        const objc = nanoui.objc;
         const t = m.tray orelse return;
-        objc.msg(void, t.item, "setVisible:", .{if (on) objc.YES else objc.NO});
+        t.show(on);
     }
 
     fn settings(m: *Menu, _: *nanoui.menu.Item) void {
@@ -67,12 +63,11 @@ pub const Menu = struct {
 };
 
 fn rebuild(ctx: *anyopaque) void {
-    if (comptime !platform.tray) return;
     const m = after.cast(*Menu, ctx);
     const t = m.tray orelse return;
     const Item = nanoui.menu.MenuItem;
     const update = if (platform.updater) [_]Item{m.update.menuItem()} else [_]Item{};
-    t.setMenu("Nanolight", &([_]Item{
+    t.menu("Nanolight", &([_]Item{
         .{ .label = "Settings…", .accelerator = "Cmd+,", .click = .of(m, Menu.settings) },
         .{ .label = "Open Nanolight", .click = .of(m, Menu.show) },
         .{ .label = "Welcome…", .click = .of(m, Menu.welcome) },
@@ -85,6 +80,5 @@ fn rebuild(ctx: *anyopaque) void {
         .separator,
         m.sync.menuItem(),
         .separator,
-        // best effort: without the menu, the panel still opens from its key.
-    } ++ update ++ [_]Item{.{ .label = "Quit Nanolight", .role = .quit }})) catch {};
+    } ++ update ++ [_]Item{.{ .label = "Quit Nanolight", .role = .quit }}));
 }
