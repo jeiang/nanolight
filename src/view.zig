@@ -258,7 +258,7 @@ fn list(s: *Nanolight, c: *ui.Context, p: Palette) void {
         y += rh;
     }
     // A new list: the highlight is there at once; moving in it, it slides.
-    const fresh = s.query.built;
+    const fresh = s.list_gen;
     const hy = motion.number(c, c.print("{d}", .{fresh}), sel_y, .{ .spring = slide });
     const hh = motion.number(c, c.print("{d}h", .{fresh}), sel_h, .{ .spring = slide });
     const hw = chrome.width - chrome.list_pad * 2;

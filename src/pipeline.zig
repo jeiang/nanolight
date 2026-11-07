@@ -87,6 +87,7 @@ pub fn refill(s: *Nanolight, landed: Landed) void {
 }
 
 fn fill(s: *Nanolight) void {
+    s.list_gen +%= 1;
     rates.fill(s.rates, s, buildRows);
 }
 

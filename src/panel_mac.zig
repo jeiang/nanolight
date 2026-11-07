@@ -9,9 +9,15 @@ const objc = nanoui.objc;
 const chrome = @import("chrome.zig");
 const after = @import("after.zig");
 const ime_level = @import("ime_level.zig");
+const Preview = @import("preview.zig").Preview;
 
 /// The system's glass under the panel, which the window's views keep.
 var glass: ?objc.Object = null;
+/// What moves with the next frame shown: the height the glass and the page
+/// go to, whether the page comes (true) or goes, and the page.
+var wanted: ?f32 = null;
+var page_to: ?bool = null;
+var page: ?*Preview = null;
 
 /// Before the app: nothing on the Mac.
 pub fn prepare() void {}
@@ -35,7 +41,10 @@ pub fn setup(w: *nanoui.Window) chrome.Fit {
     objc.msg(void, w.nswindow, "setHasShadow:", .{objc.NO});
     glass = backdrop(w, 18);
     // Pinyin's candidates over the panel, not behind it (#39).
-    if (w.surface) |surface| _ = ime_level.answerWindowLevel(surface.nsview);
+    if (w.surface) |surface| {
+        _ = ime_level.answerWindowLevel(surface.nsview);
+        surface.after_frame = afterFrame;
+    }
     return .{ .margin = chrome.shadow_margin, .window_fades = true };
 }
 
@@ -57,11 +66,70 @@ pub fn place(w: *nanoui.Window) void {
     objc.msg(void, w.nswindow, "setAlphaValue:", .{@as(f64, 0)});
 }
 
-/// The glass to the panel's height, in the frame that draws it (a view's
-/// frame, not the window's: nothing is laid out again).
-pub fn resize(_: *nanoui.Window, h: f32) void {
-    const g = glass orelse return;
-    objc.msg(void, g, "setFrame:", .{glassFrame(h)});
+/// The glass and the page to the panel's height, in the frame that shows
+/// it: a key's frame only builds the panel, and its pixels come with the
+/// display's next refresh. Moved sooner, the glass stood a frame or two
+/// without the panel, or the panel's rows hung off the glass.
+pub fn resize(_: *nanoui.Window, h: f32, p: *anyopaque) void {
+    wanted = h;
+    page = @ptrCast(@alignCast(p));
+}
+
+/// The page, loading now and seen with the frame that makes room for it:
+/// shown sooner, it stood over the rows.
+pub fn showPage(p: *anyopaque, w: *nanoui.Window, url: []const u8, h: f32) void {
+    const preview: *Preview = @ptrCast(@alignCast(p));
+    page = preview;
+    preview.load(w, url, h);
+    page_to = true;
+    requestFrame(w);
+}
+
+/// The page, gone with the frame that replaces it: gone sooner, the last
+/// frame under it ("Searching Google...") showed for a refresh.
+pub fn hidePage(p: *anyopaque, w: *nanoui.Window) void {
+    page = @ptrCast(@alignCast(p));
+    page_to = false;
+    requestFrame(w);
+}
+
+/// Not while hidden: a showing draws everything anyway.
+fn requestFrame(w: *nanoui.Window) void {
+    if (w.isVisible()) if (w.surface) |surface| surface.requestFrame();
+}
+
+const Step = enum { wait, ask, move };
+
+/// What a built frame does about a height still wanted: a frame with a
+/// drawable is shown now, so everything moves with it; a visible one
+/// without asks for one; a hidden window waits, drawing nothing, to show.
+fn stepFor(has_drawable: bool, visible: bool) Step {
+    if (has_drawable) return .move;
+    return if (visible) .ask else .wait;
+}
+
+/// True when native views moved: nanoui then presents this frame in the
+/// same transaction as they move.
+fn afterFrame(_: ?*anyopaque, s: *nanoui.Surface) bool {
+    if (wanted == null and page_to == null) return false;
+    switch (stepFor(s.renderer.given_drawable != null, s.visible())) {
+        .wait => return false,
+        .ask => {
+            s.requestFrame();
+            return false;
+        },
+        .move => {},
+    }
+    // The glass's own layers would otherwise ease to their new size.
+    objc.msg(void, objc.class("CATransaction"), "setDisableActions:", .{objc.YES});
+    if (wanted) |h| {
+        if (glass) |g| objc.msg(void, g, "setFrame:", .{glassFrame(h)});
+        if (page) |p| p.fit(h);
+    }
+    if (page) |p| if (page_to) |on| if (on) p.uncover() else p.hide();
+    wanted = null;
+    page_to = null;
+    return true;
 }
 
 pub fn showing(w: *nanoui.Window) bool {
@@ -132,4 +200,11 @@ fn backdrop(w: *nanoui.Window, radius: f64) ?objc.Object {
 fn glassFrame(h: f32) objc.CGRect {
     const m = chrome.shadow_margin;
     return .{ .origin = .{ .x = m, .y = m }, .size = .{ .width = chrome.width, .height = h } };
+}
+
+test "the glass moves only with a frame that is being shown" {
+    try std.testing.expectEqual(Step.move, stepFor(true, true));
+    try std.testing.expectEqual(Step.ask, stepFor(false, true));
+    // Hidden, nothing asks for frames: an idle Nanolight stays idle.
+    try std.testing.expectEqual(Step.wait, stepFor(false, false));
 }

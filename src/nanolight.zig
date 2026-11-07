@@ -81,6 +81,9 @@ pub const Nanolight = struct {
     copied_at: f64 = -10,
     spans: [results.max_rows][16]ui.Span = undefined,
     last_h: f32 = 0,
+    /// Counts the lists built: each new one puts the highlight in place
+    /// instead of sliding it from the last (`view.list`).
+    list_gen: u32 = 0,
     /// The room the rows had, kept while Google is asked about the words
     /// typed (`pipeline.rebuild`), until it answers (`pipeline.answered`);
     /// 0 when it isn't.

@@ -78,7 +78,7 @@ pub fn place(w: *nanoui.Window) void {
     g.gdk_x11_window_set_user_time(gw, t);
 }
 
-pub fn resize(w: *nanoui.Window, h: f32) void {
+pub fn resize(w: *nanoui.Window, h: f32, _: *anyopaque) void {
     const height = @ceil(h);
     // GTK 3 under Wayland can keep a borderless window at its old size
     // after `gtk_window_resize`, and the bottom of the panel is cut off. A
@@ -89,6 +89,11 @@ pub fn resize(w: *nanoui.Window, h: f32) void {
 
 /// After `show`: on X11 the window manager is given the hot key's time, or
 /// it may refuse the panel the focus (focus stealing prevention).
+/// A PC has no search page (`platform.preview`): nothing to show.
+pub fn showPage(_: *anyopaque, _: *nanoui.Window, _: []const u8, _: f32) void {}
+
+pub fn hidePage(_: *anyopaque, _: *nanoui.Window) void {}
+
 pub fn shown(w: *nanoui.Window) void {
     const t = x11.last_press;
     if (t == 0) return;

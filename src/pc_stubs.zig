@@ -9,7 +9,8 @@ const preview = @import("preview.zig");
 const recorder = @import("recorder.zig");
 
 pub const Preview = struct {
-    pub fn show(_: *Preview, _: *nanoui.Window, _: []const u8, _: f32) void {}
+    pub fn load(_: *Preview, _: *nanoui.Window, _: []const u8, _: f32) void {}
+    pub fn uncover(_: *Preview) void {}
     pub fn hide(_: *Preview) void {}
     pub fn fit(_: *Preview, _: f32) void {}
     pub fn current(_: *const Preview, _: []u8) ?[]const u8 {

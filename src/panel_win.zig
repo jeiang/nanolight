@@ -45,9 +45,14 @@ pub fn place(w: *nanoui.Window) void {
     );
 }
 
-pub fn resize(w: *nanoui.Window, h: f32) void {
+pub fn resize(w: *nanoui.Window, h: f32, _: *anyopaque) void {
     w.setSize(chrome.width, @ceil(h));
 }
 
 /// After `show`: nothing to tell the window manager.
 pub fn shown(_: *nanoui.Window) void {}
+
+/// A PC has no search page (`platform.preview`): nothing to show.
+pub fn showPage(_: *anyopaque, _: *nanoui.Window, _: []const u8, _: f32) void {}
+
+pub fn hidePage(_: *anyopaque, _: *nanoui.Window) void {}
