@@ -84,7 +84,8 @@ pub const App = struct {
     preview: shell.Preview = .{},
     /// Clicks outside the panel go to what is under it (clickthrough.zig).
     through: shell.ClickThrough = .{},
-    /// A key of one's own, being recorded in Settings (recorder.zig).
+    /// A key of one's own, being recorded (recorder.zig): Settings starts
+    /// and stops it, and says whether it runs (`Settings.key_input`).
     recorder: shell.Recorder = .{},
     /// The account settings sync through (account_live.zig); null without one.
     acct: ?*account.Account = null,
@@ -148,8 +149,6 @@ pub const App = struct {
                     return;
                 }
                 _ = apps.launch(a.app.io, path);
-                // Its count went up: the other Macs suggest it too.
-                if (a.acct) |x| x.changed();
             },
         }
     }
@@ -225,7 +224,7 @@ pub const App = struct {
         const a = from(ctx);
         if (w.isFocused()) return;
         // Recording ends through Settings, which shows it: the key is back.
-        if (a.recorder.active()) a.s.settings_ui.record(a.s.host.settings, false);
+        a.s.settings_ui.stopRecording(a.s.host.settings);
         a.s.hid(clock.now());
         a.through.stop();
         a.s.note = "";
@@ -236,6 +235,10 @@ pub const App = struct {
     /// `nanolight --toggle`, or a newer copy starting (single.zig).
     pub fn command(ctx: *anyopaque, cmd: single.Command) void {
         const a = from(ctx);
+        // Claimed before the window: a command that lands in that moment
+        // has nothing to show or hide yet (an older copy's socket did not
+        // exist before, so none came).
+        if (a.window == null) return;
         switch (cmd) {
             .toggle => toggle(a),
             .quit => a.app.quit(),

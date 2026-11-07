@@ -205,7 +205,7 @@ pub const Nanolight = struct {
             .rows => unreachable,
             .preview => if (s.host.preview) |f| f(s.host.ctx, null),
             .settings => {
-                s.settings_ui.leave();
+                s.settings_ui.leave(s.host.settings);
                 s.query.focus();
             },
             .clipboard => s.clearField(),

@@ -27,9 +27,6 @@ pub const ClickThrough = struct {
 };
 
 pub const Recorder = struct {
-    pub fn active(_: *const Recorder) bool {
-        return false;
-    }
     pub fn start(_: *Recorder, _: recorder.Got) bool {
         return false;
     }

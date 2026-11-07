@@ -22,10 +22,6 @@ pub const Recorder = struct {
     /// (handling it may stop the monitor).
     last: ?keys.Recorded = null,
 
-    pub fn active(r: *const Recorder) bool {
-        return r.monitor != null;
-    }
-
     /// Whether the monitor is on: keys pressed go to `got` from now on.
     pub fn start(r: *Recorder, got: Got) bool {
         r.got = got;
