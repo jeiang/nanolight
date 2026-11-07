@@ -43,6 +43,7 @@ const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Host = @import("host.zig").Host;
 const version = @import("build_options").version;
 const app_name = @import("app_facts.zig").app_name;
+const log = @import("log.zig");
 
 pub fn main(init: std.process.Init) !void {
     var arena: std.heap.ArenaAllocator = .init(init.gpa);
@@ -254,8 +255,8 @@ fn windowOptions(core: *App, sized: Sized) nanoui.WindowOptions {
 fn claim(io: std.Io, core: *App) void {
     switch (shell.Single.claim(io, .{ .ctx = core, .func = App.command })) {
         .none => {},
-        .quit => std.log.info("nanolight: asked an older copy to quit", .{}),
-        .stayed => std.log.warn(
+        .quit => log.info("nanolight: asked an older copy to quit", .{}),
+        .stayed => log.warn(
             "nanolight: an older copy didn't quit within {d} ms; both run",
             .{single.quit_wait_ms},
         ),

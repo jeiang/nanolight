@@ -27,6 +27,7 @@ const after = @import("after.zig");
 const PageKey = @import("preview.zig").Key;
 const Setter = @import("toggles.zig").Setter;
 const Origin = @import("toggles.zig").Origin;
+const log = @import("log.zig");
 
 /// A menu's item waits for the menu: it closes first, then the panel
 /// takes the keys.
@@ -262,7 +263,7 @@ pub const App = struct {
     pub fn useKey(a: *App, choice: keys.Choice) void {
         a.choice = choice;
         hotkey.register(choice, .{ .ctx = a, .func = toggle }) catch |e|
-            std.log.warn(
+            log.warn(
                 "nanolight: {f} can't be registered ({s}); open it from the menu bar",
                 .{ shortcut.text(choice), @errorName(e) },
             );

@@ -19,6 +19,7 @@ const Hook = @import("app.zig").Hook;
 const after = @import("after.zig");
 const build = @import("build_options");
 const app_facts = @import("app_facts.zig");
+const log = @import("log.zig");
 
 const idle_ms = app_facts.restart_idle_ms;
 
@@ -42,7 +43,7 @@ pub const Update = struct {
             .name = app_facts.app_name,
             .changed = .{ .ctx = u, .func = changed },
         }) catch |e| {
-            std.log.warn("nanolight: automatic updates are off: {t}", .{e});
+            log.warn("nanolight: automatic updates are off: {t}", .{e});
             return;
         };
         u.started = updater;

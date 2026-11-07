@@ -8,6 +8,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const app_scan = @import("app_scan.zig");
 const dl = @import("dl.zig");
+const log = @import("log.zig");
 const Sink = app_scan.Sink;
 const Env = std.process.Environ.Map;
 
@@ -67,7 +68,7 @@ pub fn scanDir(sink: Sink, io: std.Io, path: []const u8, depth: u8) void {
             if (!std.mem.endsWith(u8, f.entry.name, ".desktop")) return .descend;
             var text: [16 * 1024]u8 = undefined;
             const bytes = f.dir.readFile(s.io, f.entry.name, &text) catch |err| {
-                std.log.warn("nanolight: {s} could not be read: {t}", .{ f.full, err });
+                log.warn("nanolight: {s} could not be read: {t}", .{ f.full, err });
                 return .next;
             };
             const entry = parse(bytes);

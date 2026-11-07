@@ -15,6 +15,7 @@ const chrome = @import("chrome.zig");
 const dl = @import("dl.zig");
 const display = @import("display.zig");
 const x11 = @import("x11.zig");
+const log = @import("log.zig");
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
@@ -128,11 +129,11 @@ fn follow() void {
     }, no_follow) orelse return;
     gtk = g;
     const d = xl.XOpenDisplay(null) orelse {
-        std.log.warn("nanolight: no X display: " ++ no_follow, .{});
+        log.warn("nanolight: no X display: " ++ no_follow, .{});
         return;
     };
     watch = nanoui.fdwatch.readable(xl.XConnectionNumber(d), null, readable) catch |e| {
-        std.log.warn("nanolight: X can't be watched ({s}): " ++ no_follow, .{@errorName(e)});
+        log.warn("nanolight: X can't be watched ({s}): " ++ no_follow, .{@errorName(e)});
         _ = xl.XCloseDisplay(d);
         return;
     };

@@ -8,6 +8,7 @@ const nanoui = @import("nanoui");
 const prefs = @import("prefs.zig");
 const paths = @import("paths.zig");
 const rates_table = @import("rates_table.zig");
+const log = @import("log.zig");
 const Rates = rates_table.Rates;
 const Status = rates_table.Status;
 const assert = std.debug.assert;
@@ -196,7 +197,7 @@ const Fetch = struct {
                 defer env.gpa.free(file);
                 std.Io.Dir.cwd()
                     .writeFile(env.io, .{ .sub_path = file, .data = r.body }) catch |err|
-                    std.log.warn("nanolight: the rates weren't kept in {s}: {t}", .{ file, err });
+                    log.warn("nanolight: the rates weren't kept in {s}: {t}", .{ file, err });
             }
         } else if (a.which + 1 < urls.len) {
             return live.fetch(env, a.which + 1);

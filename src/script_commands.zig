@@ -20,6 +20,7 @@ const paths = @import("paths.zig");
 const cachedIcon = @import("apps.zig").cachedIcon;
 const windows = @import("os.zig").windows;
 const test_apps = @import("test_apps.zig");
+const log = @import("log.zig");
 
 pub const Mode = enum { silent, compact, full_output, inline_ };
 
@@ -223,7 +224,7 @@ pub const List = struct {
 
     /// After the scans: sorted by title, and those memory left out logged.
     pub fn finish(l: *List) void {
-        if (l.lost > 0) std.log.warn(
+        if (l.lost > 0) log.warn(
             "nanolight: {d} script commands not listed: out of memory",
             .{l.lost},
         );
@@ -267,7 +268,7 @@ pub fn scan(l: *List, apps: []const app_scan.App, extra: []const []const u8) voi
     if (dir(l.gpa, io)) |root| {
         defer l.gpa.free(root);
         scanDir(l, io, apps, root);
-    } else |err| std.log.warn("nanolight: no script commands folder: {t}", .{err});
+    } else |err| log.warn("nanolight: no script commands folder: {t}", .{err});
     for (extra) |d| scanDir(l, io, apps, d);
 }
 
@@ -294,7 +295,7 @@ fn scanDir(l: *List, io: std.Io, apps: []const app_scan.App, root: []const u8) v
             // The header is in the first lines: the file's first 8 KB.
             var buf: [8192]u8 = undefined;
             const head = f.dir.readFile(s.io, f.entry.name, &buf) catch |err| {
-                std.log.warn("nanolight: {s} could not be read: {t}", .{ f.full, err });
+                log.warn("nanolight: {s} could not be read: {t}", .{ f.full, err });
                 return;
             };
             const m = parse(s.arena, head) orelse return;

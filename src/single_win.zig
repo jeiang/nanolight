@@ -3,6 +3,7 @@
 const std = @import("std");
 const single = @import("single.zig");
 const msg = @import("win_msg.zig");
+const log = @import("log.zig");
 
 var listener: ?single.Listener = null;
 
@@ -17,7 +18,7 @@ pub fn claim(io: std.Io, on: single.Listener) single.Older {
     const older = single.quitOlder(io, @This());
     listener = on;
     if (msg.ensure(.{ .command = heard }) == null)
-        std.log.warn("nanolight: no message window; `--toggle` can't reach this copy", .{});
+        log.warn("nanolight: no message window; `--toggle` can't reach this copy", .{});
     return older;
 }
 

@@ -6,6 +6,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const single = @import("single.zig");
+const log = @import("log.zig");
 const c = std.c;
 
 var listener: ?single.Listener = null;
@@ -63,11 +64,11 @@ pub fn claim(io: std.Io, on: single.Listener) single.Older {
     // that copy unreachable, by `--toggle` and by the next copy's quit. It
     // keeps the socket; this one runs beside it, deaf to commands.
     if (older == .stayed) {
-        std.log.warn("nanolight: an older copy kept running; `--toggle` goes to it", .{});
+        log.warn("nanolight: an older copy kept running; `--toggle` goes to it", .{});
         return older;
     }
     listen(on) catch |e|
-        std.log.warn("nanolight: `--toggle` can't reach this copy ({t})", .{e});
+        log.warn("nanolight: `--toggle` can't reach this copy ({t})", .{e});
     return older;
 }
 

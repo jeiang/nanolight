@@ -7,12 +7,13 @@
 //!   nanolight-check-config FILE...
 const std = @import("std");
 const config = @import("config.zig");
+const log = @import("log.zig");
 
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
     if (args.len < 2) {
-        std.log.err("usage: nanolight-check-config FILE...", .{});
+        log.err("usage: nanolight-check-config FILE...", .{});
         std.process.exit(2);
     }
     var failed: u32 = 0;
@@ -26,23 +27,23 @@ pub fn main(init: std.process.Init) !void {
 fn check(arena: std.mem.Allocator, io: std.Io, path: []const u8) bool {
     const cwd = std.Io.Dir.cwd();
     const text = cwd.readFileAlloc(io, path, arena, .limited(config.max_bytes)) catch |e| {
-        std.log.err("{s}: {t}", .{ path, e });
+        log.err("{s}: {t}", .{ path, e });
         return false;
     };
     var problem: config.Problem = .{};
     _ = config.parse(arena, text, &problem) catch |e| {
-        if (e == error.OutOfMemory) std.log.err("{s}: out of memory", .{path});
+        if (e == error.OutOfMemory) log.err("{s}: out of memory", .{path});
         if (problem.line > 0) {
-            std.log.err("{s}:{d}: {s}", .{ path, problem.line, problem.msg });
+            log.err("{s}:{d}: {s}", .{ path, problem.line, problem.msg });
         } else {
-            std.log.err("{s}: {s}", .{ path, problem.msg });
+            log.err("{s}: {s}", .{ path, problem.msg });
         }
         return false;
     };
     const ignored = problem.ignored.items;
-    for (ignored) |what| std.log.err("{s}: {s}", .{ path, what });
+    for (ignored) |what| log.err("{s}: {s}", .{ path, what });
     if (ignored.len > 0) {
-        std.log.err("{s}: the app would ignore {d} part(s), above", .{ path, ignored.len });
+        log.err("{s}: the app would ignore {d} part(s), above", .{ path, ignored.len });
         return false;
     }
     return true;

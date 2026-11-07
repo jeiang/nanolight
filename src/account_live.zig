@@ -12,6 +12,7 @@ const Quicklink = web.Quicklink;
 const keys = @import("keys.zig");
 const prefs = @import("prefs.zig");
 const App = @import("app.zig").App;
+const log = @import("log.zig");
 
 pub const off_text = "Sync: off (set [sync] in config.toml)";
 
@@ -65,7 +66,7 @@ pub const Sync = struct {
         const arena = gpa.create(std.heap.ArenaAllocator) catch return false;
         arena.* = .init(gpa);
         const keep = copyQuicklinks(arena.allocator(), list) catch |e| {
-            std.log.warn("nanolight: the quicklinks could not be listed: {t}", .{e});
+            log.warn("nanolight: the quicklinks could not be listed: {t}", .{e});
             arena.deinit();
             gpa.destroy(arena);
             return false;
@@ -103,7 +104,7 @@ fn copyQuicklinks(
     var keep: std.ArrayList(Quicklink) = .empty;
     for (list, 0..) |q, i| {
         if (settings.quicklinkProblem(i, q)) |why| {
-            std.log.warn("nanolight: quicklink \"{s}\": {s}; ignored", .{ q.name, why });
+            log.warn("nanolight: quicklink \"{s}\": {s}; ignored", .{ q.name, why });
             continue;
         }
         try keep.append(arena, .{

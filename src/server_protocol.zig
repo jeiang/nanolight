@@ -7,6 +7,7 @@ const assert = std.debug.assert;
 const builtin = @import("builtin");
 const protocol = @import("sync_protocol.zig");
 const settings = @import("settings.zig");
+const log = @import("log.zig");
 
 const sha256 = std.crypto.hash.sha2.Sha256;
 pub const Digest = [sha256.digest_length]u8;
@@ -182,7 +183,7 @@ fn write(io: Io, dir: Io.Dir, name: []const u8, bytes: []const u8) !void {
     @memcpy(buf[0..name.len], name);
     @memcpy(buf[name.len..][0..temp_suffix.len], temp_suffix);
     const tmp = buf[0 .. name.len + temp_suffix.len];
-    errdefer dir.deleteFile(io, tmp) catch |err| std.log.warn(
+    errdefer dir.deleteFile(io, tmp) catch |err| log.warn(
         "{s}: not removed: {t}",
         .{ tmp, err },
     );

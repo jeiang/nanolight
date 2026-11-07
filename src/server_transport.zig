@@ -10,6 +10,7 @@ const std = @import("std");
 const Io = std.Io;
 const protocol = @import("sync_protocol.zig");
 const server = @import("server_protocol.zig");
+const log = @import("log.zig");
 
 /// How long one connection may take, request and reply together.
 const exchange_deadline_ms = 10_000;
@@ -141,7 +142,7 @@ pub fn serveOne(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, serve: Se
             .body = body,
         });
     };
-    std.log.info(
+    log.info(
         "{s} {s} {d} {s}",
         .{ method, path, reply.status, if (reply.account.len > 0) reply.account else "-" },
     );

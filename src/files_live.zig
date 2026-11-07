@@ -14,6 +14,7 @@ const App = @import("app.zig").App;
 /// panel `entry` only there, so no other build reaches these.
 const spotlight = if (platform.files) @import("spotlight.zig") else @compileError("no file search");
 const icon_mac = if (platform.files) @import("icon_mac.zig") else @compileError("no file search");
+const log = @import("log.zig");
 
 pub const Files = struct {
     core: *App,
@@ -96,7 +97,7 @@ const FileAsk = struct {
             // Logged where mdfind failed.
             error.Unavailable => false,
             error.OutOfMemory => oom: {
-                std.log.warn("file search: out of memory", .{});
+                log.warn("file search: out of memory", .{});
                 break :oom false;
             },
         };

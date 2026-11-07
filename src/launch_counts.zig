@@ -2,6 +2,7 @@
 //! it (`Counts`) and a synced record carries it (settings.zig): one cap and
 //! one order for both.
 const std = @import("std");
+const log = @import("log.zig");
 const assert = std.debug.assert;
 
 /// At most this many counts are kept: the most opened.
@@ -89,7 +90,7 @@ pub const Counts = struct {
             const tab = std.mem.indexOfScalar(u8, line, '\t') orelse continue;
             const key = line[0..tab];
             const count = std.fmt.parseInt(u16, line[tab + 1 ..], 10) catch |err| {
-                std.log.warn("nanolight: launch count of {s} not read: {t}", .{ key, err });
+                log.warn("nanolight: launch count of {s} not read: {t}", .{ key, err });
                 continue;
             };
             if (count == 0) continue;

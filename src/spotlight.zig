@@ -7,6 +7,7 @@ const assert = std.debug.assert;
 const files = @import("files.zig");
 const paths = @import("paths.zig");
 const search = @import("search.zig");
+const log = @import("log.zig");
 const List = files.List;
 const max_path = files.max_path;
 const max_rows = files.max_rows;
@@ -160,7 +161,7 @@ fn collect(
         io,
         .{ .argv = argv, .stdin = .ignore, .stdout = .pipe, .stderr = .ignore },
     ) catch |e| {
-        std.log.warn("file search: mdfind didn't start: {t}", .{e});
+        log.warn("file search: mdfind didn't start: {t}", .{e});
         return error.Unavailable;
     };
     defer child.kill(io);
@@ -178,13 +179,13 @@ fn collect(
             .{ .fd = child.stdout.?.handle, .events = std.posix.POLL.IN, .revents = 0 },
         };
         const ready = std.posix.poll(&fds, @intCast(@min(remaining, poll_ms))) catch |e| {
-            std.log.warn("file search: waiting on mdfind failed: {t}", .{e});
+            log.warn("file search: waiting on mdfind failed: {t}", .{e});
             return error.Unavailable;
         };
         if (ready == 0) continue;
         const n = std.c.read(child.stdout.?.handle, &read_buf, read_buf.len);
         if (n < 0) {
-            std.log.warn("file search: reading mdfind failed: {t}", .{std.posix.errno(n)});
+            log.warn("file search: reading mdfind failed: {t}", .{std.posix.errno(n)});
             return error.Unavailable;
         }
         if (n == 0) {

@@ -2,6 +2,7 @@
 //! apps_linux.zig, apps_win.zig) share: the app row, where a scan puts the
 //! apps it finds, the folder walk, and the declarations a backend makes.
 const std = @import("std");
+const log = @import("log.zig");
 const assert = std.debug.assert;
 
 pub const App = struct {
@@ -170,7 +171,7 @@ pub fn walk(
 /// A folder a scan could not read, unless it is just not there.
 fn unread(path: []const u8, err: anyerror) void {
     if (err == error.FileNotFound or err == error.NotDir) return;
-    std.log.warn("nanolight: {s} could not be scanned: {t}", .{ path, err });
+    log.warn("nanolight: {s} could not be scanned: {t}", .{ path, err });
 }
 
 test "a walk looks in folders down to its depth, without recursion" {

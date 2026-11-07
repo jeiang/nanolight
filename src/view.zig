@@ -26,6 +26,7 @@ const Nanolight = nanolight.Nanolight;
 const app_name = @import("app_facts.zig").app_name;
 const Target = @import("host.zig").Target;
 const palette_mod = @import("palette.zig");
+const log = @import("log.zig");
 const Palette = palette_mod.Palette;
 const palette = palette_mod.palette;
 const Row = results.Row;
@@ -387,7 +388,7 @@ fn searchWith(s: *Nanolight, ql: u16, words: []const u8, in_panel: bool) void {
     if (ql >= links.len) return;
     const link = links[ql];
     const u = web.url(&s.preview_buf, link.url, words) orelse {
-        std.log.warn("nanolight: the address of {s} for these words is too long", .{link.name});
+        log.warn("nanolight: the address of {s} for these words is too long", .{link.name});
         return;
     };
     if (!in_panel or h.preview == null) return go(s, .{ .url = u });

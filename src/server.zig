@@ -9,6 +9,7 @@ const std = @import("std");
 const Io = std.Io;
 const server = @import("server_protocol.zig");
 const transport = @import("server_transport.zig");
+const log = @import("log.zig");
 
 /// The pause after a failed accept: its usual causes (no file descriptors or
 /// memory left) last a while, and retrying at once would spin.
@@ -85,27 +86,27 @@ pub fn main(init: std.process.Init) !void {
     );
     var listener = try addr.listen(init.io, .{ .reuse_address = true });
     defer listener.deinit(init.io);
-    std.log.info("listening on {s}, {d} account(s)", .{ listen, tokens.len });
+    log.info("listening on {s}, {d} account(s)", .{ listen, tokens.len });
     while (true) {
         const stream = listener.accept(init.io) catch |e| {
-            std.log.warn("accept: {t}", .{e});
+            log.warn("accept: {t}", .{e});
             try init.io.sleep(.fromMilliseconds(accept_pause_ms), .awake);
             continue;
         };
         defer stream.close(init.io);
         const serve: transport.Serve = .{ .state = state, .tokens = tokens };
         transport.serveOne(init.gpa, init.io, stream, serve) catch |e| {
-            std.log.warn("connection dropped: {t}", .{e});
+            log.warn("connection dropped: {t}", .{e});
         };
     }
 }
 
 fn fatal(msg: []const u8) error{Usage} {
-    std.log.err("{s}", .{msg});
+    log.err("{s}", .{msg});
     return error.Usage;
 }
 
 fn fatalf(comptime fmt: []const u8, args: anytype) error{Usage} {
-    std.log.err(fmt, args);
+    log.err(fmt, args);
     return error.Usage;
 }

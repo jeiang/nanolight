@@ -16,6 +16,9 @@ const onFirstQuicklink = support.onFirstQuicklink;
 const press = support.press;
 const retype = support.retype;
 
+/// A test run says only errors: a warning a test provokes says nothing.
+pub const std_options: std.Options = .{ .log_level = .err };
+
 test {
     _ = @import("search.zig");
     _ = @import("text.zig");

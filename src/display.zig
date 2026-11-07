@@ -12,6 +12,7 @@
 //! - X11: all three use X11.
 //! - None: clipboard history says why it is off; there is no hot key.
 const std = @import("std");
+const log = @import("log.zig");
 
 pub const Session = enum { wayland, x11, none };
 
@@ -22,7 +23,7 @@ var cached: ?Session = null;
 pub fn session() Session {
     if (cached) |s| return s;
     const s, const by = pick();
-    std.log.info("nanolight: display session: {t} (by {s})", .{ s, by });
+    log.info("nanolight: display session: {t} (by {s})", .{ s, by });
     cached = s;
     return s;
 }

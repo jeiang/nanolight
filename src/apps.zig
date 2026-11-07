@@ -90,7 +90,7 @@ pub const Index = struct {
 
     /// After the scans: the apps sorted, and those memory left out logged.
     pub fn finish(ix: *Index) void {
-        if (ix.lost > 0) std.log.warn("nanolight: {d} apps not listed: out of memory", .{ix.lost});
+        if (ix.lost > 0) log.warn("nanolight: {d} apps not listed: out of memory", .{ix.lost});
         ix.sort();
     }
 
@@ -143,6 +143,7 @@ pub fn score(query: []const u8, app: App) ?search.Match {
 }
 
 const test_apps = @import("test_apps.zig");
+const log = @import("log.zig");
 
 test "names are kept once and sorted" {
     const t = std.testing;
