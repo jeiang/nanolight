@@ -105,15 +105,15 @@ fn verify(v: *Verifier) !void {
 
 fn fetchAll(v: *const Verifier, base: []const u8) !void {
     const mac = [_][]const u8{
-        release.manifest_name,                 release.macos_disk_image,
-        release.macos_disk_image ++ ".sha256", release.macos_update,
+        release.manifest_name,                          release.macos_disk_image,
+        release.macos_disk_image ++ release.sum_suffix, release.macos_update,
     };
     for (mac) |name| try fetch(v, base, name);
     for (release.pc_platforms) |platform| {
         var buffer: [release.name_bytes_max]u8 = undefined;
         const name = platform.archiveName(&buffer);
         try fetch(v, base, name);
-        try fetch(v, base, try std.fmt.allocPrint(v.arena, "{s}.sha256", .{name}));
+        try fetch(v, base, try std.mem.concat(v.arena, u8, &.{ name, release.sum_suffix }));
     }
 }
 
@@ -171,7 +171,7 @@ fn feedSum(v: *const Verifier, parsed: anyerror!release.Manifest, name: []const 
 
 /// The `.sha256` published beside a file.
 fn sideSum(v: *const Verifier, name: []const u8) !?[]const u8 {
-    const side = try std.fmt.allocPrint(v.arena, "{s}.sha256", .{v.downloaded(name)});
+    const side = try std.mem.concat(v.arena, u8, &.{ v.downloaded(name), release.sum_suffix });
     const text = try Io.Dir.cwd().readFileAlloc(v.io, side, v.arena, .limited(1024));
     const want = release.parseSumLine(text) orelse "";
     const got = try release.sha256File(v.io, Io.Dir.cwd(), v.downloaded(name));

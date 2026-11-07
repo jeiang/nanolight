@@ -7,8 +7,9 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const motion = ui.motion;
 const Palette = @import("palette.zig").Palette;
+const app_facts = @import("app_facts.zig");
 
-pub const width: f32 = 680;
+pub const width: f32 = app_facts.panel_width;
 /// The room a window leaves round the panel for its shadow (`Fit.margin`).
 pub const shadow_margin: f32 = 40;
 pub const header_h = 58;

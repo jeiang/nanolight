@@ -23,6 +23,13 @@
 //!   zig build icon                       redraws the icon (Mac)
 const std = @import("std");
 const release = @import("tools/release.zig");
+const app_facts = @import("src/app_facts.zig");
+
+// A tool's module can't reach src/ by path, so release.zig can't import the
+// app's name: it spells it again, and the build holds the two together.
+comptime {
+    std.debug.assert(std.mem.eql(u8, release.app_name, app_facts.app_name));
+}
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -243,7 +250,6 @@ fn appModule(b: *std.Build, root: []const u8, options: AppOptions) *std.Build.Mo
     const asset_name = release.updateAsset(result.os.tag, result.cpu.arch, &asset);
     build_options.addOption([]const u8, "asset", asset_name);
     build_options.addOption([]const u8, "repo", release.repo);
-    build_options.addOption([]const u8, "macos_min", release.macos_min_text);
     const module = b.createModule(.{
         .root_source_file = b.path(root),
         .target = options.target,
@@ -402,11 +408,25 @@ fn addReleaseSteps(b: *std.Build, options: ReleaseOptions) void {
     if (icon) |run| run.setCwd(b.path("."));
 }
 
+/// A release tool's module: with the app's facts and its keys, which the
+/// Mac's verifiers rely on (tools/mac_verify.zig), as `app_facts` and `keys`.
 fn toolModule(b: *std.Build, root: []const u8) *std.Build.Module {
+    return hostModule(b, root, &.{
+        .{ .name = "app_facts", .module = hostModule(b, "src/app_facts.zig", &.{}) },
+        .{ .name = "keys", .module = hostModule(b, "src/keys.zig", &.{}) },
+    });
+}
+
+fn hostModule(
+    b: *std.Build,
+    root: []const u8,
+    imports: []const std.Build.Module.Import,
+) *std.Build.Module {
     return b.createModule(.{
         .root_source_file = b.path(root),
         .target = b.graph.host,
         .optimize = .ReleaseSafe,
+        .imports = imports,
     });
 }
 
