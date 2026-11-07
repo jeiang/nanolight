@@ -10,6 +10,11 @@ pub const Tray = struct {
         return .{ .item = try app.newTray(.{ .symbol = symbol, .tooltip = tooltip }) };
     }
 
+    /// The icon's glyph (SF Symbols), as the theme's.
+    pub fn setSymbol(t: Tray, name: []const u8) void {
+        t.item.setSymbol(name);
+    }
+
     pub fn visible(t: Tray) bool {
         const objc = nanoui.objc;
         return objc.msg(objc.BOOL, t.item, "isVisible", .{}) == objc.YES;

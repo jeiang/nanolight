@@ -36,7 +36,7 @@ pub fn adjust(o: *nanoui.WindowOptions) void {
 }
 
 /// The panel fills the window: no margin, and an entrance of its own.
-pub fn setup(w: *nanoui.Window) chrome.Fit {
+pub fn setup(w: *nanoui.Window, _: f32) chrome.Fit {
     // A Wayland session: nothing to follow here (the compositor says).
     if (display.session() == .x11) {
         window = w;
@@ -44,6 +44,9 @@ pub fn setup(w: *nanoui.Window) chrome.Fit {
     }
     return .{};
 }
+
+/// The panel draws its own corners here: nothing under it to round.
+pub fn corners(_: f32) void {}
 
 /// Whether the panel shows and has the keys: on X11 by the window
 /// manager's word.

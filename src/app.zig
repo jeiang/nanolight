@@ -115,7 +115,7 @@ pub const App = struct {
     /// the panel, its key, click-through, the page's keys.
     pub fn start(a: *App) void {
         const w = a.window.?;
-        a.s.fit = panel.setup(w);
+        a.s.fit = panel.setup(w, a.s.theme.radius());
         panel.resize(w, view.height(a.s), &a.preview);
         a.useKey(a.choice);
         a.through = .{ .window = w, .height = a.s.last_h };

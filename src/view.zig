@@ -63,7 +63,7 @@ pub fn window(s: *Nanolight, c: *ui.Context) void {
 fn panel(s: *Nanolight, c: *ui.Context) void {
     const p = palette(c.theme.dark, s.theme);
     const shell = ui.div(c).column().w(chrome.width)
-        .rounded(@import("linux_theme.zig").radius()).border(p.hair).clip();
+        .rounded(s.theme.radius()).border(p.hair).clip();
     // The system's shadow is off (its outline drew a black ring round
     // the panel): this one is soft, and outside the panel only, so the
     // glass under it stays clear.
@@ -103,7 +103,7 @@ fn draw(s: *Nanolight, c: *ui.Context, p: Palette) void {
             .back => s.leave(.closed),
         },
         .script => s.script_ui.draw(c, p),
-        .welcome => |o| if (o.draw(c, p)) |out| switch (out) {
+        .welcome => |o| if (o.draw(c, p, s.theme)) |out| switch (out) {
             .finish => |q| s.finishWelcome(q),
         },
     }
@@ -183,15 +183,17 @@ fn keys(s: *Nanolight, c: *ui.Context) void {
 fn header(s: *Nanolight, c: *ui.Context, p: Palette) bool {
     const bar = ui.div(c).row().wFull().h(chrome.header_h).px(18).gap(12).itemsCenter();
     defer bar.end();
-    ui.icon(
-        c,
-        "magnifyingglass",
-        .{ .size = 19, .weight = .medium, .color = p.sub, .frame = 22 },
-    );
+    // The theme's glyph, in its hue; System's grey lens otherwise.
+    ui.icon(c, s.theme.glyph(), .{
+        .size = 19,
+        .weight = .medium,
+        .color = s.theme.hue(c.theme.dark) orelse p.sub,
+        .frame = 22,
+    });
     const r = ui.textField(c, &s.query.field, .{
         .suggestion = completion(s),
         .bare = true,
-        .size = 21,
+        .size = s.theme.fieldSize(),
         .width = .fill,
         .placeholder = "Search apps, do math, search the web…",
         .placeholder_color = p.placeholder(),

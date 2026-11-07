@@ -32,14 +32,14 @@ pub fn adjust(o: *nanoui.WindowOptions) void {
 
 /// The glass goes to the panel's height at the first `resize`. The panel
 /// keeps a shadow's margin, and lets the window fade it in (`shown`).
-pub fn setup(w: *nanoui.Window) chrome.Fit {
+pub fn setup(w: *nanoui.Window, radius: f32) chrome.Fit {
     // A menu bar app: no Dock icon, no menu bar of its own.
     const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     _ = objc.msg(objc.BOOL, app, "setActivationPolicy:", .{@as(objc.NSInteger, 1)});
     // The panel's own shadow, not the system's: a shadowed window in dark
     // mode gets a hard black outline round its pixels.
     objc.msg(void, w.nswindow, "setHasShadow:", .{objc.NO});
-    glass = backdrop(w, 18);
+    glass = backdrop(w, radius);
     // Pinyin's candidates over the panel, not behind it (#39).
     if (w.surface) |surface| {
         _ = ime_level.answerWindowLevel(surface.nsview);
@@ -130,6 +130,13 @@ fn afterFrame(_: ?*anyopaque, s: *nanoui.Surface) bool {
     wanted = null;
     page_to = null;
     return true;
+}
+
+/// The glass's corners to the theme's, as the panel's follow it.
+pub fn corners(radius: f32) void {
+    const g = glass orelse return;
+    const layer = objc.msg(?objc.Object, g, "layer", .{}) orelse return;
+    objc.msg(void, layer, "setCornerRadius:", .{@as(f64, radius)});
 }
 
 pub fn showing(w: *nanoui.Window) bool {

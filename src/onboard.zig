@@ -22,6 +22,7 @@ const platform = @import("platform.zig");
 const Choice = keys.Choice;
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;
+const Theme = @import("palette.zig").Theme;
 const Toggle = @import("toggles.zig").Toggle;
 
 pub const Step = enum { key, try_it, done };
@@ -128,7 +129,7 @@ pub const Onboard = struct {
         };
     }
 
-    pub fn draw(o: *Onboard, c: *ui.Context, p: Palette) ?Outcome {
+    pub fn draw(o: *Onboard, c: *ui.Context, p: Palette, theme: Theme) ?Outcome {
         const enter = c.input.key == .enter;
         // Return moves it on: what changed shows in this frame.
         if (enter) c.changed = true;
@@ -143,7 +144,7 @@ pub const Onboard = struct {
         switch (o.step) {
             .key => o.keyStep(c, p, enter),
             .try_it => o.tryStep(c, p),
-            .done => out = o.doneStep(c, p, enter),
+            .done => out = o.doneStep(c, p, theme, enter),
         }
         page.end();
         o.footer(c, p);
@@ -378,7 +379,7 @@ pub const Onboard = struct {
         ui.text(c, str, .{ .size = 12.5, .weight = .medium, .color = if (on) p.text else p.sub });
     }
 
-    fn doneStep(o: *Onboard, c: *ui.Context, p: Palette, enter: bool) ?Outcome {
+    fn doneStep(o: *Onboard, c: *ui.Context, p: Palette, theme: Theme, enter: bool) ?Outcome {
         if (enter) return .{ .finish = "" };
         if (chrome.numberKey(c, examples.len)) |i| return .{ .finish = examples[i].q };
         {
@@ -426,7 +427,7 @@ pub const Onboard = struct {
             const r = ui.div(c).row().gap(10).itemsCenter();
             defer r.end();
             const tile = ui.div(c).size(26, 22).rounded(6).bg(p.tile).center();
-            ui.icon(c, "magnifyingglass", .{ .size = 12, .weight = .semibold, .color = p.text });
+            ui.icon(c, theme.glyph(), .{ .size = 12, .weight = .semibold, .color = p.text });
             tile.end();
             ui.text(
                 c,

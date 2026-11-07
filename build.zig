@@ -238,10 +238,11 @@ fn addApp(b: *std.Build, options: AppOptions) *std.Build.Step.Compile {
 /// A module of the app's code (the program, its tests, the clipboard probe):
 /// nanoui, the build options, and what the platform links.
 fn appModule(b: *std.Build, root: []const u8, options: AppOptions) *std.Build.Module {
-    const nanoui = b.dependency("nanoui", .{
+    const nanoui_dep = b.dependency("nanoui", .{
         .target = options.target,
         .optimize = options.optimize,
-    }).module("nanoui");
+    });
+    const nanoui = nanoui_dep.module("nanoui");
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", options.version);
     build_options.addOption(bool, "nix_managed", options.nix_managed);
@@ -257,6 +258,13 @@ fn appModule(b: *std.Build, root: []const u8, options: AppOptions) *std.Build.Mo
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     });
     module.addOptions("build_options", build_options);
+    // nanoui's own icons, drawn off the Mac, as text: a theme's glyph must
+    // be one (as a .zig file it would belong to nanoui's module too).
+    const icons = b.addWriteFiles().addCopyFile(
+        nanoui_dep.path("src/ui/icons.zig"),
+        "icons.txt",
+    );
+    module.addAnonymousImport("nanoui_icons", .{ .root_source_file = icons });
     linkPlatform(module, options.target.result.os.tag);
     return module;
 }

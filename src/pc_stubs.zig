@@ -33,6 +33,7 @@ pub const Tray = struct {
     pub fn make(_: *nanoui.App, _: []const u8, _: []const u8) !Tray {
         return .{};
     }
+    pub fn setSymbol(_: Tray, _: []const u8) void {}
     pub fn visible(_: Tray) bool {
         return false;
     }
