@@ -6,26 +6,34 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
-const view = @import("view.zig");
+const chrome = @import("chrome.zig");
+const after = @import("after.zig");
 
 /// The system's glass under the panel, which the window's views keep.
 var glass: ?objc.Object = null;
 
-pub fn adjust(o: *nanoui.WindowOptions, hidden: bool, h: f32) void {
-    o.width = if (hidden) view.width else view.width + 2 * view.shadow_margin;
-    o.height = if (hidden) h else view.max_height + 2 * view.shadow_margin;
+/// Before the app: nothing on the Mac.
+pub fn prepare() void {}
+
+/// The window, from the panel's size: a shadow's margin bigger, as tall as
+/// the panel can be.
+pub fn adjust(o: *nanoui.WindowOptions) void {
+    o.width = chrome.width + 2 * chrome.shadow_margin;
+    o.height = chrome.max_height + 2 * chrome.shadow_margin;
     o.title_bar = .popover;
 }
 
-pub fn setup(app: *nanoui.App, w: *nanoui.Window, s: *view.Nanolight, h: f32) void {
+/// The glass goes to the panel's height at the first `resize`. The panel
+/// keeps a shadow's margin, and lets the window fade it in (`shown`).
+pub fn setup(w: *nanoui.Window) chrome.Fit {
     // A menu bar app: no Dock icon, no menu bar of its own.
-    _ = objc.msg(objc.BOOL, app.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 1)});
+    const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    _ = objc.msg(objc.BOOL, app, "setActivationPolicy:", .{@as(objc.NSInteger, 1)});
     // The panel's own shadow, not the system's: a shadowed window in dark
     // mode gets a hard black outline round its pixels.
-    s.margin = view.shadow_margin;
-    s.window_fades = true;
     objc.msg(void, w.nswindow, "setHasShadow:", .{objc.NO});
-    glass = backdrop(w, 18, h);
+    glass = backdrop(w, 18);
+    return .{ .margin = chrome.shadow_margin, .window_fades = true };
 }
 
 /// A fifth of the way down the main screen, centered.
@@ -38,8 +46,8 @@ pub fn place(w: *nanoui.Window) void {
     const top = ph - (f.origin.y + f.size.height);
     // The panel there; the window is the shadow's margin bigger.
     w.setPosition(
-        f.origin.x + (f.size.width - view.width) / 2 - view.shadow_margin,
-        top + f.size.height * 0.2 - view.shadow_margin,
+        f.origin.x + (f.size.width - chrome.width) / 2 - chrome.shadow_margin,
+        top + f.size.height * 0.2 - chrome.shadow_margin,
     );
     // Unseen as it orders in: it still holds the frame it hid with, until
     // the next one is drawn (issue #9). `shown` fades it in.
@@ -53,10 +61,12 @@ pub fn resize(_: *nanoui.Window, h: f32) void {
     objc.msg(void, g, "setFrame:", .{glassFrame(h)});
 }
 
-/// Whether the panel has the keys.
-pub fn focused(w: *nanoui.Window) bool {
-    return w.isFocused();
+pub fn showing(w: *nanoui.Window) bool {
+    return w.isVisible() and w.isFocused();
 }
+
+/// The panel lost the keys: the popover hides itself.
+pub fn lostKeys(_: *nanoui.Window) void {}
 
 /// After `show`: the window fades in, the system's glass and the panel
 /// together. The panel's entrance couldn't be drawn over that glass (it
@@ -76,23 +86,24 @@ pub fn shown(w: *nanoui.Window) void {
         .{@as(f64, 1)},
     );
     objc.msg(void, cls, "endGrouping", .{});
-    // Whole once the fade is over, whatever became of it: a launcher
-    // left see-through would be worse than one that didn't fade.
-    nanoui.App.after(@intFromFloat(fade_s * 1000 + 80), w, struct {
-        fn f(ctx: ?*anyopaque) callconv(.c) void {
-            const win: *nanoui.Window = @ptrCast(@alignCast(ctx.?));
-            if (win.isVisible()) objc.msg(void, win.nswindow, "setAlphaValue:", .{@as(f64, 1)});
-        }
-    }.f);
+    after.oneShot(fade_settle_ms, w, settle);
 }
 
 const fade_s: f64 = 0.12;
+/// Whole once the fade is over, whatever became of it (AppKit's animation
+/// may not finish): a launcher left see-through would be worse than one
+/// that didn't fade. A little after the fade, so as not to cut it short.
+const fade_settle_ms: u64 = @as(u64, @intFromFloat(fade_s * 1000)) + 80;
+
+fn settle(w: *nanoui.Window) void {
+    if (w.isVisible()) objc.msg(void, w.nswindow, "setAlphaValue:", .{@as(f64, 1)});
+}
 
 /// Puts the system's vibrancy under the panel (NSVisualEffectView, as
-/// launchers use), `height` tall, the shadow's margin in. Not
-/// NSGlassEffectView: on macOS 27 it draws an opaque 1-pixel black line
-/// just outside its sides, which read as black edges round the panel.
-fn backdrop(w: *nanoui.Window, radius: f64, height: f32) ?objc.Object {
+/// launchers use), the shadow's margin in. Not NSGlassEffectView: on
+/// macOS 27 it draws an opaque 1-pixel black line just outside its sides,
+/// which read as black edges round the panel.
+fn backdrop(w: *nanoui.Window, radius: f64) ?objc.Object {
     const surface = w.surface orelse return null;
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -102,7 +113,6 @@ fn backdrop(w: *nanoui.Window, radius: f64, height: f32) ?objc.Object {
     objc.msg(void, v, "setMaterial:", .{@as(objc.NSInteger, 6)});
     objc.msg(void, v, "setBlendingMode:", .{@as(objc.NSInteger, 0)}); // behind the window
     objc.msg(void, v, "setState:", .{@as(objc.NSInteger, 1)}); // always active
-    // Rounded as the panel is.
     objc.msg(void, v, "setWantsLayer:", .{objc.YES});
     if (objc.msg(?objc.Object, v, "layer", .{})) |layer| {
         objc.msg(void, layer, "setCornerRadius:", .{radius});
@@ -112,12 +122,11 @@ fn backdrop(w: *nanoui.Window, radius: f64, height: f32) ?objc.Object {
     objc.release(v);
     // In a flipped host view, from the top; the window never resizes.
     objc.msg(void, v, "setAutoresizingMask:", .{@as(objc.NSUInteger, 0)});
-    objc.msg(void, v, "setFrame:", .{glassFrame(height)});
     return v;
 }
 
 /// Where the glass goes: under the panel, the shadow's margin in.
 fn glassFrame(h: f32) objc.CGRect {
-    const m = view.shadow_margin;
-    return .{ .origin = .{ .x = m, .y = m }, .size = .{ .width = view.width, .height = h } };
+    const m = chrome.shadow_margin;
+    return .{ .origin = .{ .x = m, .y = m }, .size = .{ .width = chrome.width, .height = h } };
 }

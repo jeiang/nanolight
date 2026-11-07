@@ -1,24 +1,18 @@
-//! Opening at login. Mac: the system's login items (SMAppService, macOS 13
-//! and later), which need the app to run from its bundle. Windows: a value
-//! under HKCU's Run key. Linux: an XDG autostart entry
-//! (~/.config/autostart/nanolight.desktop). `set` null only asks.
+//! Opening at login, each OS's (shell.zig's `Login`). Mac: the system's
+//! login items (SMAppService, macOS 13 and later), which need the app to
+//! run from its bundle. Windows: a value under HKCU's Run key. Linux: an
+//! XDG autostart entry (~/.config/autostart/nanolight.desktop). `enabled`
+//! says whether it opens at login; `set` changes it first.
 const std = @import("std");
-const builtin = @import("builtin");
+const paths = @import("paths.zig");
 const nanoui = @import("nanoui");
+const app_name = @import("app_facts.zig").app_name;
 
-pub fn login(set: ?bool) bool {
-    return switch (builtin.os.tag) {
-        .macos => Mac.login(set),
-        .windows => Windows.login(set),
-        else => Linux.login(set),
-    };
-}
-
-const Mac = struct {
+pub const Mac = struct {
     const objc = nanoui.objc;
     extern "c" fn objc_getClass(name: [*:0]const u8) ?objc.Class;
 
-    fn login(set: ?bool) bool {
+    pub fn enabled(_: std.Io, set: ?bool) bool {
         const cls = objc_getClass("SMAppService") orelse return false;
         const svc = objc.msg(objc.Object, cls, "mainAppService", .{});
         if (set) |on| _ = objc.msg(
@@ -31,11 +25,11 @@ const Mac = struct {
     }
 };
 
-const Windows = struct {
+pub const Windows = struct {
     const L = std.unicode.utf8ToUtf16LeStringLiteral;
     const hkcu: *anyopaque = @ptrFromInt(0x80000001);
     const run_key = L("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-    const value = L("Nanolight");
+    const value = L(app_name);
     const reg_sz: u32 = 1;
     const rrf_rt_reg_sz: u32 = 2;
     extern "advapi32" fn RegSetKeyValueW(
@@ -66,7 +60,7 @@ const Windows = struct {
         size: u32,
     ) callconv(.winapi) u32;
 
-    fn login(set: ?bool) bool {
+    pub fn enabled(_: std.Io, set: ?bool) bool {
         if (set) |on| {
             if (on) {
                 // "C:\...\nanolight.exe", quoted for the spaces in paths.
@@ -83,28 +77,10 @@ const Windows = struct {
     }
 };
 
-const Linux = struct {
-    fn io() std.Io {
-        return std.Io.Threaded.global_single_threaded.io();
-    }
-
-    fn entryPath(buf: []u8) ?[]const u8 {
-        if (std.c.getenv("XDG_CONFIG_HOME")) |d| return std.fmt.bufPrint(
-            buf,
-            "{s}/autostart/nanolight.desktop",
-            .{std.mem.span(d)},
-        ) catch null;
-        const home = std.c.getenv("HOME") orelse return null;
-        return std.fmt.bufPrint(
-            buf,
-            "{s}/.config/autostart/nanolight.desktop",
-            .{std.mem.span(home)},
-        ) catch null;
-    }
-
-    fn login(set: ?bool) bool {
+pub const Linux = struct {
+    pub fn enabled(io: std.Io, set: ?bool) bool {
         var buf: [1024]u8 = undefined;
-        const path = entryPath(&buf) orelse return false;
+        const path = paths.autostartEntry(&buf) orelse return false;
         const cwd = std.Io.Dir.cwd();
         if (set) |on| {
             if (on) {
@@ -114,20 +90,20 @@ const Linux = struct {
                 var entry: [2048]u8 = undefined;
                 const text = std.fmt.bufPrint(
                     &entry,
-                    "[Desktop Entry]\nType=Application\nName=Nanolight\nComment=A launcher, on " ++
-                        "Alt Space\nExec=\"{s}\"\nIcon=nanolight\n" ++
+                    "[Desktop Entry]\nType=Application\nName=" ++ app_name ++
+                        "\nComment=A launcher, on Alt Space\nExec=\"{s}\"\nIcon=nanolight\n" ++
                         "X-GNOME-Autostart-enabled=true\nNoDisplay=true\n",
                     .{exe[0..@intCast(n)]},
                 ) catch return false;
                 // best effort: without the folder the write below fails and reports it off.
-                if (std.fs.path.dirname(path)) |dir| cwd.createDirPath(io(), dir) catch {};
-                cwd.writeFile(io(), .{ .sub_path = path, .data = text }) catch return false;
+                if (std.fs.path.dirname(path)) |dir| cwd.createDirPath(io, dir) catch {};
+                cwd.writeFile(io, .{ .sub_path = path, .data = text }) catch return false;
             } else {
                 // best effort: the access below reports the entry if it is still there.
-                cwd.deleteFile(io(), path) catch {};
+                cwd.deleteFile(io, path) catch {};
             }
         }
-        cwd.access(io(), path, .{}) catch return false;
+        cwd.access(io, path, .{}) catch return false;
         return true;
     }
 };

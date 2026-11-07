@@ -5,27 +5,37 @@
 //! by its Exec line run here. Its icon is found in the icon themes and
 //! drawn by gdk-pixbuf (SVG too) at 64 pixels.
 const std = @import("std");
-const apps = @import("apps.zig");
-const Index = apps.Index;
+const nanoui = @import("nanoui");
+const app_scan = @import("app_scan.zig");
+const dl = @import("dl.zig");
+const log = @import("log.zig");
+const Sink = app_scan.Sink;
+const Env = std.process.Environ.Map;
 
-fn env(name: [*:0]const u8) ?[]const u8 {
-    const v = std.c.getenv(name) orelse return null;
-    return std.mem.span(v);
-}
+pub const starters: []const []const u8 = &.{
+    "Files",
+    "Firefox",
+    "Terminal",
+    "Settings",
+    "Text Editor",
+};
 
 /// The data directories, most personal first.
-fn dataDirs(buf: *[16][]const u8, home_buf: []u8) [][]const u8 {
+fn dataDirs(env: *const Env, buf: *[16][]const u8, home_buf: []u8) [][]const u8 {
     var n: usize = 0;
-    if (env("XDG_DATA_HOME")) |d| {
+    if (env.get("XDG_DATA_HOME")) |d| {
         buf[n] = d;
         n += 1;
-    } else if (env("HOME")) |h| if (std.fmt.bufPrint(home_buf, "{s}/.local/share", .{h})) |p| {
-        buf[n] = p;
-        n += 1;
-    } else |_| {};
+    } else if (env.get("HOME")) |h| {
+        // A home past 512 bytes has no data directory of its own.
+        if (std.fmt.bufPrint(home_buf, "{s}/.local/share", .{h})) |p| {
+            buf[n] = p;
+            n += 1;
+        } else |_| {}
+    }
     var it = std.mem.tokenizeScalar(
         u8,
-        env("XDG_DATA_DIRS") orelse "/usr/local/share:/usr/share",
+        env.get("XDG_DATA_DIRS") orelse "/usr/local/share:/usr/share",
         ':',
     );
     while (it.next()) |d| if (n < buf.len - 2) {
@@ -37,33 +47,37 @@ fn dataDirs(buf: *[16][]const u8, home_buf: []u8) [][]const u8 {
     return buf[0..n];
 }
 
-pub fn scan(ix: *Index, io: std.Io) void {
+pub fn scan(sink: Sink, io: std.Io, env: *const Env) void {
     var dirs: [16][]const u8 = undefined;
     var home: [512]u8 = undefined;
-    for (dataDirs(&dirs, &home)) |d| {
+    for (dataDirs(env, &dirs, &home)) |d| {
         var p: [1024]u8 = undefined;
+        // A data directory past 1 KB is passed over.
         const folder = std.fmt.bufPrint(&p, "{s}/applications", .{d}) catch continue;
-        scanDir(ix, io, folder, 1);
+        scanDir(sink, io, folder, 1);
     }
-    scanDir(ix, io, "/var/lib/snapd/desktop/applications", 0);
+    scanDir(sink, io, "/var/lib/snapd/desktop/applications", 0);
 }
 
-pub fn scanDir(ix: *Index, io: std.Io, path: []const u8, depth: u8) void {
+pub fn scanDir(sink: Sink, io: std.Io, path: []const u8, depth: u8) void {
     const Scan = struct {
-        ix: *Index,
+        sink: Sink,
         io: std.Io,
 
-        fn visit(s: @This(), f: apps.Found) apps.Step {
+        fn visit(s: @This(), f: app_scan.Found) app_scan.Step {
             if (!std.mem.endsWith(u8, f.entry.name, ".desktop")) return .descend;
             var text: [16 * 1024]u8 = undefined;
-            const bytes = f.dir.readFile(s.io, f.entry.name, &text) catch return .next;
+            const bytes = f.dir.readFile(s.io, f.entry.name, &text) catch |err| {
+                log.warn("nanolight: {s} could not be read: {t}", .{ f.full, err });
+                return .next;
+            };
             const entry = parse(bytes);
             if (!entry.shown()) return .next;
-            s.ix.addIn(entry.name, f.full, "Application") catch return .stop;
+            s.sink.add(entry.name, f.full, "Application");
             return .next;
         }
     };
-    apps.walk(io, path, depth, Scan{ .ix = ix, .io = io }, Scan.visit);
+    app_scan.walk(io, path, depth, Scan{ .sink = sink, .io = io }, Scan.visit);
 }
 
 pub const Entry = struct {
@@ -144,8 +158,9 @@ pub fn argv(exec: []const u8, store: []u8, out: [][]const u8) [][]const u8 {
     return out[0..n];
 }
 
-/// Opens the app of the desktop file at `path`.
+/// Opens the app of the desktop file at `path`, else the file or folder.
 pub fn launch(io: std.Io, path: []const u8) bool {
+    if (!std.mem.endsWith(u8, path, ".desktop")) return nanoui.shell.openPath(path);
     if (spawn(io, &.{ "gio", "launch", path })) return true;
     var text: [16 * 1024]u8 = undefined;
     const bytes = std.Io.Dir.cwd().readFile(io, path, &text) catch return false;
@@ -211,12 +226,12 @@ const sizes = [_][]const u8{
 const themes = [_][]const u8{ "hicolor", "Adwaita", "breeze", "Papirus" };
 
 /// The icon file for `name` (a path, or a name in the icon themes).
-fn findIcon(io: std.Io, name: []const u8, out: []u8) ?[]const u8 {
+fn findIcon(io: std.Io, env: *const Env, name: []const u8, out: []u8) ?[]const u8 {
     const cwd = std.Io.Dir.cwd();
     if (std.fs.path.isAbsolute(name)) return if (cwd.access(io, name, .{})) |_| name else |_| null;
     var dirs: [16][]const u8 = undefined;
     var home: [512]u8 = undefined;
-    const data = dataDirs(&dirs, &home);
+    const data = dataDirs(env, &dirs, &home);
     for (themes) |theme| for (sizes) |size| for (data) |d| for ([_][]const u8{
         "png",
         "svg",
@@ -265,28 +280,22 @@ var pb_tried = false;
 fn pixbuf() ?Pb {
     if (pb_tried) return pb;
     pb_tried = true;
-    const lib = std.c.dlopen("libgdk_pixbuf-2.0.so.0", .{ .NOW = true }) orelse return null;
-    const gobj = std.c.dlopen("libgobject-2.0.so.0", .{ .NOW = true }) orelse return null;
-    const glib = std.c.dlopen("libglib-2.0.so.0", .{ .NOW = true }) orelse return null;
-    var v: Pb = undefined;
-    inline for (@typeInfo(Pb).@"struct".field_names) |name| {
-        const from = if (std.mem.startsWith(u8, name, "gdk"))
-            lib
-        else if (std.mem.eql(u8, name, "g_free")) glib else gobj;
-        @field(v, name) = @ptrCast(@alignCast(std.c.dlsym(from, name) orelse return null));
-    }
-    pb = v;
-    return v;
+    pb = dl.table(Pb, &.{
+        .{ .name = "libgdk_pixbuf-2.0.so.0" },
+        .{ .name = "libgobject-2.0.so.0" },
+        .{ .name = "libglib-2.0.so.0" },
+    }, "only PNG app icons show");
+    return pb;
 }
 
 /// The icon of the desktop file at `path`, as a 64-pixel PNG.
-pub fn icon(gpa: std.mem.Allocator, io: std.Io, path: []const u8) ?[]u8 {
+pub fn icon(gpa: std.mem.Allocator, io: std.Io, env: *const Env, path: []const u8) ?[]u8 {
     var text: [16 * 1024]u8 = undefined;
     const bytes = std.Io.Dir.cwd().readFile(io, path, &text) catch return null;
     const e = parse(bytes);
     if (e.icon.len == 0) return null;
     var buf: [1024]u8 = undefined;
-    const file = findIcon(io, e.icon, &buf) orelse return null;
+    const file = findIcon(io, env, e.icon, &buf) orelse return null;
     const p = pixbuf() orelse {
         if (!std.mem.endsWith(u8, file, ".png")) return null;
         return std.Io.Dir.cwd().readFileAlloc(io, file, gpa, .limited(4 << 20)) catch null;

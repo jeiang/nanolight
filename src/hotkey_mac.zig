@@ -2,6 +2,7 @@
 //! Carbon's hot keys, which every launcher uses (they need no
 //! Accessibility permission, and the keys go to no other app).
 const std = @import("std");
+const keys = @import("keys.zig");
 
 const EventTypeSpec = extern struct { class: u32, kind: u32 };
 const HotKeyId = extern struct { signature: u32, id: u32 };
@@ -30,17 +31,7 @@ extern "c" fn RegisterEventHotKey(
 ) i32;
 extern "c" fn UnregisterEventHotKey(ref: ?*anyopaque) i32;
 
-/// Carbon's modifier bits.
-pub const cmd: u32 = 1 << 8;
-pub const shift: u32 = 1 << 9;
-pub const option: u32 = 1 << 11;
-pub const control: u32 = 1 << 12;
-/// kVK_Space.
-pub const space: u32 = 49;
-
-pub const Pressed = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque) void };
-
-var pressed: ?Pressed = null;
+var pressed: ?keys.Pressed = null;
 var installed = false;
 var current: ?*anyopaque = null;
 
@@ -49,11 +40,10 @@ fn handle(_: ?*anyopaque, _: ?*anyopaque, _: ?*anyopaque) callconv(.c) i32 {
     return 0;
 }
 
-/// Calls `on` on the main thread each time `key` with `modifiers` is
-/// pressed. One hot key per app: registering again replaces it. Carbon
-/// grants it even when another app holds the same keys (`shortcut.zig`
-/// looks for those).
-pub fn registerKey(key: u32, modifiers: u32, on: Pressed) !void {
+/// Calls `on` on the main thread each time `choice` is pressed. One hot
+/// key per app: registering again replaces it. Carbon grants it even when
+/// another app holds the same keys (`shortcut_holders.zig` looks for those).
+pub fn register(choice: keys.Choice, on: keys.Pressed) !void {
     pressed = on;
     if (!installed) {
         const spec = [_]EventTypeSpec{
@@ -72,8 +62,8 @@ pub fn registerKey(key: u32, modifiers: u32, on: Pressed) !void {
     if (current) |r| _ = UnregisterEventHotKey(r);
     current = null;
     if (RegisterEventHotKey(
-        key,
-        modifiers,
+        choice.code,
+        choice.mods,
         .{ .signature = fourcc("nsPL"), .id = 1 },
         GetApplicationEventTarget(),
         0,
@@ -81,15 +71,16 @@ pub fn registerKey(key: u32, modifiers: u32, on: Pressed) !void {
     ) != 0) return error.HotKeyTaken;
 }
 
-/// `choice`'s key with its modifiers (hotkey.zig).
-pub fn register(choice: @import("shortcut.zig").Choice, on: Pressed) !void {
-    return registerKey(choice.code, choice.mods, on);
-}
-
 /// Gives the key back (while another is recorded); `register` takes one again.
 pub fn unregister() void {
     if (current) |r| _ = UnregisterEventHotKey(r);
     current = null;
+}
+
+/// None: Carbon grants a key another app holds (`register`), so the
+/// system's shortcut table says instead (shortcut_holders.zig).
+pub fn taken(_: keys.Choice) bool {
+    return false;
 }
 
 fn fourcc(comptime s: *const [4]u8) u32 {

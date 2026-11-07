@@ -10,30 +10,32 @@
 //!     # @raycast.argument1 { "type": "text", "placeholder": "Name" }
 //!
 //! Scripts dropped in `<data dir>/script-commands` (a folder down too) are
-//! rows among the apps: `script:<file>`, their folder the package's name.
+//! rows among the apps (`List`), their folder the package's name.
 //! script_run.zig runs one and shows what it prints.
 const std = @import("std");
-const builtin = @import("builtin");
 const nanoui = @import("nanoui");
-const Index = @import("apps.zig").Index;
-const windows = builtin.os.tag == .windows;
-
-pub const prefix = "script:";
-/// The row that opens the scripts' folder.
-pub const folder_path = "script-folder:";
+const app_scan = @import("app_scan.zig");
+const model = @import("raycast_model.zig");
+const paths = @import("paths.zig");
+const cachedIcon = @import("apps.zig").cachedIcon;
+const windows = @import("os.zig").windows;
+const test_apps = @import("test_apps.zig");
+const log = @import("log.zig");
 
 pub const Mode = enum { silent, compact, full_output, inline_ };
 
-/// `@raycast.argument1` to `@raycast.argument3`.
-pub const max_args = 3;
-
 pub const Argument = struct {
-    /// "text", "password" or "dropdown".
+    /// "text", "password" or "dropdown" (`kind`).
     type: []const u8 = "text",
     placeholder: []const u8 = "",
     optional: bool = false,
     percentEncoded: bool = false,
     data: []const struct { title: []const u8 = "", value: []const u8 = "" } = &.{},
+
+    /// Its type; one not known is text.
+    pub fn kind(a: Argument) model.Field.Kind {
+        return std.meta.stringToEnum(model.Field.Kind, a.type) orelse .text;
+    }
 };
 
 pub const Meta = struct {
@@ -44,7 +46,7 @@ pub const Meta = struct {
     description: []const u8 = "",
     cwd: []const u8 = "",
     confirm: bool = false,
-    args: [max_args]?Argument = @splat(null),
+    args: [model.max_args]?Argument = @splat(null),
     schema: bool = false,
 
     pub fn argCount(m: *const Meta) usize {
@@ -55,7 +57,6 @@ pub const Meta = struct {
         return n;
     }
 
-    /// A known header key's value.
     fn set(m: *Meta, key: HeaderKey, value: []const u8) void {
         switch (key) {
             .schemaVersion => m.schema = true,
@@ -124,14 +125,14 @@ pub fn parse(arena: std.mem.Allocator, bytes: []const u8) ?Meta {
 /// `argumentN`'s slot in `Meta.args`: N from 1 to `max_args`.
 fn argumentSlot(key: []const u8) ?usize {
     // One digit names every slot.
-    comptime std.debug.assert(max_args <= 9);
+    comptime std.debug.assert(model.max_args <= 9);
     const argument = "argument";
     if (!std.mem.startsWith(u8, key, argument)) return null;
     const digits = key[argument.len..];
     if (digits.len != 1) return null;
     const n = std.fmt.charToDigit(digits[0], 10) catch return null;
     if (n < 1) return null;
-    if (n > max_args) return null;
+    if (n > model.max_args) return null;
     return n - 1;
 }
 
@@ -142,82 +143,168 @@ fn parseMode(value: []const u8) Mode {
     return .full_output;
 }
 
-fn io() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
-
 /// `<data dir>/script-commands`, made if missing. Caller frees it.
-pub fn dir(gpa: std.mem.Allocator) ![]u8 {
-    const data = try nanoui.path(gpa, .data, "Nanolight");
-    defer gpa.free(data);
-    const d = try std.fs.path.join(gpa, &.{ data, "script-commands" });
-    // best effort: a folder that can't be made just lists no scripts.
-    std.Io.Dir.cwd().createDirPath(io(), d) catch {};
-    return d;
+pub fn dir(gpa: std.mem.Allocator, io: std.Io) ![]u8 {
+    return paths.subdir(gpa, io, "script-commands", .default_dir);
 }
 
-/// Adds each script command in the folder and in `extra` (a folder down
-/// too) to `ix`, and the row that opens the folder.
-pub fn scan(ix: *Index, gpa: std.mem.Allocator, extra: []const []const u8) void {
-    // best effort: only memory can fail here, and the scripts still list.
-    ix.addIn("Script Commands Folder", folder_path, "Raycast") catch {};
-    if (dir(gpa)) |root| {
-        defer gpa.free(root);
-        scanDir(ix, gpa, root);
-    } else |_| {}
-    for (extra) |d| scanDir(ix, gpa, d);
-}
-
-/// The script commands in `root` and in the folders in it, no deeper: one
-/// loop for the folder, one inside it for a folder down.
-fn scanDir(ix: *Index, gpa: std.mem.Allocator, root: []const u8) void {
-    var arena: std.heap.ArenaAllocator = .init(gpa);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var top = std.Io.Dir.cwd().openDir(io(), root, .{ .iterate = true }) catch return;
-    defer top.close(io());
-    var it = top.iterate();
-    while (it.next(io()) catch null) |e| {
-        if (hidden(e.name)) continue;
-        if (e.kind != .directory) {
-            addScript(ix, a, .{ .dir = top, .folder = root, .name = e.name });
-            continue;
-        }
-        const folder = std.fs.path.join(a, &.{ root, e.name }) catch continue;
-        var sub = top.openDir(io(), e.name, .{ .iterate = true }) catch continue;
-        defer sub.close(io());
-        var sub_it = sub.iterate();
-        while (sub_it.next(io()) catch null) |f| {
-            if (hidden(f.name) or f.kind == .directory) continue;
-            addScript(ix, a, .{ .dir = sub, .folder = folder, .name = f.name });
-        }
-    }
-}
-
-fn hidden(name: []const u8) bool {
-    return name.len == 0 or name[0] == '.';
-}
-
-/// A file in a folder being scanned.
-const Entry = struct {
-    /// The folder, open.
-    dir: std.Io.Dir,
-    /// The folder's path.
-    folder: []const u8,
-    name: []const u8,
+/// A script command found, or the row that opens their folder: listed among
+/// the apps (launchers.zig), its own row kind.
+pub const Script = struct {
+    title: []const u8,
+    /// Its package's name, as its row shows it; "Raycast" for the folder's row.
+    package: []const u8,
+    /// Its file; null for the row that opens the folder.
+    file: ?[]const u8,
+    /// What its launches are counted under (launch_counts.zig), as they
+    /// always have been: `script:<file>`, or `script-folder:`.
+    key: []const u8,
+    icon: app_scan.Icon = .unloaded,
 };
 
-/// Lists `entry` if its header says it is a script command.
-fn addScript(ix: *Index, a: std.mem.Allocator, entry: Entry) void {
-    // The header is in the first lines: the file's first 8 KB.
-    var buf: [8192]u8 = undefined;
-    const head = entry.dir.readFile(io(), entry.name, &buf) catch return;
-    const m = parse(a, head) orelse return;
-    const full = std.fs.path.join(a, &.{ entry.folder, entry.name }) catch return;
-    const row = std.fmt.allocPrint(a, "{s}{s}", .{ prefix, full }) catch return;
-    const package = if (m.package.len > 0) m.package else "Script Command";
-    // best effort: out of memory leaves the script unlisted
-    ix.addIn(m.title, row, package) catch {};
+const key_prefix = "script:";
+const folder_key = "script-folder:";
+
+/// The script commands found, sorted by title as the apps are. A title an
+/// app or an earlier script has is not listed again.
+pub const List = struct {
+    gpa: std.mem.Allocator,
+    /// Owns each script's strings.
+    arena: std.heap.ArenaAllocator,
+    items: std.ArrayList(Script) = .empty,
+    /// Scripts found but left out: memory ran out.
+    lost: u32 = 0,
+    /// The Io and environment the apps were found with, for the icons.
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+
+    pub fn init(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) List {
+        return .{ .gpa = gpa, .arena = .init(gpa), .io = io, .env = env };
+    }
+
+    pub fn deinit(l: *List) void {
+        for (l.items.items) |s| switch (s.icon) {
+            .png => |png| l.gpa.free(png),
+            .unloaded, .none => {},
+        };
+        l.items.deinit(l.gpa);
+        l.arena.deinit();
+    }
+
+    /// Lists a script (or, with no `file`, the folder's row) unless an app
+    /// in `apps` or a script already listed has its title; one memory
+    /// leaves out is counted in `lost`.
+    pub fn add(
+        l: *List,
+        apps: []const app_scan.App,
+        title: []const u8,
+        package: []const u8,
+        file: ?[]const u8,
+    ) void {
+        if (app_scan.findName(apps, title) != null or l.find(title) != null) return;
+        l.put(title, package, file) catch {
+            l.lost += 1;
+        };
+    }
+
+    fn put(l: *List, title: []const u8, package: []const u8, file: ?[]const u8) !void {
+        const a = l.arena.allocator();
+        const own: ?[]const u8 = if (file) |f| try a.dupe(u8, f) else null;
+        const key = if (own) |f|
+            try std.fmt.allocPrint(a, key_prefix ++ "{s}", .{f})
+        else
+            folder_key;
+        try l.items.append(l.gpa, .{
+            .title = try a.dupe(u8, title),
+            .package = try a.dupe(u8, package),
+            .file = own,
+            .key = key,
+        });
+    }
+
+    /// After the scans: sorted by title, and those memory left out logged.
+    pub fn finish(l: *List) void {
+        if (l.lost > 0) log.warn(
+            "nanolight: {d} script commands not listed: out of memory",
+            .{l.lost},
+        );
+        const Ctx = struct {
+            pub fn lessThan(_: @This(), a: Script, b: Script) bool {
+                return std.ascii.lessThanIgnoreCase(a.title, b.title);
+            }
+        };
+        std.sort.pdq(Script, l.items.items, Ctx{}, Ctx.lessThan);
+    }
+
+    pub fn find(l: *const List, title: []const u8) ?u32 {
+        for (l.items.items, 0..) |s, i| {
+            if (std.ascii.eqlIgnoreCase(s.title, title)) return @intCast(i);
+        }
+        return null;
+    }
+
+    /// Whether `other` lists the same scripts, from the same files.
+    pub fn same(l: *const List, other: *const List) bool {
+        if (l.items.items.len != other.items.items.len) return false;
+        for (l.items.items, other.items.items) |a, b| {
+            if (!std.mem.eql(u8, a.key, b.key) or !std.mem.eql(u8, a.title, b.title)) return false;
+        }
+        return true;
+    }
+
+    /// Script `i`'s icon, made the first time it is asked for: the system's
+    /// for its key, which names no file (the Mac's blank document).
+    pub fn icon(l: *List, i: u32) ?[]const u8 {
+        const s = &l.items.items[i];
+        return cachedIcon(&s.icon, l.gpa, l.io, l.env, s.key);
+    }
+};
+
+/// Lists the row that opens the folder, then each script command in the
+/// folder and in `extra` (a folder down too), past the titles `apps` has.
+pub fn scan(l: *List, apps: []const app_scan.App, extra: []const []const u8) void {
+    const io = l.io;
+    l.add(apps, "Script Commands Folder", "Raycast", null);
+    if (dir(l.gpa, io)) |root| {
+        defer l.gpa.free(root);
+        scanDir(l, io, apps, root);
+    } else |err| log.warn("nanolight: no script commands folder: {t}", .{err});
+    for (extra) |d| scanDir(l, io, apps, d);
+}
+
+/// The script commands in `root` and in the folders in it, no deeper.
+fn scanDir(l: *List, io: std.Io, apps: []const app_scan.App, root: []const u8) void {
+    var arena: std.heap.ArenaAllocator = .init(l.gpa);
+    defer arena.deinit();
+    const Scan = struct {
+        list: *List,
+        io: std.Io,
+        apps: []const app_scan.App,
+        arena: std.mem.Allocator,
+
+        fn visit(s: @This(), f: app_scan.Found) app_scan.Step {
+            const name = f.entry.name;
+            if (name.len == 0 or name[0] == '.') return .next;
+            if (f.entry.kind == .directory) return .descend;
+            addScript(s, f);
+            return .next;
+        }
+
+        /// Lists `f` if its header says it is a script command.
+        fn addScript(s: @This(), f: app_scan.Found) void {
+            // The header is in the first lines: the file's first 8 KB.
+            var buf: [8192]u8 = undefined;
+            const head = f.dir.readFile(s.io, f.entry.name, &buf) catch |err| {
+                log.warn("nanolight: {s} could not be read: {t}", .{ f.full, err });
+                return;
+            };
+            const m = parse(s.arena, head) orelse return;
+            const package = if (m.package.len > 0) m.package else "Script Command";
+            s.list.add(s.apps, m.title, package, f.full);
+        }
+    };
+    const ctx: Scan = .{ .list = l, .io = io, .apps = apps, .arena = arena.allocator() };
+    app_scan.walk(io, root, 1, ctx, Scan.visit);
 }
 
 /// How to run `file`: its shebang's interpreter (`#!/usr/bin/env python3`),
@@ -269,23 +356,6 @@ pub fn command(bytes: []const u8, file: []const u8, out: *[8][]const u8) [][]con
     return out[0 .. n + 1];
 }
 
-/// `value` percent-encoded (an argument with `percentEncoded`).
-pub fn encode(buf: []u8, value: []const u8) []const u8 {
-    var n: usize = 0;
-    for (value) |ch| {
-        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
-            if (n + 1 > buf.len) break;
-            buf[n] = ch;
-            n += 1;
-        } else {
-            if (n + 3 > buf.len) break;
-            _ = std.fmt.bufPrint(buf[n..][0..3], "%{X:0>2}", .{ch}) catch break;
-            n += 3;
-        }
-    }
-    return buf[0..n];
-}
-
 test "a script command's header" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
@@ -310,6 +380,12 @@ test "a script command's header" {
     try std.testing.expectEqual(@as(usize, 2), m.argCount());
     try std.testing.expect(m.args[0].?.percentEncoded);
     try std.testing.expectEqualStrings("en", m.args[1].?.data[0].value);
+    try std.testing.expectEqual(model.Field.Kind.text, m.args[0].?.kind());
+    try std.testing.expectEqual(model.Field.Kind.dropdown, m.args[1].?.kind());
+    const secret: Argument = .{ .type = "password" };
+    try std.testing.expectEqual(model.Field.Kind.password, secret.kind());
+    const other: Argument = .{ .type = "number" };
+    try std.testing.expectEqual(model.Field.Kind.text, other.kind());
     try std.testing.expect(parse(arena.allocator(), "#!/bin/sh\necho hi\n") == null);
     // AppleScript's and JavaScript's comments too.
     try std.testing.expectEqualStrings(
@@ -329,8 +405,6 @@ test "a script command's header" {
         if (windows) "sh" else "/bin/sh",
         command("echo", "x", &out)[0],
     );
-    var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("a%20b%26c", encode(&buf, "a b&c"));
 }
 
 test "a folder named in config.toml is scanned for script commands, a folder down too" {
@@ -350,14 +424,32 @@ test "a folder named in config.toml is scanned for script commands, a folder dow
     try tmp.dir.createDirPath(t.io, "sub/old");
     try tmp.dir.writeFile(t.io, .{ .sub_path = "sub/near.sh", .data = header ++ "One Down\n" });
     try tmp.dir.writeFile(t.io, .{ .sub_path = "sub/old/far.sh", .data = header ++ "Two Down\n" });
-    var buf: [128]u8 = undefined;
-    const path = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
-    var ix: Index = .init(t.allocator);
-    defer ix.deinit();
-    scanDir(&ix, t.allocator, path);
-    try t.expectEqual(@as(usize, 2), ix.apps.items.len);
-    try t.expect(ix.find("Say Hello") != null and ix.find("Two Down") == null);
-    const near = ix.apps.items[ix.find("One Down").?];
-    try t.expect(std.mem.startsWith(u8, near.path, prefix));
-    try t.expect(std.mem.endsWith(u8, near.path, "near.sh"));
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try @import("test_tmp.zig").path(&buf, &tmp);
+    var l: List = .init(t.allocator, t.io, &test_apps.no_env);
+    defer l.deinit();
+    scanDir(&l, t.io, &.{}, path);
+    try t.expectEqual(@as(usize, 2), l.items.items.len);
+    try t.expect(l.find("Say Hello") != null and l.find("Two Down") == null);
+    const near = l.items.items[l.find("One Down").?];
+    try t.expect(std.mem.endsWith(u8, near.file.?, "near.sh"));
+    // Counted as they always were, by their file.
+    try t.expect(std.mem.startsWith(u8, near.key, "script:"));
+    try t.expect(std.mem.endsWith(u8, near.key, near.file.?));
+}
+
+test "a script whose title an app or another script has is not listed again" {
+    const t = std.testing;
+    const apps = [_]app_scan.App{.{ .name = "Safari", .path = "/A/Safari.app", .folder = "A" }};
+    var l: List = .init(t.allocator, t.io, &test_apps.no_env);
+    defer l.deinit();
+    l.add(&apps, "safari", "Mine", "/s/safari.sh");
+    l.add(&apps, "Script Commands Folder", "Raycast", null);
+    l.add(&apps, "Hello", "Mine", "/s/hello.sh");
+    l.add(&apps, "hello", "Mine", "/s/hello2.sh");
+    l.finish();
+    try t.expectEqual(@as(usize, 2), l.items.items.len);
+    try t.expectEqualStrings("Hello", l.items.items[0].title);
+    try t.expectEqualStrings("script-folder:", l.items.items[1].key);
+    try t.expect(l.items.items[1].file == null);
 }

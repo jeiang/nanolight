@@ -7,7 +7,9 @@
 //!   clip-probe paste-files <path>... <seconds> serves a file list
 const std = @import("std");
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
+const Watcher = @import("clipboard_watcher.zig").Watcher;
+const clip = @import("text.zig").clip;
 
 var done = false;
 
@@ -32,7 +34,7 @@ fn observe(_: *anyopaque, item: clipboard.Item) void {
             .{
                 item.kind,
                 item.text.len,
-                std.zig.fmtString(clipboard.clip(item.text, 80)),
+                std.zig.fmtString(clip(item.text, 80)),
                 item.source,
             },
         ),
@@ -54,20 +56,21 @@ pub fn main(init: std.process.Init) !void {
         .{},
     );
     const secs = try std.fmt.parseInt(u64, args[args.len - 1], 10);
-    var w: clipboard.Watcher = .{};
+    var w: Watcher = .{};
     var token: u8 = 0;
     w.start(.{ .ctx = &token, .observe = observe, .excluded = excluded }) catch |e| {
-        return say("start failed: {t}: {s}", .{ e, w.why orelse "" });
+        return say("start failed: {t}: {s}", .{ e, w.status() orelse "" });
     };
-    say("started: {s}", .{@tagName(w.backend)});
+    say("started", .{});
     if (std.mem.eql(u8, args[1], "paste-text")) {
         say(
             "paste -> {t}",
             .{w.paste(.{ .kind = .text, .text = args[2] }, .{ .ctx = &token, .func = hide })},
         );
     } else if (std.mem.eql(u8, args[1], "paste-png")) {
+        const limit: std.Io.Limit = .limited(clipboard.Kind.image.cap());
         const png = try std.Io.Dir.cwd()
-            .readFileAlloc(init.io, args[2], init.arena.allocator(), .limited(clipboard.max_image));
+            .readFileAlloc(init.io, args[2], init.arena.allocator(), limit);
         say(
             "paste -> {t}",
             .{w.paste(.{ .kind = .image, .png = png }, .{ .ctx = &token, .func = hide })},

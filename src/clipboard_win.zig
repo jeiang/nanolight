@@ -5,8 +5,9 @@
 //! CF_DIBV5 (kept as PNG), files CF_HDROP.
 const std = @import("std");
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
 const win_msg = @import("win_msg.zig");
+const log = @import("log.zig");
 
 const HANDLE = ?*anyopaque;
 const INPUT = extern struct {
@@ -59,11 +60,9 @@ const process_query_limited = 0x1000;
 const keyeventf_keyup = 0x2;
 const vk_control = 0x11;
 const vk_v = 0x56;
-const poll_ms = 500;
-/// Time for the window to take the keys before Ctrl+V reaches it.
-const paste_delay_ms = 120;
 /// Another process holds the clipboard open for a moment after it copies.
 const open_tries = 8;
+/// The largest image written to the clipboard.
 const max_pixels = 64 * 1024 * 1024;
 
 // ----- pure parts: formats -----
@@ -75,6 +74,22 @@ fn wideToUtf8(gpa: std.mem.Allocator, wide: []const u16) ![]u8 {
     return std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.sliceTo(wide, 0));
 }
 
+/// CF_UNICODETEXT's bytes as UTF-8, up to its NUL. `error.TooLarge` when it
+/// has more UTF-16 units than `cap`, before anything is converted: each
+/// unit is at least one byte of UTF-8.
+fn unicodeText(gpa: std.mem.Allocator, bytes: []const u8, cap: usize) ![]u8 {
+    var units = bytes.len / 2;
+    for (0..units) |i| if (bytes[i * 2] == 0 and bytes[i * 2 + 1] == 0) {
+        units = i;
+        break;
+    };
+    if (units > cap) return error.TooLarge;
+    const wide = try gpa.alloc(u16, units);
+    defer gpa.free(wide);
+    for (wide, 0..) |*u, i| u.* = std.mem.readInt(u16, bytes[i * 2 ..][0..2], .little);
+    return wideToUtf8(gpa, wide);
+}
+
 fn le32(b: []const u8, at: usize) u32 {
     return std.mem.readInt(u32, b[at..][0..4], .little);
 }
@@ -82,7 +97,9 @@ fn le32(b: []const u8, at: usize) u32 {
 /// A device-independent bitmap (CF_DIB, or CF_DIBV5 with its V5 header) as
 /// PNG. 24 and 32 bits per pixel only, uncompressed; alpha is kept for a V5
 /// bitmap that carries it, and a 32-bit bitmap without it is opaque.
-pub fn dibToPng(gpa: std.mem.Allocator, dib: []const u8) Error![]u8 {
+/// `error.TooLarge` before converting when the PNG would be over `cap`: the
+/// encoder stores its pixels unpacked, so it is never smaller than they are.
+pub fn dibToPng(gpa: std.mem.Allocator, dib: []const u8, cap: usize) Error![]u8 {
     if (dib.len < 40) return error.Corrupt;
     const header = le32(dib, 0);
     if (header < 40 or header > dib.len) return error.Corrupt;
@@ -95,7 +112,7 @@ pub fn dibToPng(gpa: std.mem.Allocator, dib: []const u8) Error![]u8 {
         compression != 3)) return error.Unsupported;
     const w: usize = @intCast(w_signed);
     const h: usize = @abs(h_signed);
-    if (w * h > max_pixels) return error.TooLarge;
+    if (w * h * 4 > cap) return error.TooLarge;
     var offset: usize = header;
     var alpha_mask: u32 = 0;
     if (compression == 3) {
@@ -174,7 +191,6 @@ fn pngPixels(gpa: std.mem.Allocator, png: []const u8) Error!Rgba {
     if (raw.len != h * (row_len + 1)) return error.Corrupt;
     const px = try gpa.alloc(u8, w * h * 4);
     errdefer gpa.free(px);
-    // Unfilter in place, a row at a time.
     for (0..h) |y| {
         const row = raw[y * (row_len + 1) ..][0 .. row_len + 1];
         const cur = row[1..];
@@ -370,74 +386,45 @@ fn put(format: u32, bytes: []const u8) bool {
     return true;
 }
 
-pub const Watcher = struct {
-    pub const available = true;
-    pub const unavailable_reason = "";
-
-    sink: ?clipboard.Sink = null,
-    running: bool = false,
-    /// A tick is waiting on the timer: `start` after `stop` reuses it.
-    armed: bool = false,
-    /// The sequence number as last seen or last written here, so what
-    /// Nanolight writes itself is not recorded.
-    last: u32 = 0,
+/// The OS's side of the poll watcher (clipboard_poll.zig).
+const Win = struct {
     /// The window that had the keys before the panel opened.
     previous: HANDLE = null,
 
-    pub fn start(w: *Watcher, sink: clipboard.Sink) !void {
-        w.sink = sink;
-        w.last = GetClipboardSequenceNumber();
-        w.running = true;
-        if (!w.armed) {
-            w.armed = true;
-            nanoui.App.after(poll_ms, w, tick);
-        }
+    pub fn changeCount() u32 {
+        return GetClipboardSequenceNumber();
     }
 
-    pub fn stop(w: *Watcher) void {
-        w.running = false;
-    }
-
-    fn tick(ctx: ?*anyopaque) callconv(.c) void {
-        const w: *Watcher = @ptrCast(@alignCast(ctx.?));
-        if (!w.running) {
-            w.armed = false;
-            return;
-        }
-        w.poll();
-        nanoui.App.after(poll_ms, w, tick);
-    }
-
-    fn poll(w: *Watcher) void {
-        const seq = GetClipboardSequenceNumber();
-        if (seq == w.last) return;
-        w.last = seq;
-        const sink = w.sink orelse return;
+    pub fn read(_: *Win, sink: clipboard.Sink) void {
         var name_buf: [3 * 1024]u8 = undefined;
         var owner = processName(GetClipboardOwner(), &name_buf);
         if (owner.len == 0) owner = processName(GetForegroundWindow(), &name_buf);
         // Before the clipboard is opened at all.
         if (sink.excluded(sink.ctx, owner)) return;
-        if (!open(null)) return;
+        if (!open(null)) return log.warn(
+            "nanolight: clipboard: the clipboard stayed busy; a copy was not read",
+            .{},
+        );
         defer _ = CloseClipboard();
-        if (marked()) return;
+        if (marked()) return sink.observe(
+            sink.ctx,
+            .{ .kind = .text, .concealed = true, .source = owner },
+        );
         const gpa = std.heap.c_allocator;
         if (data(cf_hdrop)) |drop| {
-            const paths = hdropPaths(gpa, drop) catch return;
+            const paths = hdropPaths(gpa, drop) catch |e| return notRead(.file, e);
             defer gpa.free(paths);
             return sink.observe(sink.ctx, .{ .kind = .file, .text = paths, .source = owner });
         }
         if (data(cf_unicodetext)) |t| {
-            const units = t.len / 2;
-            const wide = gpa.alloc(u16, units) catch return;
-            defer gpa.free(wide);
-            for (wide, 0..) |*u, i| u.* = std.mem.readInt(u16, t[i * 2 ..][0..2], .little);
-            const text = wideToUtf8(gpa, wide) catch return;
+            const text = unicodeText(gpa, t, clipboard.Kind.text.cap()) catch |e|
+                return notRead(.text, e);
             defer gpa.free(text);
             return sink.observe(sink.ctx, .{ .kind = .text, .text = text, .source = owner });
         }
         const dib = data(cf_dibv5) orelse data(cf_dib) orelse return;
-        const png = dibToPng(gpa, dib) catch return;
+        const png = dibToPng(gpa, dib, clipboard.Kind.image.cap()) catch |e|
+            return notRead(.image, e);
         defer gpa.free(png);
         const size = clipboard.pngSize(png) orelse .{ 0, 0 };
         sink.observe(
@@ -446,21 +433,26 @@ pub const Watcher = struct {
         );
     }
 
+    fn notRead(kind: clipboard.Kind, e: anyerror) void {
+        log.info("nanolight: clipboard: a copied {t} was not kept: {t}", .{ kind, e });
+    }
+
     /// The window in front now, unless it is ours: where a paste goes.
-    pub fn noteFrontmost(w: *Watcher) void {
+    pub fn noteFrontmost(w: *Win) void {
         const h = GetForegroundWindow();
         if (h != null and !ownedByUs(h)) w.previous = h;
     }
 
-    pub fn paste(w: *Watcher, c: clipboard.Content, hide: clipboard.Hide) clipboard.PasteResult {
-        if (!w.copy(c)) return .failed;
-        hide.func(hide.ctx);
-        if (w.previous) |h| _ = SetForegroundWindow(h);
-        nanoui.App.after(paste_delay_ms, null, sendPaste);
-        return .pasted;
+    /// SendInput needs no grant (a window running as administrator ignores it).
+    pub fn keysAllowed(_: *Win) bool {
+        return true;
     }
 
-    fn sendPaste(_: ?*anyopaque) callconv(.c) void {
+    pub fn wake(w: *Win) void {
+        if (w.previous) |h| _ = SetForegroundWindow(h);
+    }
+
+    pub fn sendPaste(_: ?*anyopaque) callconv(.c) void {
         const keys = [_]INPUT{
             .{ .vk = vk_control, .flags = 0 },
             .{ .vk = vk_v, .flags = 0 },
@@ -472,7 +464,7 @@ pub const Watcher = struct {
 
     /// Writes `c` as the clipboard's whole content: text as CF_UNICODETEXT
     /// only, an image as CF_DIB, files as CF_HDROP.
-    pub fn copy(w: *Watcher, c: clipboard.Content) bool {
+    pub fn write(c: clipboard.Content) bool {
         const gpa = std.heap.c_allocator;
         const bytes: []u8, const format: u32 = switch (c.kind) {
             .text => .{ textBytes(gpa, c.text) orelse return false, cf_unicodetext },
@@ -483,11 +475,11 @@ pub const Watcher = struct {
         if (!open(win_msg.window())) return false;
         defer _ = CloseClipboard();
         if (EmptyClipboard() == 0) return false;
-        const ok = put(format, bytes);
-        w.last = GetClipboardSequenceNumber();
-        return ok;
+        return put(format, bytes);
     }
 };
+
+pub const Watcher = @import("clipboard_poll.zig").PollWatcher(Win);
 
 /// UTF-16 with its NUL, as bytes.
 fn textBytes(gpa: std.mem.Allocator, text: []const u8) ?[]u8 {
@@ -502,6 +494,7 @@ fn textBytes(gpa: std.mem.Allocator, text: []const u8) ?[]u8 {
 // ----- tests -----
 
 const testing = std.testing;
+const max_image = clipboard.Kind.image.cap();
 
 test "wide text stops at the NUL and rejects a lone surrogate" {
     const wide = std.unicode.utf8ToUtf16LeStringLiteral("héllo \u{1F600}");
@@ -515,6 +508,14 @@ test "wide text stops at the NUL and rejects a lone surrogate" {
         error.ExpectedSecondSurrogateHalf,
         wideToUtf8(testing.allocator, &.{ 0xd800, 'a' }),
     );
+}
+
+test "clipboard text over the cap is refused before it is converted" {
+    const bytes = "a\x00b\x00\x00\x00c\x00";
+    const s = try unicodeText(testing.allocator, bytes, 2);
+    defer testing.allocator.free(s);
+    try testing.expectEqualStrings("ab", s);
+    try testing.expectError(error.TooLarge, unicodeText(testing.allocator, bytes, 1));
 }
 
 test "a process path is cut to its exe name" {
@@ -543,7 +544,7 @@ test "a bottom-up 24-bit DIB becomes a PNG that reads back" {
         255, 0, 0, 255, 255, 255, 0, 0, // blue, white
     };
     @memcpy(dib[40..], &rows);
-    const png = try dibToPng(testing.allocator, &dib);
+    const png = try dibToPng(testing.allocator, &dib, max_image);
     defer testing.allocator.free(png);
     try testing.expectEqual([2]u32{ 2, 2 }, clipboard.pngSize(png).?);
     const img = try pngPixels(testing.allocator, png);
@@ -557,7 +558,7 @@ test "a 32-bit DIB is opaque unless its V5 mask carries alpha" {
     var plain: [40 + 4]u8 = undefined;
     dibHeader(&plain, 1, -1, 32);
     @memcpy(plain[40..], &[_]u8{ 10, 20, 30, 0 });
-    const png = try dibToPng(testing.allocator, &plain);
+    const png = try dibToPng(testing.allocator, &plain, max_image);
     defer testing.allocator.free(png);
     const img = try pngPixels(testing.allocator, png);
     defer testing.allocator.free(img.px);
@@ -573,7 +574,7 @@ test "a 32-bit DIB is opaque unless its V5 mask carries alpha" {
     std.mem.writeInt(u32, v5[48..52], 0x000000ff, .little);
     std.mem.writeInt(u32, v5[52..56], 0xff000000, .little);
     @memcpy(v5[124..], &[_]u8{ 0, 0, 100, 255 });
-    const png5 = try dibToPng(testing.allocator, &v5);
+    const png5 = try dibToPng(testing.allocator, &v5, max_image);
     defer testing.allocator.free(png5);
     const img5 = try pngPixels(testing.allocator, png5);
     defer testing.allocator.free(img5.px);
@@ -583,17 +584,20 @@ test "a 32-bit DIB is opaque unless its V5 mask carries alpha" {
 test "a truncated or unsupported DIB is refused" {
     var dib: [40 + 4]u8 = undefined;
     dibHeader(&dib, 2, 2, 24);
-    try testing.expectError(error.Corrupt, dibToPng(testing.allocator, &dib));
+    try testing.expectError(error.Corrupt, dibToPng(testing.allocator, &dib, max_image));
     dibHeader(&dib, 1, 1, 8);
-    try testing.expectError(error.Unsupported, dibToPng(testing.allocator, &dib));
-    try testing.expectError(error.Corrupt, dibToPng(testing.allocator, "short"));
+    try testing.expectError(error.Unsupported, dibToPng(testing.allocator, &dib, max_image));
+    try testing.expectError(error.Corrupt, dibToPng(testing.allocator, "short", max_image));
+    // Over the cap before a pixel is read: 2 × 2 at 4 bytes each is 16.
+    dibHeader(&dib, 2, 2, 24);
+    try testing.expectError(error.TooLarge, dibToPng(testing.allocator, &dib, 15));
 }
 
 test "a PNG written to the clipboard is a bottom-up DIB" {
     var dib_in: [40 + 8]u8 = undefined;
     dibHeader(&dib_in, 2, 1, 24);
     @memcpy(dib_in[40..], &[_]u8{ 0, 0, 255, 255, 0, 0, 0, 0 }); // red, blue
-    const png = try dibToPng(testing.allocator, &dib_in);
+    const png = try dibToPng(testing.allocator, &dib_in, max_image);
     defer testing.allocator.free(png);
     const back = try pngToDib(testing.allocator, png);
     defer testing.allocator.free(back);

@@ -1,32 +1,27 @@
 //! What the Settings screen (settings_view.zig) asks of the app: the
-//! shortcut, opening at login, the sync status, updates. Optional,
-//! like the panel's other host callbacks: tests draw Settings with
-//! defaults and call nothing.
-const shortcut = @import("shortcut.zig");
+//! shortcut, the switches (toggles.zig), the tint, the sync status,
+//! updates. Settings is drawn only with one: the app's
+//! (settings_bind.zig), or a test's (test_support.zig).
+const Choice = @import("keys.zig").Choice;
 const Theme = @import("palette.zig").Theme;
+const Toggle = @import("toggles.zig").Toggle;
 
 pub const SettingsHost = struct {
     ctx: *anyopaque,
-    choice: *const fn (ctx: *anyopaque) shortcut.Choice,
-    apply: *const fn (ctx: *anyopaque, c: shortcut.Choice) void,
+    choice: *const fn (ctx: *anyopaque) Choice,
+    apply: *const fn (ctx: *anyopaque, c: Choice) void,
     /// Starts or stops recording a key of one's own: the keys pressed go
     /// to `Settings.took`, not the panel (recorder.zig). Whether it is
     /// recording now (false when the recorder could not start).
     record: *const fn (ctx: *anyopaque, on: bool) bool,
-    /// Whether it opens at login; `set` changes it first.
-    login: *const fn (ctx: *anyopaque, set: ?bool) bool,
-    /// Google's suggestions turned on or off in Settings.
-    suggest: *const fn (ctx: *anyopaque, on: bool) void,
-    /// Return sends Google searches to the browser (on) or the panel.
-    searches_out: *const fn (ctx: *anyopaque, on: bool) void,
-    /// The panel's tint, chosen in Settings: kept for the next launch.
-    theme: *const fn (ctx: *anyopaque, t: Theme) void,
-    /// Whether the menu bar icon shows; `set` changes it first.
-    menu_bar: *const fn (ctx: *anyopaque, set: ?bool) bool,
-    /// Whether clipboard history records; `set` changes it first. Null where
-    /// this system has no clipboard history (its rows are not shown).
-    clipboard_enabled: *const fn (ctx: *anyopaque, set: ?bool) ?bool,
-    /// Deletes every clipboard entry; false when something may be left on disk.
+    /// Whether switch `t` is on; `set` changes it first (kept, its owner
+    /// told, synced when it syncs).
+    toggle: *const fn (ctx: *anyopaque, t: Toggle, set: ?bool) bool,
+    /// The panel's tint; `set` changes it first, kept for the next launch.
+    theme: *const fn (ctx: *anyopaque, set: ?Theme) Theme,
+    /// Deletes every clipboard entry; false when something may be left on
+    /// disk. Whether this system has clipboard history at all is the
+    /// panel's (`Nanolight.hasClipboard`).
     clipboard_clear: *const fn (ctx: *anyopaque) bool,
     /// The sync line ("Sync: host, last synced 3 min ago"); valid until the next call.
     sync_status: *const fn (ctx: *anyopaque) []const u8,

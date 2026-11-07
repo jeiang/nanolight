@@ -3,146 +3,171 @@
 //! ⌘↩ do to an entry in the panel (clipboard_view.zig).
 const std = @import("std");
 const nanoui = @import("nanoui");
-const main = @import("main.zig");
 const clipboard = @import("clipboard.zig");
-const config = @import("config.zig");
-const account = @import("account.zig");
-const Live = main.Live;
+const types = @import("clipboard_types.zig");
+const Watcher = @import("clipboard_watcher.zig").Watcher;
+const Host = @import("host.zig").Host.Clipboard;
+const paths = @import("paths.zig");
+const clock = @import("clock.zig");
+const log = @import("log.zig");
+const App = @import("app.zig").App;
+const Hook = @import("app.zig").Hook;
 
 const prune_every_ms = 60 * 60 * 1000;
 
-/// Opens the store in `<data dir>/clipboard` and, when history is on,
-/// starts the watcher. Without a data directory history stays off.
-pub fn init(l: *Live, store: *clipboard.Store) void {
-    l.clip = store;
-    store.load(account.now());
-    l.clip_host = .{
-        .ctx = l,
-        .store = store,
-        .status = status,
-        .paste = paste,
-        .copy = copy,
-        .copy_only = !l.cfg.clipboard.paste_plain_text,
-    };
-    l.s.host.?.clipboard = &l.clip_host;
-    if (store.cfg.enabled) startWatching(l);
-    nanoui.App.after(prune_every_ms, l, pruneTick);
-}
+/// Pinned once opened: the panel's host and the watcher point here.
+pub const Clip = struct {
+    core: *App,
+    /// Where the store keeps its files, and the store: null in headless runs
+    /// and without a data directory.
+    dir: ?std.Io.Dir = null,
+    store: ?clipboard.Store = null,
+    watcher: Watcher = .{},
+    /// What the Clipboard History screen asks of the app; set with the store.
+    host: ?Host = null,
 
-pub fn deinit(l: *Live) void {
-    l.clip_watcher.stop();
-}
+    /// Opens the store in `<data dir>/clipboard`; its switch, loaded next
+    /// (settings_bind.zig `Bind.load`), starts the watcher. Without that
+    /// folder history stays off (logged).
+    pub fn open(c: *Clip, cfg: clipboard.Config, config_ok: bool) void {
+        const gpa = c.core.app.gpa;
+        const io = c.core.app.io;
+        c.dir = openDir(gpa, io) catch |e| {
+            log.warn("nanolight: clipboard history is off: no folder: {t}", .{e});
+            return;
+        };
+        c.store = .init(gpa, io, c.dir, cfg);
+        const store = &c.store.?;
+        store.config_ok = config_ok;
+        store.load(clock.now());
+        c.host = .{
+            .ctx = c,
+            .store = store,
+            .copy_only = !store.cfg.paste_plain_text,
+            .status = status,
+            .paste = paste,
+            .copy = copy,
+        };
+        nanoui.App.after(prune_every_ms, c, pruneTick);
+    }
 
-/// The store's directory, made if missing; null when there is none.
-pub fn openDir(gpa: std.mem.Allocator, io: std.Io) ?std.Io.Dir {
-    const data = nanoui.path(gpa, .data, "Nanolight") catch return null;
-    defer gpa.free(data);
-    const path = std.fs.path.join(gpa, &.{ data, "clipboard" }) catch return null;
+    pub fn deinit(c: *Clip) void {
+        c.watcher.stop();
+        if (c.store) |*s| s.deinit();
+        if (c.dir) |*d| d.close(c.core.app.io);
+    }
+
+    /// The panel's Clipboard History: null without history.
+    pub fn entry(c: *Clip) ?*const Host {
+        return if (c.host) |*h| h else null;
+    }
+
+    /// The core's `showing`: where a paste goes is noted.
+    pub fn showingHook(c: *Clip) Hook {
+        return .{ .ctx = c, .func = frontmost };
+    }
+
+    fn frontmost(ctx: *anyopaque) void {
+        const c = from(ctx);
+        if (c.store != null) c.watcher.noteFrontmost();
+    }
+
+    /// The config's `[clipboard] enabled`: history's switch while none is
+    /// kept. Null when the config does not say, or there is no history.
+    pub fn configured(c: *const Clip) ?bool {
+        const store = if (c.store) |*s| s else return null;
+        return store.cfg.enabled;
+    }
+
+    /// Settings' switch: whether history records. Off on a system with no
+    /// history.
+    pub fn recording(c: *const Clip) bool {
+        const store = if (c.store) |*s| s else return false;
+        return store.on;
+    }
+
+    /// History records, or not, as its switch says, `kept` when that was
+    /// kept (`clipboard.Store.turn`); the watcher follows.
+    pub fn turn(c: *Clip, on: bool, kept: bool) void {
+        const store = if (c.store) |*s| s else return;
+        store.turn(on, kept);
+        if (store.on) c.startWatching() else c.watcher.stop();
+    }
+
+    /// Settings' Clear History: false when something may be left on disk (logged).
+    pub fn clear(c: *Clip) bool {
+        const store = if (c.store) |*s| s else return true;
+        store.clear() catch return false;
+        return true;
+    }
+
+    fn startWatching(c: *Clip) void {
+        const store = if (c.store) |*s| s else return;
+        if (!store.config_ok) return;
+        c.watcher.start(.{ .ctx = c, .observe = observe, .excluded = excluded }) catch |e|
+            log.warn("nanolight: clipboard history could not start: {t}", .{e});
+    }
+
+    fn load(c: *Clip, hash: u64) ?clipboard.Loaded {
+        const store = if (c.store) |*s| s else return null;
+        const e = store.get(hash) orelse return null;
+        return store.read(c.core.app.gpa, e.*) catch |err| {
+            log.warn("nanolight: clipboard: could not read an entry: {t}", .{err});
+            return null;
+        };
+    }
+};
+
+/// The store's directory, made if missing.
+fn openDir(gpa: std.mem.Allocator, io: std.Io) !std.Io.Dir {
+    const path = try paths.subdir(gpa, io, "clipboard", clipboard.private_dir);
     defer gpa.free(path);
-    _ = std.Io.Dir.cwd().createDirPathStatus(io, path, clipboard.private_dir) catch return null;
     // best effort: an existing folder keeps its mode; its files are created private anyway.
     std.Io.Dir.cwd().setFilePermissions(io, path, clipboard.private_dir, .{}) catch {};
-    return std.Io.Dir.cwd().openDir(io, path, .{}) catch null;
+    return std.Io.Dir.cwd().openDir(io, path, .{});
 }
 
-fn live(ctx: *anyopaque) *Live {
+fn from(ctx: *anyopaque) *Clip {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn startWatching(l: *Live) void {
-    if (!clipboard.Watcher.available) return;
-    if (!(l.clip orelse return).cfg.config_ok) return;
-    l.clip_watcher.start(.{ .ctx = l, .observe = observe, .excluded = excluded }) catch |e|
-        std.log.warn("nanolight: clipboard history could not start: {t}", .{e});
-}
-
-fn observe(ctx: *anyopaque, item: clipboard.Item) void {
-    const l = live(ctx);
-    const store = l.clip orelse return;
-    switch (store.add(item, account.now())) {
-        .added, .bumped => if (l.s.clip_ui.open) if (l.window) |w| w.redraw(),
-        else => {},
-    }
+fn observe(ctx: *anyopaque, item: types.Item) void {
+    const c = from(ctx);
+    const store = if (c.store) |*s| s else return;
+    if (store.add(item, clock.now())) if (c.core.s.showsClipboard()) c.core.redraw();
 }
 
 fn excluded(ctx: *anyopaque, source: []const u8) bool {
-    const store = live(ctx).clip orelse return true;
+    const c = from(ctx);
+    const store = if (c.store) |*s| s else return true;
     return store.excluded(source);
 }
 
 fn pruneTick(ctx: ?*anyopaque) callconv(.c) void {
-    const l: *Live = @ptrCast(@alignCast(ctx.?));
-    if (l.clip) |store| {
-        if (store.prune(account.now())) |_| {} else |e| {
-            std.log.warn("nanolight: clipboard: could not write index.json: {t}", .{e});
-        }
-    }
-    nanoui.App.after(prune_every_ms, l, pruneTick);
-}
-
-/// Settings' switch: whether history records; `set` changes it first (kept
-/// in kv, so the app's change outlasts the config file's value; see
-/// `config.switchClipboard`). Null on a system with no history.
-pub fn enabled(ctx: *anyopaque, set: ?bool) ?bool {
-    const l = live(ctx);
-    const store = l.clip orelse return null;
-    if (!clipboard.Watcher.available) return null;
-    if (set) |on| {
-        const next = config.switchClipboard(l.kv, on, store.cfg.enabled);
-        if (next == store.cfg.enabled) return next;
-        store.cfg.enabled = next;
-        if (next) startWatching(l) else l.clip_watcher.stop();
-    }
-    return store.cfg.enabled;
-}
-
-/// Settings' Clear History: false when something may be left on disk (logged).
-pub fn clear(ctx: *anyopaque) bool {
-    const store = live(ctx).clip orelse return true;
-    store.clear() catch return false;
-    return true;
+    const c = from(ctx.?);
+    if (c.store) |*store| store.pruneOrWarn(clock.now());
+    nanoui.App.after(prune_every_ms, c, pruneTick);
 }
 
 /// Why the screen has nothing to show now, or null.
 fn status(ctx: *anyopaque) ?[]const u8 {
-    if (!clipboard.Watcher.available) return clipboard.Watcher.unavailable_reason;
-    const l = live(ctx);
-    if (@hasField(clipboard.Watcher, "why")) if (l.clip_watcher.why) |why| return why;
-    const store = l.clip orelse return null;
-    if (!store.cfg.config_ok) return "Clipboard history is paused until the config file loads.";
-    return if (store.cfg.enabled) null else "Clipboard history is off. Turn it on in Settings.";
+    const c = from(ctx);
+    if (c.watcher.status()) |why| return why;
+    const store = if (c.store) |*s| s else return null;
+    if (!store.config_ok) return "Clipboard history is paused until the config file loads.";
+    return if (store.on) null else "Clipboard history is off. Turn it on in Settings.";
 }
 
-/// An entry's content as the OS writes it; `owned` is freed by `release`.
-const Loaded = struct { content: clipboard.Content, owned: ?[]u8 = null };
-
-fn load(l: *Live, hash: u64) ?Loaded {
-    const store = l.clip orelse return null;
-    const e = store.get(hash) orelse return null;
-    const gpa = l.app.gpa;
-    switch (e.kind) {
-        .file => return .{ .content = .{ .kind = .file, .text = e.text } },
-        .text => {
-            const full = store.fullText(gpa, e.*) catch return null;
-            return .{ .content = .{ .kind = .text, .text = full }, .owned = full };
-        },
-        .image => {
-            const bytes = store.png(gpa, e.*) orelse return null;
-            return .{ .content = .{ .kind = .image, .png = bytes }, .owned = bytes };
-        },
-    }
+fn paste(ctx: *anyopaque, hash: u64) types.PasteResult {
+    const c = from(ctx);
+    const loaded = c.load(hash) orelse return .unreadable;
+    defer if (loaded.owned) |b| c.core.app.gpa.free(b);
+    return c.watcher.paste(loaded.content, .{ .ctx = c.core, .func = App.hide });
 }
 
-fn paste(ctx: *anyopaque, hash: u64) clipboard.PasteResult {
-    const l = live(ctx);
-    const loaded = load(l, hash) orelse return .failed;
-    defer if (loaded.owned) |b| l.app.gpa.free(b);
-    return l.clip_watcher.paste(loaded.content, .{ .ctx = l, .func = Live.hide });
-}
-
-fn copy(ctx: *anyopaque, hash: u64) bool {
-    const l = live(ctx);
-    const loaded = load(l, hash) orelse return false;
-    defer if (loaded.owned) |b| l.app.gpa.free(b);
-    return l.clip_watcher.copy(loaded.content);
+fn copy(ctx: *anyopaque, hash: u64) types.PasteResult {
+    const c = from(ctx);
+    const loaded = c.load(hash) orelse return .unreadable;
+    defer if (loaded.owned) |b| c.core.app.gpa.free(b);
+    return if (c.watcher.copy(loaded.content)) .copied else .failed;
 }

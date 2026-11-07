@@ -4,34 +4,60 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const pipeline = @import("pipeline.zig");
+const max_query_bytes = @import("nanolight.zig").max_query_bytes;
+const chrome = @import("chrome.zig");
 const support = @import("test_support.zig");
 const Rig = support.Rig;
 const Probe = support.Probe;
 const Web = support.Web;
 const Prefs = support.Prefs;
-const mac_starters = support.mac_starters;
 const onFirstQuicklink = support.onFirstQuicklink;
 const press = support.press;
 const retype = support.retype;
 
+/// A test run says only errors: a warning a test provokes says nothing.
+pub const std_options: std.Options = .{ .log_level = .err };
+
 test {
     _ = @import("search.zig");
+    _ = @import("text.zig");
+    _ = @import("clock.zig");
     _ = @import("calc.zig");
     _ = @import("convert.zig");
+    _ = @import("rates.zig");
+    _ = @import("rates_table.zig");
     _ = @import("results.zig");
+    _ = @import("query.zig");
     _ = @import("suggest.zig");
     _ = @import("settings.zig");
-    _ = @import("server.zig");
+    _ = @import("sync_protocol.zig");
+    _ = @import("server_protocol.zig");
+    _ = @import("server_transport.zig");
     _ = @import("account.zig");
     _ = @import("toml.zig");
     _ = @import("config.zig");
+    _ = @import("prefs.zig");
+    _ = @import("toggles.zig");
     _ = @import("palette.zig");
     _ = @import("apps.zig");
+    _ = @import("app_scan.zig");
+    _ = @import("launch_counts.zig");
+    _ = @import("paths.zig");
+    _ = @import("spotlight.zig");
+    _ = @import("keys.zig");
     _ = @import("shortcut.zig");
+    _ = @import("shortcut_clash.zig");
+    _ = @import("shortcut_holders.zig");
     _ = @import("settings_panes.zig");
     _ = @import("commands.zig");
+    _ = @import("proc.zig");
+    _ = @import("clipboard_types.zig");
     _ = @import("clipboard.zig");
+    _ = @import("clipboard_watcher.zig");
     _ = @import("clipboard_win.zig");
+    _ = @import("clipboard_poll.zig");
+    _ = @import("clipboard_view.zig");
     _ = @import("tests_clipboard.zig");
     _ = @import("raycast_model.zig");
     _ = @import("raycast_view.zig");
@@ -40,8 +66,16 @@ test {
     _ = @import("tests_ext.zig");
     _ = @import("tests_prefs.zig");
     _ = @import("tests_files.zig");
+    _ = @import("platform.zig");
+    _ = @import("shell.zig");
+    _ = @import("hotkey.zig");
+    _ = @import("web.zig");
+    _ = @import("launchers.zig");
+    _ = @import("single.zig");
+    _ = @import("screen.zig");
     switch (@import("builtin").os.tag) {
         .macos => {
+            _ = @import("apps_mac.zig");
             _ = @import("single_mac.zig");
             _ = @import("clickthrough.zig");
             _ = @import("hotkey_mac.zig");
@@ -55,6 +89,7 @@ test {
             _ = @import("apps_linux.zig");
             _ = @import("hotkey_x11.zig");
             _ = @import("clipboard_linux.zig");
+            _ = @import("clipboard_offer.zig");
             _ = @import("clipboard_x11.zig");
             _ = @import("clipboard_wl.zig");
         },
@@ -70,7 +105,6 @@ test "the panel finds, moves, answers and hands off" {
     const ix = &rig.ix;
     const s = &rig.s;
     const t = &rig.t;
-    ix.starters = &mac_starters;
     try rig.apps(&.{ "Safari", "System Settings", "Notes", "Calculator", "Finder" });
     try rig.mount(.{ .host = probe.host(), .height = 480 });
     // No query: suggestions.
@@ -93,10 +127,10 @@ test "the panel finds, moves, answers and hands off" {
     // An exact app name beats panes that may outrank its initials.
     press(t, &.{.{ .insert = "system settings" }});
     try std.testing.expect(t.hasText("System Settings"));
-    try std.testing.expectEqual(@as(u32, ix.find("System Settings").?), s.res.rows[0].app);
+    try std.testing.expectEqual(@as(u32, ix.find("System Settings").?), s.res.slice()[0].item);
     // Down and back up, then Return opens the first.
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.down }));
-    try std.testing.expectEqual(@as(usize, 1), s.sel);
+    try std.testing.expectEqual(@as(?usize, 1), s.selection());
     _ = t.shortcut(.{ .key = ui.Shortcut.up });
     press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqualStrings(
@@ -104,12 +138,13 @@ test "the panel finds, moves, answers and hands off" {
         probe.opened[0..probe.opened_len],
     );
     try std.testing.expect(probe.hidden);
-    try std.testing.expectEqual(@as(u16, 1), ix.apps.items[ix.find("System Settings").?].launches);
+    const settings_app = "/Applications/System Settings.app";
+    try std.testing.expectEqual(@as(u16, 1), s.tally.counts.of(settings_app));
 
     // ⌘2 opens the second row at once: Safari, under System Settings,
     // which was just opened.
     retype(t, "s");
-    try std.testing.expect(t.hasText(results.mod ++ "2"));
+    try std.testing.expect(t.hasText(@import("platform.zig").mod ++ "2"));
     try std.testing.expect(t.shortcut(.{ .key = '2', .cmd = true }));
     try std.testing.expectEqualStrings(
         "/Applications/Safari.app",
@@ -144,51 +179,51 @@ test "the panel finds, moves, answers and hands off" {
 
 const suggest = @import("suggest.zig");
 const results = @import("results.zig");
-const convert = @import("convert.zig");
+const rates = @import("rates.zig");
+const rates_table = @import("rates_table.zig");
 
 test "a pending currency card is not the default row, and Return acts on the search under it" {
     const gpa = std.testing.allocator;
     var web: Web = .{};
-    var feed: convert.Feed = .{};
-    defer feed.deinit();
     var rig: Rig = undefined;
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    s.feed = &feed;
+    const feed = &rig.money.feed;
     try rig.mount(.{ .host = web.host() });
     press(t, &.{.{ .insert = "100 usd to ttd" }});
-    try std.testing.expect(s.res.pending);
-    try std.testing.expectEqual(@as(usize, 1), s.sel);
+    // The card waits on the rates, unselected.
+    try std.testing.expectEqual(results.Kind.calc, s.res.slice()[0].kind);
+    try std.testing.expectEqual(@as(?usize, 1), s.selection());
     try std.testing.expect(onFirstQuicklink(s));
     try std.testing.expect(t.hasText("Search Google"));
     try std.testing.expect(!t.hasText("Copy Answer"));
     // Arrowing onto the card still leaves Return meaning the search.
     _ = t.shortcut(.{ .key = ui.Shortcut.up });
-    try std.testing.expectEqual(@as(usize, 0), s.sel);
+    try std.testing.expectEqual(@as(?usize, 0), s.selection());
     try std.testing.expect(t.hasText("Search Google"));
     // The fetch fails: the card stays pending and the selection stays put.
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     feed.begin(1);
     feed.fail();
-    s.ratesLanded();
+    pipeline.refill(s, .rates);
     t.settle(1);
-    try std.testing.expect(s.res.pending);
-    try std.testing.expectEqual(@as(usize, 1), s.sel);
+    try std.testing.expectEqual(results.Kind.calc, s.res.slice()[0].kind);
+    try std.testing.expectEqual(@as(?usize, 1), s.selection());
     try std.testing.expect(t.hasText("Rates unavailable"));
     // A retry on its way is not a failure.
-    feed.begin(1 + convert.retry_after);
-    s.ratesLanded();
+    feed.begin(1 + rates.retry_after);
+    pipeline.refill(s, .rates);
     t.settle(1);
     try std.testing.expect(t.hasText("Loading rates…"));
     // The rates land: the card is the answer, and selected.
     const body = "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}";
-    feed.landed(convert.Rates.parse(gpa, body).?, 1 + convert.retry_after);
-    s.ratesLanded();
+    feed.landed(rates_table.Rates.parse(gpa, body).?, 1 + rates.retry_after);
+    pipeline.refill(s, .rates);
     t.settle(1);
-    try std.testing.expect(!s.res.pending);
-    try std.testing.expectEqual(@as(usize, 0), s.sel);
+    try std.testing.expectEqual(results.Kind.calc, s.res.slice()[0].kind);
+    try std.testing.expectEqual(@as(?usize, 0), s.selection());
     try std.testing.expect(t.hasText("Copy Answer"));
 }
 
@@ -204,7 +239,7 @@ test "math being typed asks Google nothing while its card shows" {
     // The answer so far, a conversion's, and one waiting on rates.
     for ([_][]const u8{ "2 + 3 *", "10 km to mi *", "500 usd to eur *" }) |q| {
         retype(t, q);
-        try std.testing.expectEqual(results.Kind.calc, s.res.rows[0].kind);
+        try std.testing.expectEqual(results.Kind.calc, s.res.slice()[0].kind);
         try std.testing.expectEqual(@as(usize, 0), web.asked_len);
     }
     retype(t, "2 + 3 is");
@@ -220,19 +255,19 @@ test "a long paste is cut to the longest query, on a character boundary, a whole
     const t = &rig.t;
     try rig.mount(.{ .height = 480 });
     // A file path as long as any found one is kept whole.
-    var path: [view.max_query_bytes]u8 = undefined;
+    var path: [max_query_bytes]u8 = undefined;
     path[0] = '/';
     @memset(path[1..], 'a');
     press(t, &.{.{ .insert = &path }});
     try std.testing.expectEqualStrings(&path, s.query.text());
     press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
-    var paste: [view.max_query_bytes + 1]u8 = undefined;
-    @memset(paste[0 .. view.max_query_bytes - 1], '(');
-    @memcpy(paste[view.max_query_bytes - 1 ..], "é");
+    var paste: [max_query_bytes + 1]u8 = undefined;
+    @memset(paste[0 .. max_query_bytes - 1], '(');
+    @memcpy(paste[max_query_bytes - 1 ..], "é");
     press(t, &.{.{ .insert = &paste }});
-    try std.testing.expectEqual(view.max_query_bytes - 1, s.query.text().len);
+    try std.testing.expectEqual(max_query_bytes - 1, s.query.text().len);
     t.settle(1);
-    try std.testing.expect(s.res.n > 0);
+    try std.testing.expect(s.res.slice().len > 0);
 }
 
 test "Google's completions land below, and a search shows in the panel" {
@@ -243,7 +278,6 @@ test "Google's completions land below, and a search shows in the panel" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{"Safari"});
     try rig.mount(.{ .host = web.host() });
     // An address is never asked about; words are.
@@ -257,15 +291,15 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expect(onFirstQuicklink(s));
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
-    try std.testing.expectEqual(@as(u16, 2), s.res.rows[s.sel].ql);
+    try std.testing.expectEqual(@as(u32, 2), s.selected().?.item);
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid glass", "liquid glass apple" }) |w| said.push(w);
-    s.answered("liquid gl", &said);
+    pipeline.answered(s, "liquid gl", &said);
     t.settle(1);
     try std.testing.expect(t.hasText("Search"));
     try std.testing.expect(t.hasText("liquid glass apple"));
-    try std.testing.expectEqual(results.Kind.suggest, s.res.rows[1].kind);
-    try std.testing.expectEqual(@as(u16, 2), s.res.rows[s.sel].ql);
+    try std.testing.expectEqual(results.Kind.suggest, s.res.slice()[1].kind);
+    try std.testing.expectEqual(@as(u32, 2), s.selected().?.item);
     // The first completion shows faintly in the field; Tab takes it.
     try std.testing.expect(t.hasText("ass"));
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.tab }));
@@ -274,10 +308,10 @@ test "Google's completions land below, and a search shows in the panel" {
     retype(t, "liquid gl");
     // Known at once this time, yet Return still searches what was typed,
     // not a completion nobody picked.
-    try std.testing.expectEqual(results.Kind.suggest, s.res.rows[1].kind);
+    try std.testing.expectEqual(results.Kind.suggest, s.res.slice()[1].kind);
     try std.testing.expect(onFirstQuicklink(s));
     // ⌘2 is Google's first completion.
-    try std.testing.expect(t.hasText(results.mod ++ "2"));
+    try std.testing.expect(t.hasText(@import("platform.zig").mod ++ "2"));
     // One more letter: the answer so far stands in, and nothing is asked
     // again for words already answered.
     web.asked_len = 0;
@@ -298,7 +332,7 @@ test "Google's completions land below, and a search shows in the panel" {
     );
     t.settle(2);
     try std.testing.expect(t.hasText("Open in Browser"));
-    try std.testing.expectEqual(view.max_height, s.height());
+    try std.testing.expectEqual(chrome.max_height, view.height(s));
     try std.testing.expect(!web.probe.hidden);
     // Escape: the page gone, and the panel with it.
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
@@ -328,7 +362,7 @@ test "Google's completions land below, and a search shows in the panel" {
         web.probe.opened[0..web.probe.opened_len],
     );
     try std.testing.expect(web.probe.hidden);
-    s.reveal();
+    _ = s.show(0);
     try std.testing.expect(web.page_len == null);
     web.probe = .{};
     t.settle(1);
@@ -341,41 +375,122 @@ test "Google's completions land below, and a search shows in the panel" {
 }
 
 const onboard = @import("onboard.zig");
-const shortcut = @import("shortcut.zig");
-const nix = @import("build_options").nix_managed;
+const keys = @import("keys.zig");
+const shortcut_clash = @import("shortcut_clash.zig");
+const platform = @import("platform.zig");
 
 const Steps = struct {
-    applied: ?shortcut.Choice = null,
+    applied: ?keys.Choice = null,
     done: bool = false,
-    fn apply(ctx: *anyopaque, c: shortcut.Choice) void {
+    ended: u8 = 0,
+    fn apply(ctx: *anyopaque, c: keys.Choice) void {
         const p: *Steps = @ptrCast(@alignCast(ctx));
         p.applied = c;
     }
-    fn fix(_: *anyopaque, _: shortcut.Clash) void {}
+    fn hooks(p: *Steps) onboard.Hooks {
+        return .{
+            .ctx = p,
+            .look = nobody,
+            .apply = apply,
+            .fix = fix,
+            .login = loginOff,
+            .done = finished,
+        };
+    }
+    /// The system's shortcuts are not read in tests: nobody holds a key.
+    fn nobody(_: []shortcut_clash.SystemKey) shortcut_clash.Holders {
+        return .{};
+    }
+    fn fix(_: *anyopaque, _: shortcut_clash.Clash) void {}
     fn finished(ctx: *anyopaque) void {
         const p: *Steps = @ptrCast(@alignCast(ctx));
         p.done = true;
+        p.ended += 1;
+    }
+    fn loginOff(_: *anyopaque, _: ?bool) bool {
+        return false;
     }
 };
+
+/// Whether everything drawn is within the panel's height `h`: nothing
+/// pushed below its edge, where the window clips it.
+fn fitsPanel(t: *ui.Tester, h: f32) bool {
+    for (t.ctx.nodes.items[1..]) |n| if (n.rect.y + n.rect.h > h + 0.01) return false;
+    return true;
+}
+
+test "each welcome step fits the room its height gives it" {
+    const gpa = std.testing.allocator;
+    var steps: Steps = .{};
+    var o: onboard.Onboard = .{ .hooks = steps.hooks() };
+    o.start(.opt_space);
+    var rig: Rig = undefined;
+    rig.init(gpa);
+    defer rig.deinit();
+    const s = &rig.s;
+    const t = &rig.t;
+    s.open(.{ .welcome = &o });
+    try rig.mount(.{ .screen = .none });
+    try std.testing.expect(fitsPanel(t, view.height(s)));
+    if (@import("builtin").os.tag == .macos) {
+        const sys = [_]shortcut_clash.SystemKey{
+            .{ .id = .spotlight, .enabled = true, .key = keys.space, .mods = keys.ns_cmd },
+        };
+        o.holders.system = &sys;
+        o.choice = .cmd_space;
+        t.settle(1);
+        try std.testing.expect(!o.clash().clear());
+        try std.testing.expect(fitsPanel(t, view.height(s)));
+    }
+    // Asking about login, where Settings has its switch: the last step's tallest.
+    t.key(.enter);
+    t.settle(1);
+    try std.testing.expect(t.containsText(" now"));
+    try std.testing.expect(fitsPanel(t, view.height(s)));
+    o.pressed(true);
+    o.pressed(false);
+    t.settle(2);
+    try std.testing.expect(t.hasText("You're set."));
+    try std.testing.expectEqual(platform.login_ui, t.hasText("Open Nanolight when you log in"));
+    try std.testing.expect(fitsPanel(t, view.height(s)));
+}
+
+test "a screen over the welcome skips it once, without its key" {
+    var steps: Steps = .{};
+    var o: onboard.Onboard = .{ .hooks = steps.hooks() };
+    o.start(.cmd_space);
+    o.choice = .opt_space;
+    var rig: Rig = undefined;
+    rig.init(std.testing.allocator);
+    defer rig.deinit();
+    const s = &rig.s;
+    s.open(.{ .welcome = &o });
+    s.open(.settings);
+    try std.testing.expect(s.screen == .settings);
+    try std.testing.expect(steps.ended == 1 and steps.applied == null);
+    // Gone already: nothing ends it again.
+    s.open(.clipboard);
+    s.escape();
+    try std.testing.expectEqual(@as(u8, 1), steps.ended);
+}
 
 test "the welcome: a key, pressed for real, then a first search" {
     // Its keys and clashes are the Mac's (macOS's own shortcuts).
     if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var o: onboard.Onboard = .{};
-    // Hooks only once started: the system's shortcuts are not read in tests.
-    o.start(.cmd_space);
-    const sys = [_]shortcut.SystemKey{.{ .id = 64, .enabled = true, .key = 49, .mods = 1 << 20 }};
-    o.system = &sys;
     var steps: Steps = .{};
-    o.hooks = .{ .ctx = &steps, .apply = Steps.apply, .fix = Steps.fix, .done = Steps.finished };
+    var o: onboard.Onboard = .{ .hooks = steps.hooks() };
+    o.start(.cmd_space);
+    const sys = [_]shortcut_clash.SystemKey{
+        .{ .id = .spotlight, .enabled = true, .key = keys.space, .mods = keys.ns_cmd },
+    };
+    o.holders.system = &sys;
     var rig: Rig = undefined;
     rig.init(gpa);
     defer rig.deinit();
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{"Safari"});
-    rig.s.onboard = &o;
+    rig.s.open(.{ .welcome = &o });
     try rig.mount(.{ .screen = .none, .height = 480 });
     try std.testing.expect(t.hasText("Welcome to Nanolight"));
     // Who holds ⌘Space, by name; going on anyway is said as such.
@@ -385,7 +500,7 @@ test "the welcome: a key, pressed for real, then a first search" {
     try std.testing.expect(t.hasText("⌥ Space is free on this Mac."));
     t.key(.enter);
     t.settle(1);
-    try std.testing.expectEqual(shortcut.Choice.opt_space, steps.applied.?);
+    try std.testing.expectEqual(keys.Choice.opt_space, steps.applied.?);
     try std.testing.expect(t.hasText("Press ⌥ Space now"));
     // A button never moves it on: the key closing the panel, then opening it.
     o.pressed(false);
@@ -398,24 +513,26 @@ test "the welcome: a key, pressed for real, then a first search" {
     // ⌘2: the math example, run in the launcher.
     try std.testing.expect(t.shortcut(.{ .key = '2', .cmd = true }));
     t.settle(1);
-    try std.testing.expect(steps.done and !o.active);
+    try std.testing.expect(steps.done and rig.s.screen != .welcome);
     try std.testing.expect(t.hasText("3,072"));
 
     // Esc skips from the first step, keeping the key shown there: applied
     // only when it is not the one in use already.
     steps = .{};
     o.start(.ctrl_space);
+    rig.s.open(.{ .welcome = &o });
     t.settle(1);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(steps.done and !o.active);
+    try std.testing.expect(steps.done and rig.s.screen != .welcome);
     try std.testing.expect(steps.applied == null);
     steps = .{};
     o.start(.ctrl_space);
+    rig.s.open(.{ .welcome = &o });
     t.settle(1);
     t.key(.right);
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(steps.done and !o.active);
-    try std.testing.expectEqual(shortcut.Choice.opt_cmd_space, steps.applied.?);
+    try std.testing.expect(steps.done and rig.s.screen != .welcome);
+    try std.testing.expectEqual(keys.Choice.opt_cmd_space, steps.applied.?);
 }
 
 test "settings opens from ⌘,, from typing, and from the gear" {
@@ -427,78 +544,76 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{"Safari"});
     prefs.nl = s;
     try rig.mount(.{ .host = prefs.host() });
-    // The gear is in the footer, named.
-    try std.testing.expect(t.hasText("Settings"));
-    try t.clickText("Settings");
+    // The gear is in the footer, named for assistive apps.
+    try support.clickButton(t, "Settings");
     t.settle(1);
-    try std.testing.expect(s.settings_ui.open);
+    try std.testing.expect(s.screen == .settings);
     try std.testing.expect(t.hasText("Open Nanolight with"));
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
-    try std.testing.expect(!s.settings_ui.open and prefs.probe.hidden);
+    try std.testing.expect(s.screen != .settings and prefs.probe.hidden);
     prefs.probe.hidden = false;
 
     // ⌘, opens it; Esc closes it and the panel, the search there next time.
     try std.testing.expect(t.shortcut(.{ .key = ',', .cmd = true }));
     t.settle(1);
-    try std.testing.expect(s.settings_ui.open);
+    try std.testing.expect(s.screen == .settings);
     try std.testing.expect(t.hasText("Google Suggestions"));
-    try std.testing.expect(t.hasText("Open at Login") != nix);
-    try std.testing.expect(t.hasText(@import("account.zig").off_text));
-    try std.testing.expect(t.hasText("Check for Updates") != nix);
+    try std.testing.expect(t.hasText(support.sync_status));
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     t.settle(1);
-    try std.testing.expect(!s.settings_ui.open and prefs.probe.hidden);
+    try std.testing.expect(s.screen != .settings and prefs.probe.hidden);
     try std.testing.expect(t.hasText("Safari"));
 
     // Typing "settings" lists the row; Return opens it.
     press(t, &.{.{ .insert = "settings" }});
     try std.testing.expect(t.hasText("Nanolight Settings"));
-    try std.testing.expectEqual(results.Kind.settings, s.res.rows[0].kind);
+    try std.testing.expectEqual(results.Kind.settings, s.res.slice()[0].kind);
     press(t, &.{.{ .command = .insert_newline }});
     t.settle(1);
-    try std.testing.expect(s.settings_ui.open);
+    try std.testing.expect(s.screen == .settings);
 
     // → picks the next shortcut and tells the host.
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.right }));
-    try std.testing.expectEqual(shortcut.Choice.opt_space, prefs.applied.?);
+    try std.testing.expectEqual(keys.Choice.opt_space, prefs.applied.?);
 
     // On the Mac, Return on it records a key of one's own (issue #1): a
     // letter alone is refused, ⌥X is taken, kept, and shown as the chosen
     // one. (A PC keeps to the four.)
-    if (@import("builtin").os.tag == .macos) {
+    if (keys.any_key) {
         press(t, &.{.{ .command = .insert_newline }});
         t.settle(1);
         try std.testing.expect(prefs.recording and t.hasText("Type a shortcut"));
-        s.settings_ui.took(s, shortcut.recorded(7, 0, 'x'));
+        s.recorded(keys.recorded(7, 0, 'x'));
         t.settle(1);
         try std.testing.expect(prefs.recording and t.hasText("Add ⌘, ⌥ or ⌃"));
-        s.settings_ui.took(s, shortcut.recorded(7, 1 << 19, 'x'));
+        s.recorded(keys.recorded(7, keys.ns_opt, 'x'));
         t.settle(1);
         try std.testing.expect(!prefs.recording and t.hasText("⌥ X"));
-        try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = 1 << 11 }));
+        try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = keys.option }));
         // ← goes back to the four.
         try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.left }));
         try std.testing.expect(prefs.applied.?.eql(.opt_cmd_space));
         try std.testing.expect(t.hasText("⌥ X"));
         try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.right }));
         try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.right }));
-        try std.testing.expectEqual(shortcut.Choice.opt_space, prefs.applied.?);
+        try std.testing.expectEqual(keys.Choice.opt_space, prefs.applied.?);
     }
 
     // ↓ onto Google Suggestions, Return flips it.
     try std.testing.expect(s.suggest_on);
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     press(t, &.{.{ .command = .insert_newline }});
-    try std.testing.expectEqual(@as(usize, 1), s.settings_ui.sel);
-    try std.testing.expectEqual(true, s.settings_ui.open);
-    try std.testing.expectEqual(@as(u8, 1), prefs.suggest_sets);
+    try std.testing.expect(s.screen == .settings);
+    try std.testing.expectEqual(@as(u8, 1), prefs.sets.get(.suggest));
     try std.testing.expect(!s.suggest_on);
-    try std.testing.expectEqual(@as(u8, 1), prefs.suggest_sets);
-    try std.testing.expect(s.height() <= view.max_height);
+    // Still on it: Return flips it back.
+    press(t, &.{.{ .command = .insert_newline }});
+    try std.testing.expectEqual(@as(u8, 2), prefs.sets.get(.suggest));
+    try std.testing.expect(s.suggest_on);
+    try std.testing.expect(view.height(s) <= chrome.max_height);
 }
 
 test "the panel never outgrows its window, which is never resized" {
@@ -507,7 +622,6 @@ test "the panel never outgrows its window, which is never resized" {
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{
         "Safari",  "Mail",  "Maps",   "Music",    "Notes",
         "Numbers", "Pages", "Photos", "Calendar", "Calculator",
@@ -515,23 +629,48 @@ test "the panel never outgrows its window, which is never resized" {
     var tallest: f32 = 0;
     for ([_][]const u8{ "", "a", "s", "ma", "2^10 * 3", "1+a", "liquid glass" }) |q| {
         s.query.set(q);
-        s.rebuild();
-        tallest = @max(tallest, s.height());
+        pipeline.rebuild(s);
+        tallest = @max(tallest, view.height(s));
     }
-    try std.testing.expect(tallest <= view.max_height);
+    try std.testing.expect(tallest <= chrome.max_height);
     // "a" fills every app row there is, and Google's completions the
     // rest: the bound is the real one.
     s.query.set("a");
-    s.rebuild();
+    pipeline.rebuild(s);
     var four: @import("suggest.zig").List = .{};
     for ([_][]const u8{ "a1", "a2", "a3", "a4" }) |w| four.push(w);
-    s.answered("a", &four);
-    try std.testing.expectEqual(view.max_height, s.height());
-    var o: onboard.Onboard = .{};
-    for ([_]onboard.Step{ .key, .try_it, .done }) |step| {
-        o.step = step;
-        try std.testing.expect(o.height() <= view.max_height);
-    }
+    pipeline.answered(s, "a", &four);
+    try std.testing.expectEqual(chrome.max_height, view.height(s));
+}
+
+fn settingsRig(rig: *Rig, prefs: *Prefs) !void {
+    prefs.init();
+    rig.init(std.testing.allocator);
+    errdefer rig.deinit();
+    prefs.nl = &rig.s;
+    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
+}
+
+test "Settings has login and updates rows, under this machine's name" {
+    if (!platform.login_ui) return error.SkipZigTest;
+    var prefs: Prefs = .{};
+    var rig: Rig = undefined;
+    try settingsRig(&rig, &prefs);
+    defer rig.deinit();
+    try std.testing.expect(rig.t.hasText("This " ++ platform.machine));
+    try std.testing.expect(rig.t.hasText("Open at Login"));
+    try std.testing.expect(rig.t.hasText("Check for Updates"));
+}
+
+test "a Nix build's Settings has no login or updates row" {
+    if (platform.login_ui) return error.SkipZigTest;
+    var prefs: Prefs = .{};
+    var rig: Rig = undefined;
+    try settingsRig(&rig, &prefs);
+    defer rig.deinit();
+    try std.testing.expect(rig.t.hasText("Google Suggestions"));
+    try std.testing.expect(!rig.t.hasText("Open at Login"));
+    try std.testing.expect(!rig.t.hasText("Check for Updates"));
 }
 
 test "on a PC the panel's keys are Ctrl's, and Settings says so" {
@@ -544,7 +683,6 @@ test "on a PC the panel's keys are Ctrl's, and Settings says so" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{ "Safari", "System Settings" });
     try rig.mount(.{ .host = prefs.host() });
     press(t, &.{.{ .insert = "s" }});
@@ -552,24 +690,23 @@ test "on a PC the panel's keys are Ctrl's, and Settings says so" {
     try std.testing.expect(!t.containsText("⌘"));
     try std.testing.expect(t.shortcut(.{ .key = ',', .ctrl = true }));
     t.settle(1);
-    try std.testing.expect(s.settings_ui.open);
-    try std.testing.expect(t.hasText("This PC") != nix);
+    try std.testing.expect(s.screen == .settings);
     try std.testing.expect(t.hasText("Alt Space"));
     try std.testing.expect(t.hasText("Sync Across Computers"));
 }
 
 test "a welcome whose key is set elsewhere skips the key step, in two steps" {
     const gpa = std.testing.allocator;
-    var o: onboard.Onboard = .{ .skip_key = true };
+    var steps: Steps = .{};
+    var o: onboard.Onboard = .{ .skip_key = true, .hooks = steps.hooks() };
     o.start(.cmd_space);
     try std.testing.expectEqual(onboard.Step.try_it, o.step);
     var rig: Rig = undefined;
     rig.init(gpa);
     defer rig.deinit();
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{"Safari"});
-    rig.s.onboard = &o;
+    rig.s.open(.{ .welcome = &o });
     try rig.mount(.{ .screen = .none, .height = 480 });
     try std.testing.expect(!t.containsText("Open it with"));
     try std.testing.expect(t.containsText("1 of 2"));
@@ -578,6 +715,9 @@ test "a welcome whose key is set elsewhere skips the key step, in two steps" {
     t.settle(2);
     try std.testing.expect(t.hasText("You're set."));
     try std.testing.expect(t.containsText("2 of 2"));
+    // The key set elsewhere, opening at login is still asked, where
+    // Settings has its switch (DECISION D2).
+    try std.testing.expectEqual(platform.login_ui, t.hasText("Open Nanolight when you log in"));
     // Showing it again starts at the same step.
     o.start(.cmd_space);
     try std.testing.expectEqual(onboard.Step.try_it, o.step);
@@ -591,43 +731,51 @@ test "Ctrl+J and Ctrl+K move down and up, and the field never sees them" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    rig.ix.starters = &mac_starters;
     try rig.apps(&.{ "Safari", "System Settings", "Notes" });
     try rig.mount(.{ .host = probe.host(), .height = 480 });
     press(t, &.{.{ .insert = "s" }});
     try std.testing.expect(t.shortcut(.{ .key = 'j', .ctrl = true }));
-    try std.testing.expectEqual(@as(usize, 1), s.sel);
+    try std.testing.expectEqual(@as(?usize, 1), s.selection());
     try std.testing.expect(t.shortcut(.{ .key = 'k', .ctrl = true }));
-    try std.testing.expectEqual(@as(usize, 0), s.sel);
+    try std.testing.expectEqual(@as(?usize, 0), s.selection());
+    // Up from the first wraps round to the last.
     try std.testing.expect(t.shortcut(.{ .key = 'k', .ctrl = true }));
-    try std.testing.expect(s.sel > 0);
+    try std.testing.expectEqual(@as(?usize, s.res.slice().len - 1), s.selection());
     try std.testing.expectEqualStrings("s", s.query.text());
 }
 
-test "the panel reopens at the root only after being away longer than pop_after" {
+test "a hide and a show close Settings; away longer than pop_after, the root" {
     const gpa = std.testing.allocator;
+    var prefs: Prefs = .{};
+    prefs.init();
     var rig: Rig = undefined;
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
-    s.pop_after = 90;
-    // Never hidden: nothing to pop.
-    try std.testing.expect(!s.popDue(1000));
+    const t = &rig.t;
+    try rig.apps(&.{"Notes"});
+    prefs.nl = s;
+    try rig.mount(.{ .host = prefs.host() });
+    s.away.pop_after = 90;
+    press(t, &.{.{ .insert = "notes" }});
+    try support.clickButton(t, "Settings");
+    t.settle(1);
+    try std.testing.expect(s.screen == .settings);
     s.hid(1000);
-    try std.testing.expect(!s.popDue(1090));
+    try std.testing.expect(!s.show(1090));
+    t.settle(1);
+    try std.testing.expectEqualStrings("notes", s.query.text());
+    try std.testing.expect(s.screen == .rows);
+    // Longer: no query, the first row, no other screen.
+    _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    try std.testing.expectEqual(@as(?usize, 2), s.selection());
+    try support.clickButton(t, "Settings");
+    t.settle(1);
     s.hid(1000);
-    try std.testing.expect(s.popDue(1091));
-    // One decision per hiding.
-    try std.testing.expect(!s.popDue(5000));
-    s.pop_after = 0;
-    s.hid(1000);
-    try std.testing.expect(!s.popDue(1_000_000));
-
-    s.query.set("notes");
-    s.sel = 2;
-    s.settings_ui.show();
-    s.toRoot();
+    try std.testing.expect(s.show(1091));
+    t.settle(1);
     try std.testing.expectEqualStrings("", s.query.text());
-    try std.testing.expectEqual(@as(usize, 0), s.sel);
-    try std.testing.expect(!s.settings_ui.open);
+    try std.testing.expectEqual(@as(?usize, 0), s.selection());
+    try std.testing.expect(s.screen == .rows);
 }

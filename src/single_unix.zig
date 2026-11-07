@@ -1,10 +1,12 @@
 //! Linux: single.zig's copies and commands, over a Unix socket at
 //! $XDG_RUNTIME_DIR/nanolight.sock (else /tmp/nanolight-<uid>.sock). The
-//! running copy listens; a second one connects and writes one line,
-//! "toggle" or "quit". nanoui's loop watches the socket: nothing polls.
+//! running copy listens; a second one connects and writes one line
+//! (`single.Command.line`). nanoui's loop watches the socket; only the
+//! startup wait for an older copy (`single.quitOlder`) polls.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const single = @import("single.zig");
+const log = @import("log.zig");
 const c = std.c;
 
 var listener: ?single.Listener = null;
@@ -32,44 +34,56 @@ fn connectTo() c_int {
     return fd;
 }
 
-fn write(cmd: single.Command) bool {
+pub fn send(cmd: single.Command) bool {
     const fd = connectTo();
     if (fd < 0) return false;
     defer _ = c.close(fd);
-    const line = if (cmd == .quit) "quit\n" else "toggle\n";
+    const line = switch (cmd) {
+        inline else => |k| comptime k.line() ++ "\n",
+    };
     return c.write(fd, line.ptr, line.len) == line.len;
 }
 
-pub fn send(cmd: single.Command) bool {
-    return write(cmd);
+/// Whether a copy holds the socket: it takes a connection.
+pub fn running() bool {
+    const fd = connectTo();
+    if (fd < 0) return false;
+    _ = c.close(fd);
+    return true;
 }
 
-pub fn claim(on: single.Listener) usize {
-    listener = on;
-    var n: usize = 0;
-    if (write(.quit)) {
-        n = 1;
-        // Gone (its socket refuses) within two seconds.
-        var i: usize = 0;
-        while (i < 40) : (i += 1) {
-            const fd = connectTo();
-            if (fd < 0) break;
-            _ = c.close(fd);
-            var ts: c.timespec = .{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
-            _ = c.nanosleep(&ts, null);
-        }
+/// Never: opening Nanolight's own row starts a new copy, which takes
+/// over (`claim`).
+pub fn isSelf(_: []const u8) bool {
+    return false;
+}
+
+pub fn claim(io: std.Io, on: single.Listener) single.Older {
+    const older = single.quitOlder(io, @This());
+    // The older copy still answers on the socket: unlinking it would leave
+    // that copy unreachable, by `--toggle` and by the next copy's quit. It
+    // keeps the socket; this one runs beside it, deaf to commands.
+    if (older == .stayed) {
+        log.warn("nanolight: an older copy kept running; `--toggle` goes to it", .{});
+        return older;
     }
-    var a = address() orelse return n;
+    listen(on) catch |e|
+        log.warn("nanolight: `--toggle` can't reach this copy ({t})", .{e});
+    return older;
+}
+
+fn listen(on: single.Listener) !void {
+    listener = on;
+    var a = address() orelse return error.SocketPathTooLong;
+    // No copy answers on it (`claim`): a socket file left by one that crashed.
     _ = c.unlink(@ptrCast(&a.path));
     const fd = c.socket(c.AF.UNIX, c.SOCK.STREAM | c.SOCK.CLOEXEC, 0);
-    if (fd < 0) return n;
-    if (c.bind(fd, @ptrCast(&a), @sizeOf(c.sockaddr.un)) != 0 or c.listen(fd, 4) != 0) {
-        _ = c.close(fd);
-        return n;
-    }
+    if (fd < 0) return error.SocketFailed;
+    errdefer _ = c.close(fd);
+    if (c.bind(fd, @ptrCast(&a), @sizeOf(c.sockaddr.un)) != 0) return error.BindFailed;
+    if (c.listen(fd, 4) != 0) return error.ListenFailed;
+    watch = try nanoui.fdwatch.readable(fd, null, accepted);
     server = fd;
-    watch = nanoui.fdwatch.readable(fd, null, accepted) catch null;
-    return n;
 }
 
 fn accepted(_: ?*anyopaque) callconv(.c) void {
@@ -81,9 +95,5 @@ fn accepted(_: ?*anyopaque) callconv(.c) void {
     if (got <= 0) return;
     const line = std.mem.trim(u8, buf[0..@intCast(got)], " \r\n");
     const l = listener orelse return;
-    if (std.mem.eql(u8, line, "quit")) l.func(l.ctx, .quit) else if (std.mem.eql(
-        u8,
-        line,
-        "toggle",
-    )) l.func(l.ctx, .toggle);
+    l.func(l.ctx, single.Command.fromLine(line) orelse return);
 }

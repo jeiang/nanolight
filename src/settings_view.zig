@@ -1,206 +1,271 @@
-//! Settings, in the panel itself: the shortcut, Google's suggestions and
-//! where searches open, opening at login, the menu bar icon, the sync
-//! status, updates. The same glass, the
-//! same rows. Esc closes it and the panel; ↑/↓ move, Return and Space do the
-//! row. The shortcut is one of four, or any key recorded with ⌘, ⌥ or ⌃
-//! (the last chip). Without a host (tests) it still draws, and changes
-//! nothing the app keeps.
+//! Settings, in the panel itself: the shortcut, the switches (toggles.zig),
+//! the sync status, updates. The same glass, the same rows. Esc closes it
+//! and the panel; ↑/↓ move, Return and Space do the row. The shortcut is
+//! one of four, or any key recorded with ⌘, ⌥ or ⌃ (the last chip). Its
+//! host (settings_host.zig) answers and keeps it all; what it lists
+//! (`groups`) is the one order for the drawing, the keys and the height.
+const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const motion = ui.motion;
-const panel = @import("view.zig");
+const key_choice = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
-const Choice = shortcut.Choice;
-const Palette = panel.Palette;
-const mac = @import("builtin").os.tag == .macos;
-/// A Nix build: the Nix modules own startup and updates.
-const nix = @import("build_options").nix_managed;
-
-const RowKind = enum {
-    choice,
-    suggest,
-    files,
-    browser,
-    login,
-    menu_bar,
-    clipboard,
-    clear_clipboard,
-    updates,
-    welcome,
-    quit,
-    theme,
-};
+const toggles = @import("toggles.zig");
+const Toggle = toggles.Toggle;
+const Choice = key_choice.Choice;
+const chrome = @import("chrome.zig");
+const Palette = @import("palette.zig").Palette;
+const Theme = @import("palette.zig").Theme;
+const app_name = @import("app_facts.zig").app_name;
+const platform = @import("platform.zig");
 
 /// Recording a key of one's own: not, waiting for one, or waiting after
 /// one that was refused. Recording only while the host's recorder runs.
 pub const KeyInput = enum { idle, recording, refused };
 
-/// The rows that switch something on or off. Each reads and writes its
-/// owner: the panel's own fields, or the host's (no copy kept here).
-const Toggle = enum {
-    suggest,
-    files,
-    browser,
-    login,
-    menu_bar,
-    clipboard,
+const Button = enum { clear_clipboard, updates, welcome, quit };
+/// A line of the host's words.
+const Note = enum { sync, version };
 
-    fn row(t: Toggle) RowKind {
-        return switch (t) {
-            inline else => |x| @field(RowKind, @tagName(x)),
+/// One thing Settings lists, as drawn.
+const Part = union(enum) {
+    /// A group's name.
+    heading: []const u8,
+    /// The shortcut's chips.
+    chips,
+    toggle: Toggle,
+    button: Button,
+    note: Note,
+
+    /// Whether this build shows it, `clip` with clipboard history.
+    fn present(part: Part, clip: bool) bool {
+        return switch (part) {
+            .heading, .chips => true,
+            .toggle => |t| t.present(clip),
+            .button => |b| switch (b) {
+                .clear_clipboard => clip,
+                .updates => platform.updater,
+                .welcome, .quit => true,
+            },
+            .note => |n| switch (n) {
+                .sync => true,
+                .version => platform.updater,
+            },
         };
     }
 
-    fn get(t: Toggle, n: *const panel.Nanolight, h: ?*const SettingsHost) bool {
-        return switch (t) {
-            .suggest => n.suggest_on,
-            .files => n.files_on,
-            .browser => n.searches_out,
-            // Without a host (tests): as a fresh install has them.
-            .login => if (h) |host| host.login(host.ctx, null) else false,
-            .menu_bar => if (h) |host| host.menu_bar(host.ctx, null) else true,
-            .clipboard => blk: {
-                const host = h orelse break :blk false;
-                break :blk host.clipboard_enabled(host.ctx, null) orelse false;
-            },
+    fn height(part: Part) f32 {
+        return switch (part) {
+            .heading => heading_h,
+            .chips => chrome.chip_h,
+            .toggle, .button => row_h,
+            .note => note_h,
         };
-    }
-
-    fn set(t: Toggle, n: *panel.Nanolight, h: ?*const SettingsHost, on: bool) void {
-        switch (t) {
-            .suggest => if (h) |host| host.suggest(host.ctx, on) else {
-                n.suggest_on = on;
-                n.built = 1;
-            },
-            .files => {
-                n.files_on = on;
-                n.built = 1;
-                const key = @import("files.zig").enabled_key;
-                // A failure is logged; file search follows the switch this run either way.
-                if (n.kv) |kv| _ = @import("config.zig").kvSet(kv, key, if (on) "1" else "0");
-            },
-            .browser => if (h) |host| host.searches_out(host.ctx, on) else {
-                n.searches_out = on;
-            },
-            .login => if (h) |host| {
-                _ = host.login(host.ctx, on);
-            },
-            .menu_bar => if (h) |host| {
-                _ = host.menu_bar(host.ctx, on);
-            },
-            .clipboard => if (h) |host| {
-                _ = host.clipboard_enabled(host.ctx, on);
-            },
-        }
     }
 };
 
-/// Whether this build shows `kind`, with or without the clipboard's rows:
-/// the one rule for the keyboard's order and the drawing.
-fn present(kind: RowKind, clip: bool) bool {
-    return switch (kind) {
-        .files, .browser, .menu_bar => mac,
-        .login, .updates => !nix,
-        .clipboard, .clear_clipboard => clip,
-        .choice, .suggest, .welcome, .quit, .theme => true,
-    };
-}
-const Theme = @import("palette.zig").Theme;
+/// A heading and what is under it; the heading shows with any of it.
+const Group = struct {
+    heading: ?[]const u8,
+    parts: []const Part,
+};
 
-/// As tall as its sections, never past the window. The Mac has three rows
-/// more (file search, where searches open, and the menu bar icon), and
-/// tighter spacing to fit them.
-const base_height: f32 = if (mac) 620 else 512;
-/// The clipboard's section: a heading, a switch and a button.
-const clip_height: f32 = if (mac) 110 else 116;
-/// The tallest it gets (with the clipboard's section).
-pub const height: f32 = base_height + clip_height;
+/// The switches of `section`, in `Toggle`'s order.
+fn switches(comptime section: toggles.Section) []const Part {
+    comptime {
+        var list: []const Part = &.{};
+        for (std.enums.values(Toggle)) |t| {
+            if (t.row().section == section) list = list ++ [_]Part{.{ .toggle = t }};
+        }
+        const out = list[0..list.len].*;
+        return &out;
+    }
+}
+
+/// What Settings lists, top to bottom.
+const groups = [_]Group{
+    .{ .heading = "Open " ++ app_name ++ " with", .parts = &.{.chips} },
+    .{ .heading = "Search", .parts = switches(.search) },
+    .{ .heading = "This " ++ platform.machine, .parts = switches(.machine) },
+    .{
+        .heading = chrome.clipboard_title,
+        .parts = switches(.clipboard) ++ [_]Part{.{ .button = .clear_clipboard }},
+    },
+    .{
+        .heading = platform.sync_heading,
+        .parts = &.{.{ .note = .sync }},
+    },
+    .{ .heading = "Updates", .parts = &.{ .{ .note = .version }, .{ .button = .updates } } },
+    .{ .heading = null, .parts = &.{ .{ .button = .welcome }, .{ .button = .quit } } },
+};
+
+/// What this build draws, in order, with or without the clipboard's.
+fn parts(comptime clip: bool) []const Part {
+    const out = comptime blk: {
+        var list: []const Part = &.{};
+        for (groups) |g| {
+            var under: []const Part = &.{};
+            for (g.parts) |part| {
+                if (part.present(clip)) under = under ++ [_]Part{part};
+            }
+            if (under.len == 0) continue;
+            if (g.heading) |name| list = list ++ [_]Part{.{ .heading = name }};
+            list = list ++ under;
+        }
+        break :blk list[0..list.len].*;
+    };
+    return &out;
+}
+
+/// What ↑/↓ select: the parts that do something, then the theme's
+/// swatches, in the header.
+const Row = union(enum) {
+    choice,
+    toggle: Toggle,
+    button: Button,
+    theme,
+
+    fn eql(a: Row, b: Row) bool {
+        return std.meta.eql(a, b);
+    }
+};
+
+fn rowsOf(comptime clip: bool) []const Row {
+    const out = comptime blk: {
+        var list: []const Row = &.{};
+        for (parts(clip)) |part| switch (part) {
+            .chips => list = list ++ [_]Row{.choice},
+            .toggle => |t| list = list ++ [_]Row{.{ .toggle = t }},
+            .button => |b| list = list ++ [_]Row{.{ .button = b }},
+            .heading, .note => {},
+        };
+        list = list ++ [_]Row{.theme};
+        break :blk list[0..list.len].*;
+    };
+    return &out;
+}
+
+fn shownParts(clip: bool) []const Part {
+    return if (clip) parts(true) else parts(false);
+}
+
+fn shownRows(clip: bool) []const Row {
+    return if (clip) rowsOf(true) else rowsOf(false);
+}
+
+/// The gap between Settings' parts, tighter on the Mac to fit its rows:
+/// with the clipboard's, 8 there was 5 points past the window (DECISION D1).
+const gap: f32 = if (platform.tight_text) 7 else 10;
+/// A switch's or a button's row.
+const row_h: f32 = 36;
+/// Room over the first part and under the last.
+const pad_top: f32 = 2;
+const pad_bottom: f32 = 6;
+/// A heading's line (`Palette.heading`, 11.5 points) and a note's (12.5
+/// points) as the Mac's system font draws them: measured (tests check
+/// them there; elsewhere the installed font decides).
+pub const heading_h: f32 = 14;
+pub const note_h: f32 = 15;
+
+/// Settings' height: its header, what it lists with a gap between each,
+/// its footer (`chrome.footer`: a hairline, then the keys). With `clip`
+/// when this system has clipboard history (`Nanolight.hasClipboard`).
+pub fn height(clip: bool) f32 {
+    return if (clip) heightOf(true) else heightOf(false);
+}
+
+fn heightOf(comptime clip: bool) f32 {
+    return comptime chrome.header_h + pad_top + partsHeight(clip) + pad_bottom +
+        1 + chrome.footer_h;
+}
+
+/// What it lists, and a gap between each.
+fn partsHeight(comptime clip: bool) f32 {
+    comptime {
+        const list = parts(clip);
+        var sum: f32 = gap * @as(f32, @floatFromInt(list.len - 1));
+        for (list) |part| sum += part.height();
+        return sum;
+    }
+}
+
 comptime {
-    // The window is never resized: Settings fits in it.
-    @import("std").debug.assert(height <= panel.max_height);
+    // The window is never resized: Settings fits in it, as tall as it gets.
+    std.debug.assert(heightOf(true) <= chrome.max_height);
 }
 
 pub const Settings = struct {
-    open: bool = false,
     sel: usize = 0,
-    /// Return already handled for this key event (a frame may draw twice).
-    took_return: bool = false,
+    ret: chrome.Return = .{},
     choice: Choice = .cmd_space,
     /// The last chip's key, recorded (this run or before), if any.
     custom: ?Choice = null,
     /// Recording a key for the last chip, and whether the one pressed last
     /// was refused (no ⌘, ⌥ or ⌃).
     key_input: KeyInput = .idle,
-    /// Whether this system has clipboard history (its section shows).
-    clip_here: bool = false,
     cleared: enum { idle, done, failed } = .idle,
-    sync: []const u8 = @import("account.zig").off_text,
-    version: []const u8 = "0.1.0",
+    /// The host's sync status, pulled each frame.
+    sync: []const u8 = "",
+    version: []const u8 = "",
     ready: ?[]const u8 = null,
+    theme: Theme = .system,
 
+    /// Settings opens (view.zig `Nanolight.open`).
     pub fn show(s: *Settings) void {
-        s.open = true;
         s.sel = 0;
         s.cleared = .idle;
     }
 
-    /// The height now: the clipboard's section is there only where this system has it.
-    pub fn tall(s: *const Settings) f32 {
-        return if (s.clip_here) height else base_height;
+    /// Settings goes: no key is waited for, the host's recorder stopped.
+    pub fn leave(s: *Settings, h: *const SettingsHost) void {
+        s.stopRecording(h);
     }
 
-    pub fn hide(s: *Settings) void {
-        s.open = false;
-        s.key_input = .idle;
-    }
-
-    /// The rows shown now: the clipboard's only where this system has it.
-    fn shown(s: *const Settings) []const RowKind {
-        return if (s.clip_here) visible(true) else visible(false);
-    }
-
-    fn hooks(s: *Settings, n: *panel.Nanolight) ?*const SettingsHost {
-        _ = s;
-        const h = n.host orelse return null;
-        return h.settings;
-    }
-
-    fn pull(s: *Settings, n: *panel.Nanolight) void {
-        const h = s.hooks(n) orelse return;
+    fn pull(s: *Settings, h: *const SettingsHost) void {
         s.choice = h.choice(h.ctx);
         if (s.choice.preset() == null) s.custom = s.choice;
-        s.clip_here = h.clipboard_enabled(h.ctx, null) != null;
         s.sync = h.sync_status(h.ctx);
         s.version = h.version(h.ctx);
         s.ready = h.ready(h.ctx);
+        s.theme = h.theme(h.ctx, null);
     }
 
-    pub fn view(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
-        s.pull(n);
-        const rows = s.shown();
+    /// Settings, as the screen up (view.zig `draw`): what the host says,
+    /// pulled once a frame, then Return, then the rows. Everything it does
+    /// is the host's, leaving too (Show Welcome Again, Quit): no outcome.
+    pub fn draw(
+        s: *Settings,
+        c: *ui.Context,
+        h: *const SettingsHost,
+        clip: bool,
+        p: Palette,
+    ) void {
+        s.pull(h);
+        const rows = shownRows(clip);
         if (s.sel >= rows.len) s.sel = rows.len - 1;
-        s.keys(c, n, rows);
+        if (s.ret.once(c)) s.activate(h, rows[s.sel]);
+        s.keys(c, h, rows);
         ui.key(c, "settings");
         const f = motion.frame(
             c,
-            .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = panel.spring } },
+            .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = chrome.spring } },
         );
         const page = ui.div(c).column().wFull().grow().motion(f);
         defer page.end();
-        s.head(c, n, p, rows);
-        s.body(c, n, p, rows);
+        s.head(c, h, p, rows);
+        s.body(c, h, p, rows, shownParts(clip));
         foot(c, p);
     }
 
     fn head(
         s: *Settings,
         c: *ui.Context,
-        n: *panel.Nanolight,
+        h: *const SettingsHost,
         p: Palette,
-        rows: []const RowKind,
+        rows: []const Row,
     ) void {
-        const bar = ui.div(c).row().wFull().h(panel.header_h).px(16).gap(10).itemsCenter();
+        const bar = ui.div(c).row().wFull().h(chrome.header_h).px(16).gap(10).itemsCenter();
         defer bar.end();
         const badge = ui.div(c).size(28, 28).rounded(8).center().bg(p.tile);
         ui.icon(c, "gearshape", .{ .size = 15, .weight = .medium, .color = p.text });
@@ -211,7 +276,7 @@ pub const Settings = struct {
             .{ .size = 18, .weight = .semibold, .color = p.text, .tracking = -0.2 },
         );
         ui.spacer(c);
-        s.themes(c, n, p, rows);
+        s.themes(c, h, p, rows);
     }
 
     /// The theme's swatches, in the header: always in sight, however many
@@ -219,9 +284,9 @@ pub const Settings = struct {
     fn themes(
         s: *Settings,
         c: *ui.Context,
-        n: *panel.Nanolight,
+        h: *const SettingsHost,
         p: Palette,
-        rows: []const RowKind,
+        rows: []const Row,
     ) void {
         const on = isSel(rows, s.sel, .theme);
         ui.key(c, "theme");
@@ -230,161 +295,128 @@ pub const Settings = struct {
         defer group.end();
         ui.text(
             c,
-            n.theme.title(),
+            s.theme.title(),
             .{ .size = 12.5, .weight = .medium, .color = if (on) p.text else p.sub },
         );
         ui.div(c).w(4).end();
         for (Theme.all) |t| {
             ui.key(c, c.print("theme-{s}", .{@tagName(t)}));
             const ring = ui.div(c).size(20, 20).roundedFull().center().control()
-                .border(if (t == n.theme) p.text.alpha(0.7) else p.fill.alpha(0));
+                .border(if (t == s.theme) p.text.alpha(0.7) else p.fill.alpha(0));
             defer ring.end();
-            if (ring.clicked()) s.setTheme(n, t);
+            if (ring.clicked()) s.setTheme(h, t);
             ui.div(c).size(12, 12).roundedFull().bg(t.hue(c.theme.dark) orelse p.sub).end();
         }
     }
 
-    fn setTheme(s: *Settings, n: *panel.Nanolight, t: Theme) void {
-        n.theme = t;
-        const h = s.hooks(n) orelse return;
-        h.theme(h.ctx, t);
+    fn setTheme(s: *Settings, h: *const SettingsHost, t: Theme) void {
+        s.theme = h.theme(h.ctx, t);
     }
 
     fn body(
         s: *Settings,
         c: *ui.Context,
-        n: *panel.Nanolight,
+        h: *const SettingsHost,
         p: Palette,
-        rows: []const RowKind,
+        rows: []const Row,
+        list: []const Part,
     ) void {
-        const clip = s.clip_here;
-        const col = ui.div(c).column().wFull().px(20).pt(2).pb(6).gap(if (mac) 8 else 10).grow();
+        const col = ui.div(c).column().wFull().px(20).pt(pad_top).pb(pad_bottom).gap(gap).grow();
         defer col.end();
-        label(c, p, "Open Nanolight with");
-        s.choices(c, n, p);
-        label(c, p, "Search");
-        s.switchRow(c, n, p, rows, .suggest, "Google Suggestions");
-        if (present(.files, clip)) s.switchRow(c, n, p, rows, .files, "File Search");
-        if (present(.browser, clip)) {
-            s.switchRow(c, n, p, rows, .browser, "Open Searches in Browser");
-        }
-        if (present(.login, clip) or present(.menu_bar, clip)) {
-            label(c, p, "This " ++ @import("results.zig").machine);
-        }
-        if (present(.login, clip)) s.switchRow(c, n, p, rows, .login, "Open at Login");
-        if (present(.menu_bar, clip)) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
-        if (present(.clipboard, clip)) {
-            label(c, p, "Clipboard History");
-            s.switchRow(c, n, p, rows, .clipboard, "Record Copied Items");
-            s.button(c, n, p, rows, .clear_clipboard, switch (s.cleared) {
-                .idle => "Clear History",
-                .done => "Clipboard History Cleared",
-                .failed => "Could Not Clear History",
-            });
-        }
-        label(c, p, if (mac) "Sync Across Macs" else "Sync Across Computers");
-        ui.text(c, s.sync, .{ .size = 12.5, .color = p.sub });
-        if (present(.updates, clip)) {
-            label(c, p, "Updates");
-            s.updates(c, n, p, rows);
-        }
-        s.button(c, n, p, rows, .welcome, "Show Welcome Again");
-        s.button(c, n, p, rows, .quit, "Quit Nanolight");
+        for (list) |part| switch (part) {
+            .heading => |name| ui.text(c, name, p.heading()),
+            .chips => s.choices(c, h, p),
+            .toggle => |t| s.switchRow(c, h, p, rows, t),
+            .button => |b| s.button(c, h, p, rows, b),
+            .note => |n| switch (n) {
+                .sync => ui.text(c, s.sync, .{ .size = 12.5, .color = p.sub }),
+                .version => ui.textf(
+                    c,
+                    .{ .size = 12.5, .color = p.sub },
+                    app_name ++ " {s}",
+                    .{s.version},
+                ),
+            },
+        };
     }
 
-    fn label(c: *ui.Context, p: Palette, name: []const u8) void {
-        ui.text(c, name, .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) });
-    }
-
-    fn choices(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
+    fn choices(s: *Settings, c: *ui.Context, h: *const SettingsHost, p: Palette) void {
         const row = ui.div(c).row().gap(8);
         defer row.end();
         for (Choice.all) |ch| {
             ui.key(c, c.print("key-{d}-{d}", .{ ch.code, ch.mods }));
             const on = ch.eql(s.choice) and s.key_input == .idle;
-            const b = ui.div(c).row().h(36).px(14).itemsCenter().rounded(10).control()
-                .bg(if (on) p.sel else p.tile.alpha(0.5))
-                .border(if (on) p.text.alpha(0.35) else p.rim);
+            const label_text = c.print("{f}", .{shortcut.text(ch)});
+            const b = chrome.shortcutChip(c, p, label_text, on, chrome.settings_chip);
             defer b.end();
-            if (b.clicked()) s.pick(n, ch);
-            ui.text(
-                c,
-                c.print("{f}", .{ch}),
-                .{
-                    .size = 13.5,
-                    .weight = if (on) .semibold else .medium,
-                    .color = if (on) p.text else p.sub,
-                },
-            );
+            if (b.clicked()) s.pick(h, ch);
         }
-        // One's own: the key recorded, or a press away (on the Mac, where
-        // Carbon takes any key; a PC keeps to the four).
-        if (!mac) return;
+        // One's own: the key recorded, or a press away (`keys.any_key`).
+        if (!key_choice.any_key) return;
         ui.key(c, "key-own");
         const recording = s.key_input != .idle;
         const on = recording or (s.custom != null and s.custom.?.eql(s.choice));
-        const b = ui.div(c).row().h(36).px(14).gap(6).itemsCenter().rounded(10).control()
-            .bg(if (on) p.sel else p.tile.alpha(0.5)).border(if (on) p.text.alpha(0.35) else p.rim);
-        defer b.end();
-        if (b.clicked()) s.record(n, !recording);
         const text = switch (s.key_input) {
             .refused => "Add ⌘, ⌥ or ⌃",
             .recording => "Type a shortcut",
-            .idle => if (s.custom) |k| c.print("{f}", .{k}) else "Record…",
+            .idle => if (s.custom) |k| c.print("{f}", .{shortcut.text(k)}) else "Record…",
         };
-        const weight: ui.Weight = if (on) .semibold else .medium;
-        ui.text(c, text, .{ .size = 13.5, .weight = weight, .color = if (on) p.text else p.sub });
+        const b = chrome.shortcutChip(c, p, text, on, chrome.settings_chip);
+        defer b.end();
+        if (b.clicked()) s.record(h, !recording);
         if (recording) ui.kbd(c, "esc");
     }
 
     /// Starts or stops waiting for a key of one's own. Recording only once
-    /// the host's recorder has started (none in tests: as asked).
-    fn record(s: *Settings, n: *panel.Nanolight, on: bool) void {
-        const h = s.hooks(n) orelse {
-            s.key_input = if (on) .recording else .idle;
-            return;
-        };
+    /// the host's recorder has started: `key_input` is the one word on
+    /// whether it runs.
+    fn record(s: *Settings, h: *const SettingsHost, on: bool) void {
         s.key_input = if (h.record(h.ctx, on)) .recording else .idle;
     }
 
+    /// No key waited for any more (Settings goes, the panel loses the
+    /// keys): the recorder stops and the key is back.
+    pub fn stopRecording(s: *Settings, h: *const SettingsHost) void {
+        if (s.key_input != .idle) s.record(h, false);
+    }
+
     /// A key pressed while recording: kept and used, or not.
-    pub fn took(s: *Settings, n: *panel.Nanolight, r: shortcut.Recorded) void {
+    pub fn took(s: *Settings, h: *const SettingsHost, r: key_choice.Recorded) void {
         if (s.key_input == .idle) return;
         switch (r) {
             .unusable => s.key_input = .refused,
-            .cancel => s.record(n, false),
+            .cancel => s.record(h, false),
             .key => |k| {
-                s.record(n, false);
+                s.record(h, false);
                 s.custom = k;
-                s.pick(n, k);
+                s.pick(h, k);
             },
         }
     }
 
-    fn pick(s: *Settings, n: *panel.Nanolight, ch: Choice) void {
-        if (s.key_input != .idle) s.record(n, false);
+    fn pick(s: *Settings, h: *const SettingsHost, ch: Choice) void {
+        s.stopRecording(h);
         s.choice = ch;
-        const h = s.hooks(n) orelse return;
         h.apply(h.ctx, ch);
     }
 
     fn switchRow(
         s: *Settings,
         c: *ui.Context,
-        n: *panel.Nanolight,
+        h: *const SettingsHost,
         p: Palette,
-        rows: []const RowKind,
+        rows: []const Row,
         t: Toggle,
-        title: []const u8,
     ) void {
-        const on = isSel(rows, s.sel, t.row());
-        const d = ui.div(c).row().wFull().h(36).px(4).gap(10).itemsCenter().rounded(10).control()
+        const on = isSel(rows, s.sel, .{ .toggle = t });
+        const d = ui.div(c).row().wFull().h(row_h).px(4).gap(10).itemsCenter().rounded(10)
+            .control()
             .bg(if (on) p.sel else p.fill.alpha(0));
         defer d.end();
-        if (d.clicked()) s.flip(n, t);
-        ui.text(c, title, .{ .size = 13.5, .weight = .medium, .color = p.text });
+        if (d.clicked()) flip(h, t);
+        ui.text(c, t.row().title, .{ .size = 13.5, .weight = .medium, .color = p.text });
         ui.spacer(c);
-        mark(c, p, t.get(n, s.hooks(n)));
+        mark(c, p, h.toggle(h.ctx, t, null));
     }
 
     /// A quiet on/off mark. Not `ui.toggle`: that flips on its own click,
@@ -400,167 +432,92 @@ pub const Settings = struct {
         if (!on) ui.spacer(c);
     }
 
-    fn flip(s: *Settings, n: *panel.Nanolight, t: Toggle) void {
-        const h = s.hooks(n);
-        t.set(n, h, !t.get(n, h));
-    }
-
-    fn updates(
-        s: *Settings,
-        c: *ui.Context,
-        n: *panel.Nanolight,
-        p: Palette,
-        rows: []const RowKind,
-    ) void {
-        ui.textf(c, .{ .size = 12.5, .color = p.sub }, "Nanolight {s}", .{s.version});
-        const text = if (s.ready) |v|
-            c.print("Restart to Update to {s}", .{v})
-        else
-            "Check for Updates";
-        s.button(c, n, p, rows, .updates, text);
+    /// What its owner says now, the other way.
+    fn flip(h: *const SettingsHost, t: Toggle) void {
+        _ = h.toggle(h.ctx, t, !h.toggle(h.ctx, t, null));
     }
 
     fn button(
         s: *Settings,
         c: *ui.Context,
-        n: *panel.Nanolight,
+        h: *const SettingsHost,
         p: Palette,
-        rows: []const RowKind,
-        kind: RowKind,
-        text: []const u8,
+        rows: []const Row,
+        b: Button,
     ) void {
-        const on = isSel(rows, s.sel, kind);
-        ui.key(c, @tagName(kind));
-        const d = ui.div(c).row().wFull().h(36).px(12).gap(8).itemsCenter().rounded(10).control()
+        const text = switch (b) {
+            .clear_clipboard => switch (s.cleared) {
+                .idle => "Clear History",
+                .done => chrome.clipboard_title ++ " Cleared",
+                .failed => "Could Not Clear History",
+            },
+            .updates => if (s.ready) |v|
+                c.print("Restart to Update to {s}", .{v})
+            else
+                "Check for Updates",
+            .welcome => "Show Welcome Again",
+            .quit => "Quit " ++ app_name,
+        };
+        const on = isSel(rows, s.sel, .{ .button = b });
+        ui.key(c, @tagName(b));
+        const d = ui.div(c).row().wFull().h(row_h).px(12).gap(8).itemsCenter().rounded(10)
+            .control()
             .bg(if (on) p.sel else p.tile.alpha(0.45)).border(p.rim);
         defer d.end();
-        if (d.clicked()) s.activate(n, kind);
+        if (d.clicked()) s.activate(h, .{ .button = b });
         ui.text(c, text, .{ .size = 13.5, .weight = .medium, .color = p.text });
         ui.spacer(c);
         if (on) ui.kbd(c, "↩");
     }
 
     fn foot(c: *ui.Context, p: Palette) void {
-        ui.div(c).wFull().h(1).bg(p.hair).end();
-        const bar = ui.div(c).row().wFull().h(panel.footer_h).px(16).gap(8).itemsCenter();
+        const bar = chrome.footer(c, p);
         defer bar.end();
-        ui.text(c, "Close", .{ .size = 12, .color = p.sub.alpha(0.8) });
-        ui.kbd(c, "esc");
+        chrome.closeKey(c, p);
     }
 
-    fn keys(s: *Settings, c: *ui.Context, n: *panel.Nanolight, rows: []const RowKind) void {
+    fn keys(s: *Settings, c: *ui.Context, h: *const SettingsHost, rows: []const Row) void {
         const S = ui.Shortcut;
-        if (c.shortcut(.{ .key = S.escape })) {
-            s.hide();
-            n.query.focus();
-            return n.hidePanel();
-        }
-        if (!s.returned(c)) s.took_return = false;
-        if (panel.Nanolight.moveDown(c)) s.sel = (s.sel + 1) % rows.len;
-        if (panel.Nanolight.moveUp(c)) s.sel = (s.sel + rows.len - 1) % rows.len;
-        if (c.shortcut(.{ .key = S.left })) s.nudge(n, rows, -1);
-        if (c.shortcut(.{ .key = S.right })) s.nudge(n, rows, 1);
+        if (chrome.moveDown(c)) s.sel = (s.sel + 1) % rows.len;
+        if (chrome.moveUp(c)) s.sel = (s.sel + rows.len - 1) % rows.len;
+        if (c.shortcut(.{ .key = S.left })) s.nudge(h, rows[s.sel], -1);
+        if (c.shortcut(.{ .key = S.right })) s.nudge(h, rows[s.sel], 1);
         // Space is also typed into the field once Settings closes; only
         // Return and Space while this view has the keys.
-        if (c.shortcut(.{ .key = ' ' })) s.activate(n, rows[s.sel]);
+        if (c.shortcut(.{ .key = ' ' })) s.activate(h, rows[s.sel]);
     }
 
-    /// Return, as a key or as the field's newline command.
-    /// Settings in place of the rows, the panel's height following them.
-    pub fn inPanel(s: *Settings, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
-        // Return is the field's command, or a key. One event, one act.
-        if (s.returned(c) and !s.took_return) {
-            s.took_return = true;
-            s.activateSelected(n);
-        }
-        s.pull(n);
-        const h = n.follow(s.tall());
-        const box = ui.div(c).column().wFull().h(h).clip();
-        defer box.end();
-        s.view(c, n, p);
-    }
-
-    pub fn returned(s: *Settings, c: *ui.Context) bool {
-        _ = s;
-        if (c.input.key == .enter) return true;
-        for (c.input.ops) |op| if (op == .command and op.command == .insert_newline) return true;
-        return false;
-    }
-
-    /// Return on the selected row. The field would have taken it.
-    pub fn activateSelected(s: *Settings, n: *panel.Nanolight) void {
-        s.pull(n);
-        const rows = s.shown();
-        if (s.sel >= rows.len) return;
-        s.activate(n, rows[s.sel]);
-    }
-
-    fn nudge(s: *Settings, n: *panel.Nanolight, rows: []const RowKind, dir: i8) void {
-        switch (rows[s.sel]) {
-            .choice => s.pick(n, s.choice.step(dir)),
-            .theme => s.setTheme(n, n.theme.step(dir)),
-            else => {},
+    fn nudge(s: *Settings, h: *const SettingsHost, row: Row, dir: i8) void {
+        switch (row) {
+            .choice => s.pick(h, s.choice.step(dir)),
+            .theme => s.setTheme(h, s.theme.step(dir)),
+            .toggle, .button => {},
         }
     }
 
-    fn activate(s: *Settings, n: *panel.Nanolight, kind: RowKind) void {
-        const h = s.hooks(n);
-        switch (kind) {
+    fn activate(s: *Settings, h: *const SettingsHost, row: Row) void {
+        switch (row) {
             // ←/→ step through the four; Return records one's own.
-            .choice => if (mac) s.record(n, s.key_input == .idle) else s.nudge(n, s.shown(), 1),
-            inline .suggest, .files, .browser, .login, .menu_bar, .clipboard => |k| {
-                s.flip(n, @field(Toggle, @tagName(k)));
+            .choice => if (key_choice.any_key)
+                s.record(h, s.key_input == .idle)
+            else
+                s.nudge(h, .choice, 1),
+            .toggle => |t| flip(h, t),
+            .button => |b| switch (b) {
+                .clear_clipboard => {
+                    s.cleared = if (h.clipboard_clear(h.ctx)) .done else .failed;
+                },
+                .updates => if (s.ready != null) h.restart(h.ctx) else h.check(h.ctx),
+                // In place of Settings (view.zig `Nanolight.open`).
+                .welcome => h.welcome(h.ctx),
+                .quit => h.quit(h.ctx),
             },
-            .clear_clipboard => {
-                const ok = if (h) |host| host.clipboard_clear(host.ctx) else true;
-                s.cleared = if (ok) .done else .failed;
-            },
-            .updates => if (h) |host| {
-                if (s.ready != null) host.restart(host.ctx) else host.check(host.ctx);
-            },
-            .welcome => if (h) |host| {
-                s.hide();
-                host.welcome(host.ctx);
-            },
-            .quit => if (h) |host| host.quit(host.ctx),
-            .theme => s.setTheme(n, n.theme.step(1)),
+            .theme => s.setTheme(h, s.theme.step(1)),
         }
     }
 };
 
-/// The rows this build shows, in order, with or without the clipboard's.
-/// The theme's swatches, in the header, are the last for ↑/↓.
-fn visible(comptime clip: bool) []const RowKind {
-    const T = struct {
-        /// In `RowKind`'s order, which is the drawing's.
-        const rows = blk: {
-            const all = @import("std").enums.values(RowKind);
-            var list: [all.len]RowKind = undefined;
-            var n: usize = 0;
-            for (all) |k| {
-                if (!present(k, clip)) continue;
-                list[n] = k;
-                n += 1;
-            }
-            const out = list[0..n].*;
-            break :blk out;
-        };
-    };
-    return &T.rows;
-}
-
-fn isSel(rows: []const RowKind, sel: usize, kind: RowKind) bool {
+fn isSel(rows: []const Row, sel: usize, row: Row) bool {
     if (sel >= rows.len) return false;
-    return rows[sel] == kind;
-}
-
-test "a Nix build's Settings has no login or updates row" {
-    var login = false;
-    var updates = false;
-    for (visible(true)) |k| {
-        login = login or k == .login;
-        updates = updates or k == .updates;
-    }
-    try @import("std").testing.expectEqual(!nix, login);
-    try @import("std").testing.expectEqual(!nix, updates);
+    return rows[sel].eql(row);
 }

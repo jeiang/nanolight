@@ -1,6 +1,8 @@
 //! The panel's colors, light and dark: text, rows, hairlines, tiles. A
 //! theme other than `system` tints them with its hue, light or dark still
-//! as the system is (nanoui's own controls follow the system too).
+//! as the system is (nanoui's own controls follow the system too). And the
+//! roles text plays on every screen, each one style.
+const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 
@@ -12,9 +14,48 @@ pub const Palette = struct {
     rim: ui.Color,
     tile: ui.Color,
     fill: ui.Color,
+
+    /// A row's name.
+    pub fn name(p: Palette) ui.TextStyle {
+        return .{ .size = 13.5, .weight = .medium, .color = p.text.alpha(0.82) };
+    }
+
+    /// What a row is, and the footer's lesser keys.
+    pub fn detail(p: Palette) ui.TextStyle {
+        return .{ .size = 12, .color = p.sub.alpha(0.8) };
+    }
+
+    /// The footer's main act: what Return does.
+    pub fn action(p: Palette) ui.TextStyle {
+        return .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) };
+    }
+
+    /// The footer's own words: the app's name, or the screen's.
+    pub fn caption(p: Palette) ui.TextStyle {
+        return .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.8) };
+    }
+
+    /// A section's name.
+    pub fn heading(p: Palette) ui.TextStyle {
+        return .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) };
+    }
+
+    /// A row's ⌘1…⌘9.
+    pub fn hint(p: Palette) ui.TextStyle {
+        return .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.5), .tabular = true };
+    }
+
+    /// Said in place of what is still to come ("Searching Google…").
+    pub fn waiting(p: Palette) ui.TextStyle {
+        return .{ .size = 13, .color = p.sub.alpha(0.8) };
+    }
+
+    pub fn placeholder(p: Palette) ui.Color {
+        return p.sub.alpha(0.75);
+    }
 };
 
-const pc = @import("builtin").os.tag != .macos;
+const pc = !@import("os.zig").mac;
 
 /// The panel's tint, chosen in Settings (`nanolight.theme`).
 pub const Theme = enum {
@@ -57,6 +98,12 @@ pub const Theme = enum {
         const n: i8 = all.len;
         const i: i8 = @intCast(@backingInt(t));
         return all[@intCast(@mod(i + dir, n))];
+    }
+
+    /// The theme kept by `name` (`nanolight.theme`); `system` for none, or
+    /// one this build doesn't know.
+    pub fn parse(name: ?[]const u8) Theme {
+        return std.meta.stringToEnum(Theme, name orelse return .system) orelse .system;
     }
 };
 
@@ -109,12 +156,16 @@ fn grey(dark: bool) Palette {
     };
 }
 
-test "System keeps the greys; a theme tints them and steps round" {
-    const t = @import("std").testing;
-    try t.expectEqual(grey(true), palette(true, .system));
-    try t.expectEqual(grey(false), palette(false, .system));
-    try t.expect(!@import("std").meta.eql(grey(true).sel, palette(true, .ocean).sel));
+test "a theme tints the greys and steps round" {
+    const t = std.testing;
+    try t.expect(!std.meta.eql(grey(true).sel, palette(true, .ocean).sel));
     try t.expectEqual(Theme.violet, Theme.system.step(-1));
     try t.expectEqual(Theme.system, Theme.violet.step(1));
     try t.expectEqual(Theme.ocean, Theme.system.step(1));
+}
+
+test "a theme is kept by name" {
+    try std.testing.expectEqual(Theme.system, Theme.parse(null));
+    try std.testing.expectEqual(Theme.forest, Theme.parse(@tagName(Theme.forest)));
+    try std.testing.expectEqual(Theme.system, Theme.parse("plaid"));
 }

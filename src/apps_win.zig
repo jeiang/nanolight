@@ -5,43 +5,52 @@
 //! Its icon is the shell's own, 64 pixels (IShellItemImageFactory).
 const std = @import("std");
 const nanoui = @import("nanoui");
-const apps = @import("apps.zig");
-const Index = apps.Index;
+const app_scan = @import("app_scan.zig");
+const Sink = app_scan.Sink;
 
-pub fn scan(ix: *Index, io: std.Io, env: *const std.process.Environ.Map) void {
+/// Rows the system shows without a shortcut, listed by `scan`.
+const settings = "Settings";
+const explorer = "File Explorer";
+const calculator = "Calculator";
+
+pub const starters: []const []const u8 = &.{
+    explorer,
+    "Microsoft Edge",
+    settings,
+    "Notepad",
+    calculator,
+};
+
+pub fn scan(sink: Sink, io: std.Io, env: *const std.process.Environ.Map) void {
     for ([_][]const u8{ "ProgramData", "APPDATA" }) |v| {
         const base = env.get(v) orelse continue;
         var buf: [1024]u8 = undefined;
+        // A folder past 1 KB is passed over.
         const p = std.fmt.bufPrint(
             &buf,
             "{s}\\Microsoft\\Windows\\Start Menu\\Programs",
             .{base},
         ) catch continue;
-        scanDir(ix, io, p, 2);
+        scanDir(sink, io, p, 2);
     }
     const windir = env.get("WINDIR") orelse "C:\\Windows";
     var ex: [512]u8 = undefined;
-    addBuiltIn(ix, "Settings", "ms-settings:");
+    sink.add(settings, "ms-settings:", "Windows");
+    // A Windows folder past 512 bytes lists no File Explorer.
     if (std.fmt.bufPrint(
         &ex,
         "{s}\\explorer.exe",
         .{windir},
-    )) |p| addBuiltIn(ix, "File Explorer", p) else |_| {}
-    addBuiltIn(ix, "Microsoft Store", "ms-windows-store:");
-    addBuiltIn(ix, "Calculator", "calculator:");
+    )) |p| sink.add(explorer, p, "Windows") else |_| {}
+    sink.add("Microsoft Store", "ms-windows-store:", "Windows");
+    sink.add(calculator, "calculator:", "Windows");
 }
 
-/// A row Windows always has, listed under "Windows".
-fn addBuiltIn(ix: *Index, name: []const u8, path: []const u8) void {
-    // best effort: only memory can fail here, and the other apps still list.
-    ix.addIn(name, path, "Windows") catch {};
+pub fn scanDir(sink: Sink, io: std.Io, path: []const u8, depth: u8) void {
+    app_scan.walk(io, path, depth, sink, visit);
 }
 
-pub fn scanDir(ix: *Index, io: std.Io, path: []const u8, depth: u8) void {
-    apps.walk(io, path, depth, ix, visit);
-}
-
-fn visit(ix: *Index, f: apps.Found) apps.Step {
+fn visit(sink: Sink, f: app_scan.Found) app_scan.Step {
     const ext = std.fs.path.extension(f.entry.name);
     const link = std.ascii.eqlIgnoreCase(ext, ".lnk") or std.ascii.eqlIgnoreCase(ext, ".url");
     if (!link) return .descend;
@@ -49,8 +58,15 @@ fn visit(ix: *Index, f: apps.Found) apps.Step {
     if (skipped(name)) return .next;
     const parent = std.fs.path.basename(f.folder);
     const folder = if (std.ascii.eqlIgnoreCase(parent, "Programs")) "Start" else parent;
-    ix.addIn(name, f.full, folder) catch return .stop;
+    sink.add(name, f.full, folder);
     return .next;
+}
+
+/// Opens an app (a shortcut, a built-in's address), a file or a folder
+/// through the shell.
+pub fn launch(io: std.Io, path: []const u8) bool {
+    _ = io;
+    return nanoui.shell.openPath(path);
 }
 
 /// Shortcuts nobody launches from a launcher.
@@ -129,7 +145,14 @@ extern "user32" fn ReleaseDC(hwnd: ?*anyopaque, dc: *anyopaque) callconv(.winapi
 const flags: u32 = 0x1 | 0x4;
 
 /// The shell's icon for `path` at 64 pixels, as PNG.
-pub fn icon(gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
+pub fn icon(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+    path: []const u8,
+) ?[]u8 {
+    _ = io;
+    _ = env;
     if (std.mem.indexOfScalar(u8, path, '\\') == null) return null; // ms-settings: and the like
     var wide: [1024:0]u16 = undefined;
     const n = std.unicode.utf8ToUtf16Le(wide[0..1023], path) catch return null;

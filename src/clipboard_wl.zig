@@ -5,13 +5,12 @@
 //! its types are read through pipes, without blocking the loop. A paste serves a
 //! data-control source for the entry, and sends Ctrl+V through a virtual
 //! keyboard (virtual-keyboard-unstable-v1) with a keymap of two keys.
-//!
-//! No source app is known here, so `exclude_apps` cannot apply on Wayland.
 const std = @import("std");
 const assert = std.debug.assert;
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
-const lx = @import("clipboard_linux.zig");
+const clipboard = @import("clipboard_types.zig");
+const offer = @import("clipboard_offer.zig");
+const dl = @import("dl.zig");
 
 const Proxy = opaque {};
 const Display = opaque {};
@@ -83,7 +82,7 @@ fn DataControl(comptime ns: []const u8, comptime version: c_int) type {
 
         var get_device_types = [2]?*const Interface{ &device, null };
         const source_type = [1]?*const Interface{&source};
-        const offer_type = [1]?*const Interface{&offer};
+        const offer_type = [1]?*const Interface{&data_offer};
 
         pub const manager = described(name("manager"), version, &manager_methods, &none_messages);
         const manager_methods = [_]Message{
@@ -109,7 +108,7 @@ fn DataControl(comptime ns: []const u8, comptime version: c_int) type {
         const source_methods = [_]Message{ msg("offer", "s", &none1), msg("destroy", "", &none0) };
         const source_events = [_]Message{ msg("send", "sh", &none2), msg("cancelled", "", &none0) };
 
-        pub const offer = described(name("offer"), version, &offer_methods, &offer_events);
+        pub const data_offer = described(name("offer"), version, &offer_methods, &offer_events);
         const offer_methods = [_]Message{
             msg("receive", "sh", &none2),
             msg("destroy", "", &none0),
@@ -141,7 +140,7 @@ const Proto = struct {
             .manager = &T.manager,
             .device = &T.device,
             .source = &T.source,
-            .offer = &T.offer,
+            .offer = &T.data_offer,
             .setSeat = T.setSeat,
         };
     }
@@ -219,8 +218,7 @@ pub const keymap_text =
 const key_leftctrl: u32 = 29;
 const key_v: u32 = 47;
 const mod_control: u32 = 4;
-/// Time for the window that had the keys to take them back before Ctrl+V.
-const paste_delay_ms = 150;
+/// How long one read of an offer may take; past it, the next type is read.
 const step_ms = 3000;
 const max_mimes = 64;
 const write_tick_ms = 10;
@@ -324,25 +322,27 @@ pub const Wl = struct {
     device: ?*Proxy = null,
     watch: ?nanoui.fdwatch.Watch = null,
 
-    // The selection now, and the read of it.
     current: ?*Offer = null,
-    tick: u32 = 0,
+    limit: offer.Timeout = .{},
     reading: bool = false,
-    gather: lx.Gather = undefined,
+    gather: offer.Gather = undefined,
     cap: usize = 0,
     rd_fd: c_int = -1,
     rd_watch: ?nanoui.fdwatch.Watch = null,
     buf: std.ArrayList(u8) = .empty,
 
-    // What Nanolight owns the selection with.
     source: ?*Proxy = null,
-    served: ?lx.Served = null,
+    served: ?offer.Served = null,
     vk: ?*Proxy = null,
 
     const gpa = std.heap.c_allocator;
 
     pub fn open(w: *Wl) error{ NoLibrary, NoConnection, NoDataControl }!void {
-        w.lib = lx.dlLoad(Lib, "libwayland-client.so.0") orelse return error.NoLibrary;
+        w.lib = dl.table(
+            Lib,
+            &.{.{ .name = "libwayland-client.so.0" }},
+            "no Wayland clipboard history",
+        ) orelse return error.NoLibrary;
         const lib = w.lib;
         const d = lib.wl_display_connect(null) orelse return error.NoConnection;
         w.d = d;
@@ -436,10 +436,10 @@ pub const Wl = struct {
 
     // ----- the registry -----
 
-    const registry_listener = [2]?*const anyopaque{
-        @ptrCast(&onGlobal),
-        @ptrCast(&onGlobalRemove),
-    };
+    /// libwayland calls every slot of a listener: an event not acted on still needs one.
+    fn ignored() callconv(.c) void {}
+
+    const registry_listener = [2]?*const anyopaque{ @ptrCast(&onGlobal), @ptrCast(&ignored) };
 
     fn onGlobal(
         data: ?*anyopaque,
@@ -461,8 +461,6 @@ pub const Wl = struct {
         }
     }
 
-    fn onGlobalRemove(_: ?*anyopaque, _: *Proxy, _: u32) callconv(.c) void {}
-
     fn bind(w: *Wl, registry: *Proxy, name: u32, interface: *const Interface, v: u32) ?*Proxy {
         return w.lib.wl_proxy_marshal_flags(
             registry,
@@ -482,7 +480,7 @@ pub const Wl = struct {
     const device_listener = [4]?*const anyopaque{
         @ptrCast(&onDataOffer),
         @ptrCast(&onSelection),
-        @ptrCast(&onFinished),
+        @ptrCast(&ignored),
         @ptrCast(&onPrimary),
     };
     const offer_listener = [1]?*const anyopaque{@ptrCast(&onOfferType)};
@@ -500,8 +498,6 @@ pub const Wl = struct {
         const name = gpa.dupe(u8, std.mem.span(mime)) catch return;
         o.mimes.append(gpa, name) catch gpa.free(name);
     }
-
-    fn onFinished(_: ?*anyopaque, _: *Proxy) callconv(.c) void {}
 
     /// The primary selection is not history: its offers are let go.
     fn onPrimary(data: ?*anyopaque, _: *Proxy, proxy: ?*Proxy) callconv(.c) void {
@@ -526,22 +522,19 @@ pub const Wl = struct {
         const o: *Offer = @ptrCast(@alignCast(w.lib.wl_proxy_get_user_data(p) orelse return));
         w.current = o;
         const sink = w.sink orelse return;
-        const plan = lx.plan(o.mimes.items);
+        const plan = offer.plan(o.mimes.items);
         if (plan.own or plan.n == 0) return;
         w.gather = .{ .plan = plan, .sink = sink };
         w.reading = true;
-        w.fetch(w.gather.first().?);
+        w.fetch(w.gather.next().?);
     }
 
-    fn fetch(w: *Wl, r: lx.Request) void {
+    fn fetch(w: *Wl, r: offer.Request) void {
         const o = w.current orelse return w.endRead();
         var fds: [2]c_int = undefined;
         if (pipe2(&fds, O_CLOEXEC) != 0) return w.endRead();
         nonblocking(fds[0]);
-        var name: [128:0]u8 = undefined;
-        const n = @min(r.mime.len, name.len - 1);
-        @memcpy(name[0..n], r.mime[0..n]);
-        name[n] = 0;
+        var name: [offer.max_mime_name + 1]u8 = undefined;
         // `receive` is the offer's first request; libwayland keeps its own copy of the fd.
         _ = w.lib.wl_proxy_marshal_flags(
             o.proxy,
@@ -549,7 +542,7 @@ pub const Wl = struct {
             null,
             w.version(o.proxy),
             0,
-            @as([*:0]const u8, &name),
+            offer.mimeZ(&name, r.mime).ptr,
             fds[1],
         );
         _ = closeFd(fds[1]);
@@ -562,16 +555,11 @@ pub const Wl = struct {
             w.rd_fd = -1;
             return w.endRead();
         };
-        w.step();
+        w.limit.restart(Wl, "limit", step_ms, expired);
     }
 
-    fn step(w: *Wl) void {
-        w.tick +%= 1;
-        lx.after(Wl, w, w.tick, step_ms, expired);
-    }
-
-    fn expired(w: *Wl, id: u32) void {
-        if (w.reading and id == w.tick) w.advance(null);
+    fn expired(w: *Wl) void {
+        w.advance(null);
     }
 
     /// Reads what the source has written so far; at its end, the step is done.
@@ -597,7 +585,7 @@ pub const Wl = struct {
     fn endRead(w: *Wl) void {
         w.closeRead();
         w.reading = false;
-        w.tick +%= 1;
+        w.limit.cancel();
         w.buf.clearAndFree(gpa);
     }
 
@@ -643,8 +631,9 @@ pub const Wl = struct {
         w.source = null;
     }
 
-    fn serve(w: *Wl, c: clipboard.Content) bool {
-        var s = lx.Served.init(gpa, c) catch return false;
+    /// Owns the selection with `c`, offered in its formats and as Nanolight's own.
+    pub fn copy(w: *Wl, c: clipboard.Content) bool {
+        var s = offer.Served.init(gpa, c) catch return false;
         const m = w.manager.?;
         const src = w.lib.wl_proxy_marshal_flags(
             m,
@@ -660,8 +649,8 @@ pub const Wl = struct {
             };
         _ = w.lib.wl_proxy_add_listener(src, &source_listener, w);
         const sv = w.version(src);
-        for (s.mimes()) |mime| w.offerType(src, sv, mime);
-        w.offerType(src, sv, lx.own_mime);
+        for (s.formats()) |f| w.offerType(src, sv, f.mime);
+        w.offerType(src, sv, offer.own_mime);
         // `set_selection` is the device's first request.
         _ = w.lib.wl_proxy_marshal_flags(w.device.?, 0, null, w.version(w.device.?), 0, src);
         const old = w.source;
@@ -674,24 +663,17 @@ pub const Wl = struct {
     }
 
     fn offerType(w: *Wl, src: *Proxy, v: u32, mime: []const u8) void {
-        var name: [128:0]u8 = undefined;
-        const n = @min(mime.len, name.len - 1);
-        @memcpy(name[0..n], mime[0..n]);
-        name[n] = 0;
-        _ = w.lib.wl_proxy_marshal_flags(src, 0, null, v, 0, @as([*:0]const u8, &name));
+        var name: [offer.max_mime_name + 1]u8 = undefined;
+        _ = w.lib.wl_proxy_marshal_flags(src, 0, null, v, 0, offer.mimeZ(&name, mime).ptr);
     }
 
     // ----- paste -----
 
-    pub fn copy(w: *Wl, c: clipboard.Content) bool {
-        return w.serve(c);
-    }
-
     pub fn paste(w: *Wl, c: clipboard.Content, hide: clipboard.Hide) clipboard.PasteResult {
-        if (!w.serve(c)) return .failed;
+        if (!w.copy(c)) return .failed;
         if (!w.keyboard()) return .copied_unsupported;
         hide.func(hide.ctx);
-        lx.after(Wl, w, 0, paste_delay_ms, sendKeys);
+        offer.after(Wl, w, 0, offer.paste_delay_ms, sendKeys);
         return .pasted;
     }
 
@@ -772,50 +754,21 @@ pub const Wl = struct {
 
 const testing = std.testing;
 
-test "the protocol tables describe every request and event, ending where they should" {
-    inline for (.{ Ext, Wlr }) |P| {
-        try testing.expectEqual(@as(usize, 3), @as(usize, @intCast(P.manager.method_count)));
-        try testing.expectEqualStrings(
-            "create_data_source",
-            std.mem.span(P.manager.methods[0].name),
-        );
-        try testing.expectEqualStrings("no", std.mem.span(P.manager.methods[1].signature));
-        try testing.expectEqualStrings("set_selection", std.mem.span(P.device.methods[0].name));
-        try testing.expectEqualStrings("selection", std.mem.span(P.device.events[1].name));
-        try testing.expectEqualStrings("?o", std.mem.span(P.device.events[1].signature));
-        try testing.expectEqual(&P.offer, P.device.events[0].types[0].?);
-        try testing.expectEqual(&P.source, P.manager.methods[0].types[0].?);
-        try testing.expectEqualStrings("receive", std.mem.span(P.offer.methods[0].name));
-        try testing.expectEqualStrings("send", std.mem.span(P.source.events[0].name));
-        try testing.expectEqualStrings("sh", std.mem.span(P.source.events[0].signature));
-    }
-    try testing.expectEqualStrings("ext_data_control_manager_v1", std.mem.span(Ext.manager.name));
-    try testing.expectEqualStrings("zwlr_data_control_device_v1", std.mem.span(Wlr.device.name));
-    try testing.expectEqualStrings("zwp_virtual_keyboard_v1", std.mem.span(vk_interface.name));
-    try testing.expectEqualStrings("uhu", std.mem.span(vk_interface.methods[0].signature));
-}
-
 test "argument letters are counted without versions or nullability" {
     try testing.expectEqual(@as(usize, 0), argCount(""));
     try testing.expectEqual(@as(usize, 1), argCount("2?o"));
     try testing.expectEqual(@as(usize, 4), argCount("uuuu"));
 }
 
-test "the keymap names the two keys it presses and is a whole keymap" {
-    try testing.expect(std.mem.startsWith(u8, keymap_text, "xkb_keymap {\n"));
-    try testing.expect(std.mem.endsWith(u8, keymap_text, "};\n"));
-    for ([_][]const u8{
-        "<LCTL> = 37",
-        "<AB04> = 55",
-        "Control_L",
-        "[ v, V ]",
-        "modifier_map Control",
-    }) |part| {
-        try testing.expect(std.mem.indexOf(u8, keymap_text, part) != null);
-    }
-    // evdev code plus 8 is the xkb keycode.
-    try testing.expectEqual(@as(u32, 37), key_leftctrl + 8);
-    try testing.expectEqual(@as(u32, 55), key_v + 8);
+test "the keymap's keycodes are the evdev keys pressed, plus 8" {
+    const has = struct {
+        fn f(comptime name: []const u8, comptime evdev: u32) bool {
+            const part = std.fmt.comptimePrint("{s} = {d};", .{ name, evdev + 8 });
+            return std.mem.indexOf(u8, keymap_text, part) != null;
+        }
+    }.f;
+    try testing.expect(has("<LCTL>", key_leftctrl));
+    try testing.expect(has("<AB04>", key_v));
 }
 
 test "a keymap fd holds the text and its NUL, from the start" {

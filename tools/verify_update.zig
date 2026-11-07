@@ -16,26 +16,36 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Io = std.Io;
+const app_facts = @import("app_facts");
 const command = @import("command.zig");
 const feed_server = @import("feed_server.zig");
+const mac_verify = @import("mac_verify.zig");
 const macos = @import("macos.zig");
 const release = @import("release.zig");
 const screen = @import("screen.zig");
 const typing = @import("verify_typing.zig");
 
 const usage = "usage: zig build verify-update -- vOLD vNEW";
-const releases_url = "https://github.com/jeiang/nanolight/releases/download";
-const app = "/Applications/Nanolight.app";
-const program = app ++ "/Contents/MacOS/nanolight";
+const app = "/Applications/" ++ release.bundle_name;
+const program = app ++ "/" ++ release.bundle_program;
 const program_pattern = "^" ++ program;
-const domain = "dev.nanoui.nanolight";
 const port = 8765;
 const local_feed = std.fmt.comptimePrint("http://127.0.0.1:{d}", .{port});
-const chord = "key:45:6400:110";
 /// A version newer than any: only a lying feed could offer it.
 const lie_version = "99.0.0";
 const log_tail_lines = 20;
 const crash_head_lines = 60;
+/// Past the first update check, which finds nothing newer: a copy up this
+/// long has had its chance to update, or to die.
+const first_check_past_ms = mac_verify.first_check_ms + 5_000;
+/// After the update is fetched: time to check it, and for the restart.
+const restart_past_ms = app_facts.restart_idle_ms + 15_000;
+/// After an update: past the new copy's own first check.
+const settled_ms = mac_verify.first_check_ms + 10_000;
+/// Put away, a copy updates once its check and the restart are past.
+const put_away_within_s = (mac_verify.first_check_ms + app_facts.restart_idle_ms) / 1000 + 60;
+/// Left open, it waits for nobody to be at the Mac.
+const left_open_within_s = mac_verify.away_ms / 1000 + 180;
 
 pub const Died = error{Died};
 
@@ -60,6 +70,11 @@ const Session = struct {
 
     fn print(s: *const Session, comptime format: []const u8, arguments: anytype) []const u8 {
         return std.fmt.allocPrint(s.arena, format, arguments) catch @panic("OOM");
+    }
+
+    /// The feed of the release being checked, on GitHub.
+    fn releaseFeed(s: *const Session) []const u8 {
+        return s.print("{s}/{s}", .{ release.releases_url, s.to });
     }
 
     /// Says what failed, with the app's log and its newest crash report, and
@@ -90,21 +105,17 @@ const Session = struct {
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const environ = init.environ_map;
-    if (!std.mem.eql(u8, environ.get("CI") orelse "", "true")) {
-        command.complain(io, "verify-update presses keys and replaces the installed app: " ++
-            "CI runners only", .{});
-        std.process.exit(2);
-    }
+    const what = "verify-update presses keys and replaces the installed app";
+    mac_verify.requireCi(io, environ, what);
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
     if (args.len != 3 or args[1].len == 0 or args[2].len == 0) {
         command.complain(io, usage, .{});
         std.process.exit(2);
     }
-    const shots = environ.get("SHOTS") orelse "/tmp/nanolight-shots";
+    const shots = environ.get("SHOTS") orelse mac_verify.shots_default;
     try Io.Dir.cwd().createDirPath(io, shots);
     const home = environ.get("HOME") orelse return error.NoHome;
-    const version_said = try command.capture(arena, io, &.{ "sw_vers", "-productVersion" }, .{});
     var session: Session = .{
         .arena = arena,
         .gpa = init.gpa,
@@ -112,17 +123,17 @@ pub fn main(init: std.process.Init) !void {
         .environ = environ,
         .from = args[1],
         .to = args[2],
-        .from_version = withoutV(args[1]),
-        .to_version = withoutV(args[2]),
+        .from_version = release.versionOfTag(args[1]),
+        .to_version = release.versionOfTag(args[2]),
         .work = try command.temporaryFolder(arena, io, "nanolight-update"),
         .shots = shots,
-        .cache = try std.fs.path.join(arena, &.{ home, "Library/Caches/Nanolight" }),
-        .macos_version = version_said.line(),
+        .cache = try std.fs.path.join(arena, &.{ home, mac_verify.cache_folder }),
+        .macos_version = try mac_verify.macosVersion(arena, io),
     };
     const result = verify(&session);
     // best effort: the app may already be gone.
     _ = command.capture(arena, io, &.{ "pkill", "-f", program_pattern }, .{}) catch {};
-    // best effort: a temporary folder.
+    // best effort: the verdict is in; a leftover scratch folder only takes disk space.
     Io.Dir.cwd().deleteTree(io, session.work) catch {};
     result catch |err| switch (err) {
         error.Died => std.process.exit(1),
@@ -130,10 +141,6 @@ pub fn main(init: std.process.Init) !void {
     };
     command.say(io, "", .{});
     command.say(io, "{s} -> {s}: all checks passed", .{ session.from, session.to });
-}
-
-fn withoutV(tag: []const u8) []const u8 {
-    return if (std.mem.startsWith(u8, tag, "v")) tag[1..] else tag;
 }
 
 fn verify(s: *Session) !void {
@@ -150,13 +157,14 @@ fn verify(s: *Session) !void {
 fn firstLaunch(s: *Session) !void {
     command.say(s.io, "== {s}, first launch", .{s.to});
     try install(s, s.to);
-    const pid = try launch(s, s.print("{s}/{s}", .{ releases_url, s.to }));
+    const pid = try launch(s, s.releaseFeed());
     try seePanels(s, 1, "the welcome is on screen");
-    // Past the first update check (20 s), which finds nothing newer.
-    try s.sleepMs(25_000);
+    try s.sleepMs(first_check_past_ms);
     s.shot("first-launch");
     if (!samePid(try running(s), pid)) {
-        return s.die("{s} died within 25 s of its first launch", .{s.to});
+        return s.die("{s} died within {d} s of its first launch", .{
+            s.to, first_check_past_ms / 1000,
+        });
     }
     const now = try installed(s);
     if (!std.mem.eql(u8, now orelse "", s.to_version)) {
@@ -178,18 +186,20 @@ fn welcome(s: *Session) !void {
     try s.sleepMs(2000);
     s.shot("welcome-done");
     try returnKey(s);
-    var tries: u32 = 0;
-    while (true) : (tries += 1) {
-        const read = try command.capture(s.arena, s.io, &.{
-            "defaults", "read", domain, "nanolight.onboarded",
-        }, .{});
-        if (read.ok() and std.mem.eql(u8, read.line(), "1")) break;
-        if (tries == 40) return s.die("Return didn't finish the welcome", .{});
-        try s.sleepMs(250);
+    const wait: mac_verify.Wait = .{ .tries = 40, .pause_ms = 250 };
+    if (!try mac_verify.waitUntil(s.io, wait, s, onboarded)) {
+        return s.die("Return didn't finish the welcome", .{});
     }
     try s.sleepMs(1000);
     s.shot("welcome-finished");
     s.ok("the welcome finishes", .{});
+}
+
+fn onboarded(s: *Session) !bool {
+    const read = try command.capture(s.arena, s.io, &.{
+        "defaults", "read", mac_verify.domain, app_facts.onboarded_key,
+    }, .{});
+    return read.ok() and std.mem.eql(u8, read.line(), "1");
 }
 
 // ----- used as a person uses it -----
@@ -198,16 +208,17 @@ fn used(s: *Session) !void {
     command.say(s.io, "== {s}, used", .{s.to});
     try install(s, s.to);
     try returning(s);
-    const pid = try launch(s, s.print("{s}/{s}", .{ releases_url, s.to }));
+    const pid = try launch(s, s.releaseFeed());
     try seePanels(s, 1, "launching shows the panel");
     try hotkey(s);
     try seePanels(s, 0, "the hotkey hides it");
     try hotkey(s);
     try seePanels(s, 1, "the hotkey shows it");
     try s.sleepMs(500);
-    const expect = typing.expectOf(s.environ.get("TYPING_EXPECT"));
-    const typed = typing.check(s.arena, s.io, .{ .expect = expect, .shots = s.shots });
-    if (!(typed catch false)) return s.die("typing (#24)", .{});
+    const expect = typing.expectOf(s.environ);
+    const typed = typing.check(s.arena, s.io, .{ .expect = expect, .shots = s.shots }) catch |err|
+        return s.die("typing (#24): {t}", .{err});
+    if (!typed) return s.die("typing (#24)", .{});
     try keys(s, "keystroke \"calculator\"");
     try s.sleepMs(1000);
     s.shot("used-search");
@@ -225,18 +236,19 @@ fn used(s: *Session) !void {
     s.shot("used-pane-search");
     try returnKey(s);
     try opened(s, "System Settings");
-    var tries: u32 = 0;
-    while (std.mem.indexOf(u8, try paneTitle(s), "Login") == null) : (tries += 1) {
-        if (tries == 40) {
-            return s.die("System Settings opened at \"{s}\", not Login Items", .{try paneTitle(s)});
-        }
-        try s.sleepMs(500);
+    const wait: mac_verify.Wait = .{ .tries = 40, .pause_ms = 500 };
+    if (!try mac_verify.waitUntil(s.io, wait, s, atLoginItems)) {
+        return s.die("System Settings opened at \"{s}\", not Login Items", .{try paneTitle(s)});
     }
     s.shot("used-pane");
     s.ok("System Settings opened at \"{s}\"", .{try paneTitle(s)});
     try kill(s, &.{ "pkill", "-x", "System Settings" });
     if (!samePid(try running(s), pid)) return s.die("{s} died while being used", .{s.to});
     s.ok("{s} is still up", .{s.to});
+}
+
+fn atLoginItems(s: *Session) !bool {
+    return std.mem.indexOf(u8, try paneTitle(s), "Login") != null;
 }
 
 // ----- a feed that lies -----
@@ -247,7 +259,7 @@ fn lyingFeeds(s: *Session) !void {
     command.say(s.io, "== {s} takes the same feed, told the truth", .{s.from});
     const truth = try feedOf(s, .{ .name = "feed-truth", .version = s.to_version });
     _ = try offer(s, truth);
-    const staged = s.print("{s}/updates/{s}/unpacked/Nanolight.app", .{ s.cache, s.to_version });
+    const staged = mac_verify.stagedApp(s.arena, s.cache, s.to_version);
     const took = exists(s, staged) or std.mem.eql(u8, (try installed(s)) orelse "", s.to_version);
     if (!took) return s.die("it took nothing from a good feed: refusals here prove nothing", .{});
     s.ok("{s} took it", .{s.from});
@@ -277,8 +289,8 @@ fn feedOf(s: *Session, feed: Feed) ![]const u8 {
     const zip = s.print("{s}/{s}", .{ folder, release.macos_update });
     if (feed.resign) {
         const unpacked = try unpack(s, s.to);
-        const bundle = s.print("{s}/Nanolight.app", .{unpacked});
-        const plist = s.print("{s}/Contents/Info.plist", .{bundle});
+        const bundle = try std.fs.path.join(s.arena, &.{ unpacked, release.bundle_name });
+        const plist = try std.fs.path.join(s.arena, &.{ bundle, release.bundle_plist });
         try command.run(s.io, &.{
             "plutil", "-replace", "CFBundleShortVersionString", "-string", feed.version, plist,
         });
@@ -305,17 +317,23 @@ fn offer(s: *Session, folder: []const u8) ![]const u8 {
     try server.start(.{ .gpa = s.gpa, .io = s.io, .folder = folder, .port = port });
     defer server.stop();
     const pid = try launch(s, local_feed);
-    const asked = s.print("GET /{s}", .{release.macos_update});
-    var waited_s: u32 = 0;
-    while (!server.asked(asked)) : (waited_s += 1) {
-        if (waited_s == 120) {
-            command.say(s.io, "{s}", .{server.log()});
-            return s.die("{s} never asked for the update", .{s.from});
+    const Asked = struct {
+        server: *feed_server.Server,
+        request: []const u8,
+        fn done(asked: @This()) !bool {
+            return asked.server.asked(asked.request);
         }
-        try s.sleepMs(1000);
+    };
+    const asked: Asked = .{
+        .server = &server,
+        .request = s.print("GET /{s}", .{release.macos_update}),
+    };
+    const wait: mac_verify.Wait = .{ .tries = 120, .pause_ms = 1000 };
+    if (!try mac_verify.waitUntil(s.io, wait, asked, Asked.done)) {
+        command.say(s.io, "{s}", .{server.log()});
+        return s.die("{s} never asked for the update", .{s.from});
     }
-    // Time to verify it, and for a restart (10 s away) if it took it.
-    try s.sleepMs(25_000);
+    try s.sleepMs(restart_past_ms);
     return pid;
 }
 
@@ -332,7 +350,7 @@ fn refused(s: *Session, what: []const u8, folder: []const u8) !void {
         return s.die("{s} restarted or died on a bad update ({s})", .{ s.from, what });
     }
     // What it refuses it deletes; what it takes waits here, even in sight.
-    if (exists(s, s.print("{s}/updates/{s}", .{ s.cache, lie_version }))) {
+    if (exists(s, mac_verify.stagedFolder(s.arena, s.cache, lie_version))) {
         return s.die("kept a bad update ({s}) in its cache", .{what});
     }
     s.ok("{s} refused it, and kept nothing", .{s.from});
@@ -341,33 +359,30 @@ fn refused(s: *Session, what: []const u8, folder: []const u8) !void {
 // ----- the update -----
 
 /// The update nearly everyone gets: the panel put away, another app in
-/// front. Out of sight 10 s after it's fetched (20 s after launch), it
-/// restarts then, and nobody sees it.
+/// front. Out of sight once it's fetched (after the first check), it
+/// restarts when it has been away `restart_idle_ms`, and nobody sees it.
 fn updatePutAway(s: *Session) !void {
     command.say(s.io, "== {s} updates itself to {s}, panel put away", .{ s.from, s.to });
     try install(s, s.from);
     try returning(s);
-    const old = try launch(s, s.print("{s}/{s}", .{ releases_url, s.to }));
+    const old = try launch(s, s.releaseFeed());
     try seePanels(s, 1, "launching shows the panel");
     try hotkey(s);
     try seePanels(s, 0, "the hotkey hides it");
     command.say(s.io, "      with the panel hidden, in front: {s}", .{try frontmost(s)});
     // With nothing else taking the front yet: does it go by itself?
-    var waits: u32 = 0;
-    while (waits < 25 and !try isInstalled(s, s.to_version)) : (waits += 1) {
-        try s.sleepMs(2000);
-    }
-    if (!try isInstalled(s, s.to_version)) {
+    const wait: mac_verify.Wait = .{ .tries = 26, .pause_ms = 2000 };
+    if (!try mac_verify.waitUntil(s.io, wait, s, updated)) {
         command.say(s.io, "      not updated after 50 s with the panel hidden; " ++
             "now another app comes in front", .{});
         _ = try osascript(s, "tell application \"Finder\" to activate");
         try s.sleepMs(1000);
         command.say(s.io, "      in front: {s}", .{try frontmost(s)});
     }
-    const new = try swapped(s, .{ .old = old, .within_s = 90 });
+    const new = try swapped(s, .{ .old = old, .within_s = put_away_within_s });
     try settled(s, new);
     try seePanels(s, 0, "it came back out of sight");
-    if (std.ascii.eqlIgnoreCase(try frontmost(s), "nanolight")) {
+    if (std.ascii.eqlIgnoreCase(try frontmost(s), release.program_name)) {
         return s.die("it came back in front", .{});
     }
     try hotkey(s);
@@ -378,13 +393,13 @@ fn updatePutAway(s: *Session) !void {
 }
 
 /// Left open, on the welcome: in sight, it waits for nobody to be at the
-/// Mac (5 minutes with no input), and comes back as it was.
+/// Mac (`away_ms` with no input), and comes back as it was.
 fn updateLeftOpen(s: *Session) !void {
     command.say(s.io, "== {s} updates itself to {s}, left open", .{ s.from, s.to });
     try install(s, s.from);
-    const old = try launch(s, s.print("{s}/{s}", .{ releases_url, s.to }));
+    const old = try launch(s, s.releaseFeed());
     try seePanels(s, 1, "the welcome is on screen");
-    const new = try swapped(s, .{ .old = old, .within_s = 480 });
+    const new = try swapped(s, .{ .old = old, .within_s = left_open_within_s });
     try settled(s, new);
     try seePanels(s, 1, "it came back where it was");
     s.shot("updated-left-open");
@@ -395,7 +410,7 @@ const Swap = struct { old: []const u8, within_s: i64 };
 /// The copy updating: swapped in, then back on its own. Returns the new pid.
 fn swapped(s: *Session, swap: Swap) ![]const u8 {
     const start_s = command.nowSeconds(s.io);
-    while (!try isInstalled(s, s.to_version)) {
+    while (!try updated(s)) {
         if (command.nowSeconds(s.io) - start_s > swap.within_s) {
             const now = (try installed(s)) orelse "";
             return s.die("still {s} after {d} s", .{ now, swap.within_s });
@@ -404,31 +419,46 @@ fn swapped(s: *Session, swap: Swap) ![]const u8 {
         try s.sleepMs(2000);
     }
     s.ok("swapped in {s} after {d} s", .{ s.to, command.nowSeconds(s.io) - start_s });
-    var tries: u32 = 0;
-    while (true) : (tries += 1) {
-        if (try running(s)) |new| {
-            if (!std.mem.eql(u8, new, swap.old)) {
-                s.ok("came back on its own, as {s}", .{s.to});
-                return new;
-            }
-        }
-        if (tries == 60) return s.die("{s} didn't come back after the update", .{s.to});
-        try s.sleepMs(1000);
+    var back: Back = .{ .s = s, .old = swap.old };
+    const wait: mac_verify.Wait = .{ .tries = 60, .pause_ms = 1000 };
+    if (!try mac_verify.waitUntil(s.io, wait, &back, Back.done)) {
+        return s.die("{s} didn't come back after the update", .{s.to});
     }
+    s.ok("came back on its own, as {s}", .{s.to});
+    return back.new.?;
+}
+
+/// The app running again, as a process other than `old`.
+const Back = struct {
+    s: *Session,
+    old: []const u8,
+    new: ?[]const u8 = null,
+
+    fn done(back: *Back) !bool {
+        const pid = try running(back.s) orelse return false;
+        if (std.mem.eql(u8, pid, back.old)) return false;
+        back.new = pid;
+        return true;
+    }
+};
+
+fn updated(s: *Session) !bool {
+    return isInstalled(s, s.to_version);
 }
 
 /// What must be true of an update that's done.
 fn settled(s: *Session, new: []const u8) !void {
     // Past its own first update check: it must not update, or restart, again.
-    try s.sleepMs(30_000);
+    try s.sleepMs(settled_ms);
     if (!samePid(try running(s), new)) {
         return s.die("{s} died or restarted after updating", .{s.to});
     }
-    if (!try isInstalled(s, s.to_version)) {
+    if (!try updated(s)) {
         return s.die("went on to {s} after updating", .{(try installed(s)) orelse ""});
     }
     const said = try command.capture(s.arena, s.io, &.{ program, "--version" }, .{});
-    if (!std.mem.eql(u8, said.line(), s.print("nanolight {s}", .{s.to_version}))) {
+    const says = s.print(release.program_name ++ " {s}", .{s.to_version});
+    if (!std.mem.eql(u8, said.line(), says)) {
         return s.die("the program says {s}", .{said.line()});
     }
     try trusted(s);
@@ -437,7 +467,7 @@ fn settled(s: *Session, new: []const u8) !void {
         return s.die("the update came quarantined: macOS would ask on its next launch", .{});
     }
     if (try leftCopies(s)) |copies| return s.die("left copies in Applications: {s}", .{copies});
-    if (exists(s, s.print("{s}/updates/{s}", .{ s.cache, s.to_version }))) {
+    if (exists(s, mac_verify.stagedFolder(s.arena, s.cache, s.to_version))) {
         return s.die("left the update in its cache", .{});
     }
     s.ok("the update is notarized, unquarantined, and left nothing behind", .{});
@@ -449,7 +479,7 @@ fn leftCopies(s: *Session) !?[]const u8 {
     var names: Io.Writer.Allocating = .init(s.arena);
     var entries = applications.iterate();
     while (try entries.next(s.io)) |entry| {
-        if (!std.mem.startsWith(u8, entry.name, ".Nanolight")) continue;
+        if (!std.mem.startsWith(u8, entry.name, "." ++ release.app_name)) continue;
         try names.writer.print("{s} ", .{entry.name});
     }
     return if (names.written().len > 0) names.written() else null;
@@ -457,14 +487,13 @@ fn leftCopies(s: *Session) !?[]const u8 {
 
 // ----- the app, as the system sees it -----
 
-/// The app's copy in Applications, as the system sees it.
 fn trusted(s: *Session) !void {
     if (try macos.signed(s.arena, s.io, app)) |said| return s.die("signature: {s}", .{said});
     const assessment = [_][]const u8{ "-t", "exec" };
     if (try macos.notarized(s.arena, s.io, &assessment, app)) |said| {
         return s.die("Gatekeeper: {s}", .{said});
     }
-    if (try macos.stapled(s.arena, s.io, app, macos.staple_tries_default)) |_| {
+    if (try macos.stapled(s.arena, s.io, app)) |_| {
         return s.die("no ticket stapled", .{});
     }
 }
@@ -481,11 +510,7 @@ fn samePid(now: ?[]const u8, pid: []const u8) bool {
 }
 
 fn installed(s: *Session) !?[]const u8 {
-    const plist = app ++ "/Contents/Info.plist";
-    const said = try command.capture(s.arena, s.io, &.{
-        "plutil", "-extract", "CFBundleShortVersionString", "raw", "-o", "-", plist,
-    }, .{});
-    return if (said.ok()) said.line() else null;
+    return mac_verify.plistVersion(s.arena, s.io, app);
 }
 
 fn isInstalled(s: *Session, version: []const u8) !bool {
@@ -499,11 +524,12 @@ fn exists(s: *const Session, path: []const u8) bool {
 
 fn stop(s: *Session) !void {
     try kill(s, &.{ "pkill", "-f", program_pattern });
-    var tries: u32 = 0;
-    while (try running(s) != null) : (tries += 1) {
-        if (tries == 20) return s.die("the app won't stop", .{});
-        try s.sleepMs(500);
-    }
+    const wait: mac_verify.Wait = .{ .tries = 20, .pause_ms = 500 };
+    if (!try mac_verify.waitUntil(s.io, wait, s, stopped)) return s.die("the app won't stop", .{});
+}
+
+fn stopped(s: *Session) !bool {
+    return try running(s) == null;
 }
 
 /// Runs a pkill: finding nothing to stop is no failure.
@@ -515,8 +541,8 @@ fn kill(s: *Session, argv: []const []const u8) !void {
 fn zipOf(s: *Session, tag: []const u8) ![]const u8 {
     const zip = s.print("{s}/{s}.zip", .{ s.work, tag });
     if (exists(s, zip)) return zip;
-    const url = s.print("{s}/{s}/{s}", .{ releases_url, tag, release.macos_update });
-    try command.run(s.io, &.{ "curl", "-fsSL", "--retry", "3", "-o", zip, url });
+    const url = s.print("{s}/{s}/{s}", .{ release.releases_url, tag, release.macos_update });
+    try mac_verify.fetch(s.io, url, zip);
     return zip;
 }
 
@@ -534,71 +560,96 @@ fn install(s: *Session, tag: []const u8) !void {
     try stop(s);
     try Io.Dir.cwd().deleteTree(s.io, app);
     try Io.Dir.cwd().deleteTree(s.io, s.cache);
-    _ = try command.capture(s.arena, s.io, &.{ "defaults", "delete", domain }, .{});
-    try command.run(s.io, &.{ "defaults", "write", domain, "nanolight.hotkey", "-string", chord });
+    _ = try command.capture(s.arena, s.io, &.{ "defaults", "delete", mac_verify.domain }, .{});
+    try command.run(s.io, &.{
+        "defaults",           "write",   mac_verify.domain,
+        app_facts.hotkey_key, "-string", mac_verify.hotkey_chord,
+    });
     const unpacked = try unpack(s, tag);
-    try command.run(s.io, &.{ "ditto", s.print("{s}/Nanolight.app", .{unpacked}), app });
+    const unpacked_app = try std.fs.path.join(s.arena, &.{ unpacked, release.bundle_name });
+    try command.run(s.io, &.{ "ditto", unpacked_app, app });
     try Io.Dir.cwd().deleteTree(s.io, unpacked);
     const now = (try installed(s)) orelse "";
-    if (!std.mem.eql(u8, now, withoutV(tag))) return s.die("installed {s}, not {s}", .{ now, tag });
+    const version = release.versionOfTag(tag);
+    if (!std.mem.eql(u8, now, version)) return s.die("installed {s}, not {s}", .{ now, tag });
 }
 
 /// Someone past the welcome, as nearly everyone an update reaches is.
 fn returning(s: *Session) !void {
-    try command.run(s.io, &.{ "defaults", "write", domain, "nanolight.onboarded", "-string", "1" });
+    try command.run(s.io, &.{
+        "defaults", "write", mac_verify.domain, app_facts.onboarded_key, "-string", "1",
+    });
 }
 
 /// Opens the app reading `feed`; returns its pid.
 fn launch(s: *Session, feed: []const u8) ![]const u8 {
-    const environment = s.print("NANOUI_UPDATE_FEED={s}", .{feed});
+    const environment = s.print(mac_verify.feed_env ++ "={s}", .{feed});
     const log = s.workPath("app.log");
     try command.run(s.io, &.{ "open", "--stderr", log, "--env", environment, app });
-    var tries: u32 = 0;
-    while (true) : (tries += 1) {
-        if (try running(s)) |pid| return pid;
-        if (tries == 60) return s.die("it never started", .{});
-        try s.sleepMs(500);
+    var started: Started = .{ .s = s };
+    const wait: mac_verify.Wait = .{ .tries = 60, .pause_ms = 500 };
+    if (!try mac_verify.waitUntil(s.io, wait, &started, Started.done)) {
+        return s.die("it never started", .{});
     }
+    return started.pid.?;
 }
+
+const Started = struct {
+    s: *Session,
+    pid: ?[]const u8 = null,
+
+    fn done(started: *Started) !bool {
+        started.pid = try running(started.s);
+        return started.pid != null;
+    }
+};
 
 /// Waits for `count` panels on screen, which means `what`.
 fn seePanels(s: *Session, count: usize, what: []const u8) !void {
-    var tries: u32 = 0;
-    while (screen.panelCount() != count) : (tries += 1) {
-        if (tries == 40) {
-            return s.die("{s}: {d} on screen, not {d}", .{ what, screen.panelCount(), count });
+    const Shown = struct {
+        count: usize,
+        fn done(shown: @This()) !bool {
+            return screen.panelCount() == shown.count;
         }
-        try s.sleepMs(250);
+    };
+    const wait: mac_verify.Wait = .{ .tries = 40, .pause_ms = 250 };
+    if (!try mac_verify.waitUntil(s.io, wait, Shown{ .count = count }, Shown.done)) {
+        return s.die("{s}: {d} on screen, not {d}", .{ what, screen.panelCount(), count });
     }
     s.ok("{s}", .{what});
 }
 
 /// Waits for the app a search's Return should have opened.
 fn opened(s: *Session, name: []const u8) !void {
-    var tries: u32 = 0;
-    while (true) : (tries += 1) {
-        const found = try command.capture(s.arena, s.io, &.{ "pgrep", "-x", name }, .{});
-        if (found.ok()) break;
-        if (tries == 40) return s.die("{s} never opened", .{name});
-        try s.sleepMs(250);
+    const Opened = struct {
+        s: *Session,
+        name: []const u8,
+        fn done(app_opened: @This()) !bool {
+            const argv = [_][]const u8{ "pgrep", "-x", app_opened.name };
+            const found = try command.capture(app_opened.s.arena, app_opened.s.io, &argv, .{});
+            return found.ok();
+        }
+    };
+    const wait: mac_verify.Wait = .{ .tries = 40, .pause_ms = 250 };
+    if (!try mac_verify.waitUntil(s.io, wait, Opened{ .s = s, .name = name }, Opened.done)) {
+        return s.die("{s} never opened", .{name});
     }
     s.ok("Return opened {s}", .{name});
 }
 
-/// Runs an AppleScript line; error.ScriptFailed when it fails.
+/// Runs an AppleScript line: what it printed. A failure ends the run.
 fn osascript(s: *Session, script: []const u8) ![]const u8 {
-    const said = try command.capture(s.arena, s.io, &.{ "osascript", "-e", script }, .{});
-    if (!said.ok()) return error.ScriptFailed;
-    return said.line();
+    return mac_verify.osascript(s.arena, s.io, script) catch |err|
+        return s.die("AppleScript: {t}", .{err});
 }
 
 fn keys(s: *Session, script: []const u8) !void {
-    const line = s.print("tell application \"System Events\" to {s}", .{script});
-    _ = osascript(s, line) catch return s.die("couldn't press keys: {s}", .{script});
+    mac_verify.keys(s.arena, s.io, script) catch
+        return s.die("couldn't press keys: {s}", .{script});
 }
 
 fn hotkey(s: *Session) !void {
-    try keys(s, "key code 45 using {control down, option down, command down}");
+    try keys(s, mac_verify.hotkey_keys);
 }
 
 fn returnKey(s: *Session) !void {
@@ -608,13 +659,13 @@ fn returnKey(s: *Session) !void {
 fn frontmost(s: *Session) ![]const u8 {
     const script = "tell application \"System Events\" to " ++
         "name of first process whose frontmost is true";
-    return osascript(s, script) catch "";
+    return osascript(s, script);
 }
 
 fn paneTitle(s: *Session) ![]const u8 {
     const script = "tell application \"System Events\" to " ++
         "name of window 1 of process \"System Settings\"";
-    return osascript(s, script) catch "";
+    return osascript(s, script);
 }
 
 // ----- what a failure leaves to read -----
@@ -649,7 +700,6 @@ fn firstLines(text: []const u8, count: usize) []const u8 {
     return text;
 }
 
-/// The newest crash report of the app, if any.
 fn printNewestCrash(s: *const Session) void {
     const home = s.environ.get("HOME") orelse return;
     const reports = s.print("{s}/Library/Logs/DiagnosticReports", .{home});

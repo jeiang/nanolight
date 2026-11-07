@@ -6,57 +6,70 @@
 //!      press — nothing advances on a button;
 //!   3. a first search to run, where Nanolight lives (the menu bar), and
 //!      whether it opens at login.
-//! Esc skips at any step and it stays skipped; the menu bar icon replays it.
+//! Esc skips at any step, closing the panel, and it stays skipped; the menu
+//! bar icon replays it. It is up while it is the panel's screen (view.zig
+//! `Screen.welcome`), which ends it once as it goes; it ends itself with
+//! an `Outcome`.
 const std = @import("std");
 const nanoui = @import("nanoui");
+const app_name = @import("app_facts.zig").app_name;
 const ui = nanoui.ui;
 const motion = ui.motion;
-const panel = @import("view.zig");
+const keys = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
-const results = @import("results.zig");
-const mac = @import("builtin").os.tag == .macos;
-const Choice = shortcut.Choice;
-const Palette = panel.Palette;
+const shortcut_clash = @import("shortcut_clash.zig");
+const platform = @import("platform.zig");
+const Choice = keys.Choice;
+const chrome = @import("chrome.zig");
+const Palette = @import("palette.zig").Palette;
+const Toggle = @import("toggles.zig").Toggle;
 
 pub const Step = enum { key, try_it, done };
 
-/// What the steps ask of the app: none of it is done from a test.
+/// What the steps ask of the app and the system.
 pub const Hooks = struct {
     ctx: *anyopaque,
+    /// Who holds the keys, the system's into `system_buf`
+    /// (`shortcut_holders.look`). The system keeps it, so no context.
+    look: *const fn (system_buf: []shortcut_clash.SystemKey) shortcut_clash.Holders,
     /// Uses `choice` from now on (registers it, keeps it).
     apply: *const fn (ctx: *anyopaque, choice: Choice) void,
     /// Frees the shortcut: Keyboard Shortcuts opened, a launcher quit.
-    fix: *const fn (ctx: *anyopaque, clash: shortcut.Clash) void,
+    fix: *const fn (ctx: *anyopaque, clash: shortcut_clash.Clash) void,
     /// Whether it opens at login; `set` changes it first.
-    login: ?*const fn (ctx: *anyopaque, set: ?bool) bool = null,
+    login: *const fn (ctx: *anyopaque, set: ?bool) bool,
     /// The welcome is over: keep that.
     done: *const fn (ctx: *anyopaque) void,
 };
 
-const Example = struct { q: []const u8, what: []const u8, icon: []const u8 };
-/// An app every machine of the kind has, math, and words for a quicklink;
-/// icons nanoui draws there (SF Symbols on the Mac, its own set elsewhere).
-const examples = [_]Example{
-    switch (@import("builtin").os.tag) {
-        .macos => .{ .q = "saf", .what = "Open Safari", .icon = "app.badge" },
-        .windows => .{ .q = "note", .what = "Open Notepad", .icon = "doc.text" },
-        else => .{ .q = "term", .what = "Open a terminal", .icon = "terminal" },
-    },
-    .{ .q = "2^10 * 3", .what = "Do math", .icon = if (mac) "plus.forwardslash.minus" else "plus" },
+/// The last step asks about login where Settings has its switch.
+const asks_login = Toggle.login.present(false);
+
+/// How the welcome ends itself: into the launcher, with `finish` typed (a
+/// first search) or nothing.
+pub const Outcome = union(enum) { finish: []const u8 };
+
+/// Escape before the last step: the welcome is skipped.
+const skip: chrome.Key = .{ .what = "Skip", .key = "esc" };
+/// The last step's main act.
+const start_key: chrome.Key = .{ .what = "Start searching", .key = "↩", .first = true };
+
+/// An app every machine of the kind has, math, and words for a quicklink.
+const examples = [_]platform.Example{
+    platform.example_app,
+    .{ .q = "2^10 * 3", .what = "Do math", .icon = platform.math_icon },
     .{ .q = "liquid glass", .what = "Search the web", .icon = "sparkles" },
 };
 
 pub const Onboard = struct {
-    active: bool = false,
     step: Step = .key,
     choice: Choice = .cmd_space,
     /// The key in use: the one at `start`, then the one applied. Only a
     /// different choice is applied (applying syncs it, over another Mac's).
     kept: Choice = .cmd_space,
-    hooks: ?Hooks = null,
-    system_buf: [96]shortcut.SystemKey = undefined,
-    system: []const shortcut.SystemKey = &.{},
-    others: shortcut.Others = .{},
+    hooks: Hooks,
+    system_buf: [96]shortcut_clash.SystemKey = undefined,
+    holders: shortcut_clash.Holders = .{},
     /// Step 2: the shortcut closed the panel, then opened it again.
     closed: bool = false,
     reopened: bool = false,
@@ -66,7 +79,6 @@ pub const Onboard = struct {
     skip_key: bool = false,
 
     pub fn start(o: *Onboard, choice: Choice) void {
-        o.active = true;
         o.step = if (o.skip_key) .try_it else .key;
         o.choice = choice;
         o.kept = choice;
@@ -78,24 +90,24 @@ pub const Onboard = struct {
 
     /// Looks again at who holds the keys (after a fix, on each showing).
     pub fn refresh(o: *Onboard) void {
-        // Without hooks (tests) what the caller set is kept.
-        const h = o.hooks orelse return;
-        o.system = shortcut.systemKeys(&o.system_buf);
-        o.others = shortcut.runningLaunchers();
-        if (h.login) |f| o.login = f(h.ctx, null);
+        o.holders = o.hooks.look(&o.system_buf);
+        if (asks_login) o.login = o.hooks.login(o.hooks.ctx, null);
     }
 
-    pub fn clash(o: *const Onboard) shortcut.Clash {
-        return shortcut.clash(o.choice, o.system, &o.others);
+    pub fn clash(o: *const Onboard) shortcut_clash.Clash {
+        return shortcut_clash.clash(o.choice, &o.holders);
     }
 
-    /// The hot key fired, the panel `visible` before it: step 2's presses.
+    /// The hot key fired while the welcome is up, the panel `visible`
+    /// before it: step 2's presses.
     pub fn pressed(o: *Onboard, visible: bool) void {
-        if (!o.active or o.step != .try_it) return;
+        if (o.step != .try_it) return;
         if (visible) o.closed = true else if (o.closed) o.reopened = true;
     }
 
-    /// Each step's height; the key step is taller by a line while the key clashes.
+    /// Each step's room, measured: its content and some air under it, into
+    /// which the page grows (tests.zig checks the content fits). The key
+    /// step is taller by a line while the key clashes.
     const key_h: f32 = 330;
     const clash_h: f32 = 30;
     const try_h: f32 = 318;
@@ -104,12 +116,11 @@ pub const Onboard = struct {
     comptime {
         // The window is never resized: every step fits in it.
         const tallest = @max(key_h + clash_h, try_h, done_h + login_h);
-        std.debug.assert(tallest <= panel.max_height);
+        std.debug.assert(tallest <= chrome.max_height);
     }
 
     pub fn height(o: *const Onboard) f32 {
         const c = o.clash();
-        const asks_login = o.hooks != null and o.hooks.?.login != null;
         return switch (o.step) {
             .key => key_h + @as(f32, if (c.clear()) 0 else clash_h),
             .try_it => try_h,
@@ -117,26 +128,26 @@ pub const Onboard = struct {
         };
     }
 
-    pub fn view(o: *Onboard, c: *ui.Context, s: *panel.Nanolight, p: Palette) void {
-        const S = ui.Shortcut;
+    pub fn draw(o: *Onboard, c: *ui.Context, p: Palette) ?Outcome {
         const enter = c.input.key == .enter;
         // Return moves it on: what changed shows in this frame.
         if (enter) c.changed = true;
-        if (c.shortcut(.{ .key = S.escape })) return o.finish(s, "");
         // A step's content comes in from the right, briefly.
         ui.key(c, @tagName(o.step));
         const f = motion.frame(
             c,
-            .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = panel.spring } },
+            .{ .initial = .{ .opacity = 0, .x = 14 }, .transition = .{ .spring = chrome.spring } },
         );
         const page = ui.div(c).column().wFull().grow().motion(f);
+        var out: ?Outcome = null;
         switch (o.step) {
             .key => o.keyStep(c, p, enter),
             .try_it => o.tryStep(c, p),
-            .done => o.doneStep(c, s, p, enter),
+            .done => out = o.doneStep(c, p, enter),
         }
         page.end();
         o.footer(c, p);
+        return out;
     }
 
     fn keyStep(o: *Onboard, c: *ui.Context, p: Palette, enter: bool) void {
@@ -146,12 +157,12 @@ pub const Onboard = struct {
         {
             const top = ui.div(c).row().wFull().px(28).pt(28).pb(22).gap(16).itemsCenter();
             defer top.end();
-            panel.appIcon(c, 56);
+            chrome.appIcon(c, 56);
             const t = ui.div(c).column().gap(4);
             defer t.end();
             ui.text(
                 c,
-                "Welcome to Nanolight",
+                "Welcome to " ++ app_name,
                 .{ .size = 22, .weight = .semibold, .color = p.text, .tracking = -0.3 },
             );
             ui.text(
@@ -160,14 +171,10 @@ pub const Onboard = struct {
                 .{ .size = 13.5, .color = p.sub },
             );
         }
-        ui.div(c).wFull().h(1).bg(p.hair).end();
+        chrome.hairline(c, p);
         const body = ui.div(c).column().wFull().px(28).pt(18).gap(12);
         defer body.end();
-        ui.text(
-            c,
-            "Open it with",
-            .{ .size = 11.5, .weight = .semibold, .color = p.sub.alpha(0.85) },
-        );
+        ui.text(c, "Open it with", p.heading());
         {
             const row = ui.div(c).row().gap(8);
             defer row.end();
@@ -178,20 +185,10 @@ pub const Onboard = struct {
             for (shown[0 .. Choice.all.len + @intFromBool(o.choice.preset() == null)]) |ch| {
                 ui.key(c, c.print("key-{d}-{d}", .{ ch.code, ch.mods }));
                 const on = ch.eql(o.choice);
-                const b = ui.div(c).row().h(36).px(16).itemsCenter().rounded(10).control()
-                    .bg(if (on) p.sel else p.tile.alpha(0.5))
-                    .border(if (on) p.text.alpha(0.35) else p.rim);
+                const label = c.print("{f}", .{shortcut.text(ch)});
+                const b = chrome.shortcutChip(c, p, label, on, chrome.welcome_chip);
                 defer b.end();
                 if (b.clicked()) o.choice = ch;
-                ui.text(
-                    c,
-                    c.print("{f}", .{ch}),
-                    .{
-                        .size = 14,
-                        .weight = if (on) .semibold else .medium,
-                        .color = if (on) p.text else p.sub,
-                    },
-                );
             }
         }
         o.status(c, p);
@@ -208,7 +205,7 @@ pub const Onboard = struct {
     /// Who else answers the keys, by name, and the one thing that frees them.
     fn status(o: *Onboard, c: *ui.Context, p: Palette) void {
         const cl = o.clash();
-        const keys = c.print("{f}", .{o.choice});
+        const keys_text = c.print("{f}", .{shortcut.text(o.choice)});
         const ok = c.theme.success;
         const warn: ui.Color = if (c.theme.dark) .hex(0xe0a33a) else .hex(0xb26b00);
         const box = ui.div(c).column().wFull().gap(8).p(12).rounded(10)
@@ -221,7 +218,7 @@ pub const Onboard = struct {
                 c,
                 .{ .size = 13, .weight = .medium, .color = p.text },
                 "{s} is free on this {s}.",
-                .{ keys, results.machine },
+                .{ keys_text, platform.machine },
             );
             line.end();
             return;
@@ -231,22 +228,30 @@ pub const Onboard = struct {
             ui.textf(
                 c,
                 .{ .size = 13, .weight = .medium, .color = p.text },
-                if (mac) "macOS gives {s} to {s} first." else "{s} is held by {s}.",
-                .{ keys, who },
+                if (platform.system_shortcuts)
+                    "macOS gives {s} to {s} first."
+                else
+                    "{s} is held by {s}.",
+                .{ keys_text, who },
             );
         } else {
             ui.textf(
                 c,
                 .{ .size = 13, .weight = .medium, .color = p.text },
                 "{s} {s} running and may answer {s} too.",
-                .{ list(c, cl.launchers), if (cl.launchers.len == 1) "is" else "are", keys },
+                .{
+                    list(c, cl.launchers.slice()),
+                    if (cl.launchers.n == 1) "is" else "are",
+                    keys_text,
+                },
             );
         }
         line.end();
-        // A PC has no one place to free a key: another one is the fix.
-        if (!mac and cl.system != null) {
+        // Without the system's table there is no one place to free a key:
+        // another one is the fix.
+        if (!platform.system_shortcuts and cl.system != null) {
             const r = ui.div(c).row().pl(22);
-            ui.text(c, "Pick another key above.", .{ .size = 12, .color = p.sub.alpha(0.8) });
+            ui.text(c, "Pick another key above.", p.detail());
             return r.end();
         }
         const fix = ui.div(c).row().gap(10).itemsCenter().pl(22);
@@ -254,13 +259,13 @@ pub const Onboard = struct {
         const label = if (cl.system != null)
             "Open Keyboard Shortcuts"
         else
-            c.print("Quit {s}", .{cl.launchers[0]});
+            c.print("Quit {s}", .{cl.launchers.slice()[0]});
         const b = ui.div(c).row().h(26).px(12).itemsCenter().rounded(7).bg(p.sel).border(p.rim)
             .control();
-        if (b.clicked()) if (o.hooks) |h| h.fix(h.ctx, cl);
+        if (b.clicked()) o.hooks.fix(o.hooks.ctx, cl);
         ui.text(c, label, .{ .size = 12, .weight = .semibold, .color = p.text });
         b.end();
-        ui.text(c, "or pick another key above", .{ .size = 12, .color = p.sub.alpha(0.8) });
+        ui.text(c, "or pick another key above", p.detail());
     }
 
     fn list(c: *ui.Context, names: []const []const u8) []const u8 {
@@ -284,24 +289,23 @@ pub const Onboard = struct {
             const caps = ui.div(c).row().gap(10).itemsCenter();
             defer caps.end();
             const ch = o.choice;
-            const hotkey = @import("hotkey.zig");
             const held_mod = modsHeld(ch, c);
-            const mods = c.print("{f}", .{ch.held()});
+            const mods = c.print("{f}", .{shortcut.held(ch)});
             if (mods.len > 0) {
                 // A PC's "Ctrl Alt" is words, not glyphs: wider per key.
                 const n: f32 = @floatFromInt(@popCount(ch.mods));
-                const w: f32 = if (mac)
-                    68 + 22 * @max(0, n - 2)
+                const w: f32 = if (platform.pc_modifiers)
+                    40 + 8 * @as(f32, @floatFromInt(mods.len))
                 else
-                    40 + 8 * @as(f32, @floatFromInt(mods.len));
+                    68 + 22 * @max(0, n - 2);
                 cap(c, p, mods, w, held_mod or o.reopened);
                 ui.text(c, "+", .{ .size = 20, .weight = .medium, .color = p.sub.alpha(0.6) });
             }
             cap(
                 c,
                 p,
-                c.print("{f}", .{ch.key()}),
-                if (ch.code == hotkey.space) 180 else 68,
+                c.print("{f}", .{shortcut.key(ch)}),
+                if (ch.code == keys.space) 180 else 68,
                 o.reopened,
             );
         }
@@ -312,7 +316,7 @@ pub const Onboard = struct {
                 c,
                 .{ .size = 20, .weight = .semibold, .color = p.text, .tracking = -0.2 },
                 "Press {f} now",
-                .{o.choice},
+                .{shortcut.text(o.choice)},
             );
             ui.text(
                 c,
@@ -329,18 +333,17 @@ pub const Onboard = struct {
     /// Every modifier of `ch` is held now: on a PC by its preset's keys.
     fn modsHeld(ch: Choice, c: *const ui.Context) bool {
         const in = c.input;
-        if (!mac) {
+        if (platform.pc_modifiers) {
             const pc = ch.pc();
             if (pc.ctrl and !in.ctrl) return false;
             if (pc.alt and !in.alt) return false;
             if (pc.shift and !in.shift) return false;
             return true;
         }
-        const hotkey = @import("hotkey.zig");
-        if (ch.mods & hotkey.cmd != 0 and !in.cmd) return false;
-        if (ch.mods & hotkey.option != 0 and !in.alt) return false;
-        if (ch.mods & hotkey.control != 0 and !in.ctrl) return false;
-        if (ch.mods & hotkey.shift != 0 and !in.shift) return false;
+        if (ch.mods & keys.cmd != 0 and !in.cmd) return false;
+        if (ch.mods & keys.option != 0 and !in.alt) return false;
+        if (ch.mods & keys.control != 0 and !in.ctrl) return false;
+        if (ch.mods & keys.shift != 0 and !in.shift) return false;
         return true;
     }
 
@@ -375,11 +378,9 @@ pub const Onboard = struct {
         ui.text(c, str, .{ .size = 12.5, .weight = .medium, .color = if (on) p.text else p.sub });
     }
 
-    fn doneStep(o: *Onboard, c: *ui.Context, s: *panel.Nanolight, p: Palette, enter: bool) void {
-        if (enter) return o.finish(s, "");
-        for (examples, 0..) |e, i| if (c.shortcut(
-            .{ .key = @intCast('1' + i), .cmd = true },
-        )) return o.finish(s, e.q);
+    fn doneStep(o: *Onboard, c: *ui.Context, p: Palette, enter: bool) ?Outcome {
+        if (enter) return .{ .finish = "" };
+        if (chrome.numberKey(c, examples.len)) |i| return .{ .finish = examples[i].q };
         {
             const top = ui.div(c).column().wFull().px(28).pt(26).pb(16).gap(4);
             defer top.end();
@@ -392,7 +393,7 @@ pub const Onboard = struct {
                 c,
                 .{ .size = 13.5, .color = p.sub },
                 "{f} opens it anywhere. Start with one of these:",
-                .{o.choice},
+                .{shortcut.text(o.choice)},
             );
         }
         {
@@ -403,24 +404,20 @@ pub const Onboard = struct {
                 const r = ui.div(c).row().wFull().h(40).px(12).gap(12).itemsCenter().rounded(10)
                     .control().hover(p.sel);
                 defer r.end();
-                if (r.clicked()) return o.finish(s, e.q);
-                const tile = ui.div(c).size(26, 26).rounded(7).bg(p.tile).center();
-                ui.icon(c, e.icon, .{ .size = 13, .weight = .medium, .color = p.text });
-                tile.end();
+                if (r.clicked()) return .{ .finish = e.q };
+                chrome.tile(c, p, e.icon);
                 ui.textf(
                     c,
                     .{ .size = 13.5, .weight = .medium, .color = p.text, .mono = true },
                     "{s}",
                     .{e.q},
                 );
-                ui.text(c, e.what, .{ .size = 12, .color = p.sub.alpha(0.8) });
+                ui.text(c, e.what, p.detail());
                 ui.spacer(c);
-                ui.textf(
-                    c,
-                    .{ .size = 12, .weight = .medium, .color = p.sub.alpha(0.55), .tabular = true },
-                    "{s}{d}",
-                    .{ results.mod, i + 1 },
-                );
+                // A shade stronger than the launcher's `hint`; kept as drawn.
+                var hint = p.hint();
+                hint.color = p.sub.alpha(0.55);
+                ui.textf(c, hint, "{s}{d}", .{ platform.mod, i + 1 });
             }
         }
         const home = ui.div(c).column().wFull().px(28).pt(16).gap(12);
@@ -433,50 +430,44 @@ pub const Onboard = struct {
             tile.end();
             ui.text(
                 c,
-                if (mac)
-                    "Settings are on ⌘, and the gear. It also lives in your menu bar."
+                "Settings are on " ++ platform.mod ++ ", and the gear" ++ if (platform.tray)
+                    ". It also lives in your menu bar."
                 else
-                    "Settings are on Ctrl+, and the gear at the bottom of the panel.",
+                    " at the bottom of the panel.",
                 .{ .size = 12.5, .color = p.sub },
             );
         }
-        const h = o.hooks orelse return;
-        const f = h.login orelse return;
-        if (ui.toggle(c, "Open Nanolight when you log in", &o.login)) o.login = f(h.ctx, o.login);
+        if (asks_login and ui.toggle(c, "Open " ++ app_name ++ " when you log in", &o.login)) {
+            o.login = o.hooks.login(o.hooks.ctx, o.login);
+        }
+        return null;
     }
 
     fn footer(o: *Onboard, c: *ui.Context, p: Palette) void {
-        ui.div(c).wFull().h(1).bg(p.hair).end();
-        const bar = ui.div(c).row().wFull().h(38).px(16).gap(8).itemsCenter();
+        const bar = chrome.footer(c, p);
         defer bar.end();
         const first: usize = @intFromBool(o.skip_key);
         const total = 3 - first;
         const n: usize = @backingInt(o.step) - first;
         for (0..total) |i| ui.div(c).w(if (i == n) 16 else 6).h(6).roundedFull()
             .bg(if (i == n) p.text.alpha(0.7) else p.sub.alpha(0.3)).end();
-        ui.textf(
-            c,
-            .{ .size = 12, .color = p.sub.alpha(0.8), .tabular = true },
-            "  {d} of {d}",
-            .{ n + 1, total },
-        );
+        var count = p.detail();
+        count.tabular = true;
+        ui.textf(c, count, "  {d} of {d}", .{ n + 1, total });
         ui.spacer(c);
-        const action: []const u8 = switch (o.step) {
-            .key => if (o.clash().clear()) "Continue" else c.print("Use {f} anyway", .{o.choice}),
-            .try_it => "",
-            .done => "Start searching",
+        const act: chrome.Key = switch (o.step) {
+            .key => .{
+                .what = if (o.clash().clear())
+                    "Continue"
+                else
+                    c.print("Use {f} anyway", .{shortcut.text(o.choice)}),
+                .key = "↩",
+                .first = true,
+            },
+            .try_it => return chrome.footerKeysThen(c, p, &.{}, skip),
+            .done => return chrome.footerKeys(c, p, &.{start_key}),
         };
-        if (action.len > 0) {
-            ui.text(c, action, .{ .size = 12, .weight = .medium, .color = p.text.alpha(0.85) });
-            ui.kbd(c, "↩");
-            ui.div(c).w(1).h(14).bg(p.hair).end();
-        }
-        ui.text(
-            c,
-            if (o.step == .done) "Close" else "Skip",
-            .{ .size = 12, .color = p.sub.alpha(0.8) },
-        );
-        ui.kbd(c, "esc");
+        chrome.footerKeysThen(c, p, &.{act}, skip);
     }
 
     fn next(o: *Onboard, c: *ui.Context, step: Step) void {
@@ -491,29 +482,18 @@ pub const Onboard = struct {
     fn useChoice(o: *Onboard) void {
         if (o.choice.eql(o.kept)) return;
         o.kept = o.choice;
-        if (o.hooks) |h| h.apply(h.ctx, o.choice);
+        o.hooks.apply(o.hooks.ctx, o.choice);
     }
 
     /// How the welcome ends: with the key shown on the key step, or
-    /// without it (Settings opened from the menu bar over it).
+    /// without it (another screen opened over it).
     pub const Exit = enum { take_choice, drop_choice };
 
-    /// The welcome's one way out: done, and kept as done. Nothing when it
-    /// isn't showing.
+    /// The welcome's one way out: done, and kept as done. The panel calls
+    /// it once, as its screen goes (view.zig `Nanolight.leave`).
     pub fn end(o: *Onboard, exit: Exit) void {
-        if (!o.active) return;
         if (exit == .take_choice and o.step == .key) o.useChoice();
-        o.active = false;
-        if (o.hooks) |h| h.done(h.ctx);
-    }
-
-    /// Over: into the launcher, with `query` typed (a first search) or not.
-    pub fn finish(o: *Onboard, s: *panel.Nanolight, query: []const u8) void {
-        o.end(.take_choice);
-        if (query.len > 0) s.query.set(query) else s.query.clear();
-        s.built = 1;
-        s.revealed = 0;
-        s.query.focus();
+        o.hooks.done(o.hooks.ctx);
     }
 };
 
@@ -522,45 +502,49 @@ const TestHooks = struct {
     ended: u8 = 0,
 
     fn hooks(t: *TestHooks) Hooks {
-        return .{ .ctx = t, .apply = apply, .fix = fix, .done = done };
+        return .{
+            .ctx = t,
+            .look = nobody,
+            .apply = apply,
+            .fix = fix,
+            .login = login,
+            .done = done,
+        };
+    }
+    /// The system's shortcuts are not read in tests: nobody holds a key.
+    fn nobody(_: []shortcut_clash.SystemKey) shortcut_clash.Holders {
+        return .{};
     }
     fn apply(ctx: *anyopaque, c: Choice) void {
         @as(*TestHooks, @ptrCast(@alignCast(ctx))).applied = c;
     }
-    fn fix(_: *anyopaque, _: shortcut.Clash) void {}
+    fn fix(_: *anyopaque, _: shortcut_clash.Clash) void {}
+    fn login(_: *anyopaque, set: ?bool) bool {
+        return set orelse false;
+    }
     fn done(ctx: *anyopaque) void {
         @as(*TestHooks, @ptrCast(@alignCast(ctx))).ended += 1;
     }
 };
 
-test "Settings opened over the welcome skips it: done, and no key applied" {
-    var o: Onboard = .{};
-    // Hooks only once started: the system's shortcuts are not read in tests.
-    o.start(.cmd_space);
+test "a welcome skipped applies no key" {
     var th: TestHooks = .{};
-    o.hooks = th.hooks();
+    var o: Onboard = .{ .hooks = th.hooks() };
+    o.start(.cmd_space);
     o.choice = .opt_space;
     o.end(.drop_choice);
-    try std.testing.expect(!o.active);
-    try std.testing.expectEqual(@as(u8, 1), th.ended);
-    try std.testing.expect(th.applied == null);
-    // Already over: ending again does nothing.
-    o.end(.take_choice);
     try std.testing.expectEqual(@as(u8, 1), th.ended);
     try std.testing.expect(th.applied == null);
 }
 
 test "the welcome applies its key only when it changed" {
-    var o: Onboard = .{};
-    o.start(.ctrl_space);
     var th: TestHooks = .{};
-    o.hooks = th.hooks();
+    var o: Onboard = .{ .hooks = th.hooks() };
+    o.start(.ctrl_space);
     o.end(.take_choice);
     try std.testing.expect(th.applied == null);
     try std.testing.expectEqual(@as(u8, 1), th.ended);
-    o.hooks = null;
     o.start(.ctrl_space);
-    o.hooks = th.hooks();
     o.choice = .opt_space;
     o.end(.take_choice);
     try std.testing.expectEqual(Choice.opt_space, th.applied.?);

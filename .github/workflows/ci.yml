@@ -14,16 +14,17 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      # Zig: build.zig.zon's minimum_zig_version.
       - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
       - run: zig build lint
       - run: zig build test
+      # The Nix build's UI (no updater, no login item); nix's job runs it on Linux.
       - run: zig build test -Dnix=true
       - run: zig build app
       - run: zig build server
       - run: zig build -Dtarget=x86_64-windows-gnu --prefix zig-out/windows
       - run: zig build -Dtarget=x86_64-linux-gnu --prefix zig-out/linux
+      - run: zig build -Dtarget=aarch64-linux-gnu --prefix zig-out/linux-arm
       - run: zig build app -Dnix=true --prefix zig-out/nix-app
       - run: zig build -Dnix=true -Dtarget=x86_64-windows-gnu --prefix zig-out/nix-windows
 
@@ -33,10 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
       - run: zig build test
-      - run: zig build test -Dnix=true
       - run: zig build server
 
   # Needs a committed flake.lock (`nix flake lock`).

@@ -9,25 +9,24 @@
 //! its way the answer to fewer letters stands in for it, cut to what still
 //! begins with what is typed: the rows don't blink at every key.
 const std = @import("std");
-const results = @import("results.zig");
+const percentEncode = @import("text.zig").percentEncode;
 
-/// At most this many completions are listed.
+/// At most this many completions are kept and listed: the one cap
+/// (results.zig's `max_rows` leaves room for all but one beside every app).
 pub const max_rows = 4;
 /// A query or a completion longer than this is left out.
 pub const max_len = 120;
-/// A longer answer is not read.
 pub const max_bytes = 32 * 1024;
 /// How long typing pauses before asking: long enough for a burst of keys
 /// to pass, short enough to land while the words are still being read.
 pub const pause_ms = 90;
 
-/// Whether `typed` may be sent to Google at all.
-pub fn eligible(typed: []const u8) bool {
-    const t = std.mem.trim(u8, typed, " \t\r\n");
-    if (t.len < 2 or t.len > max_len) return false;
-    if (std.ascii.startsWithIgnoreCase(t, "www.") or
-        std.ascii.startsWithIgnoreCase(t, "localhost")) return false;
-    for (t) |ch| switch (ch) {
+/// Whether the query's `words` (`Query.words`) may be sent to Google at all.
+pub fn eligible(words: []const u8) bool {
+    if (words.len < 2 or words.len > max_len) return false;
+    if (std.ascii.startsWithIgnoreCase(words, "www.") or
+        std.ascii.startsWithIgnoreCase(words, "localhost")) return false;
+    for (words) |ch| switch (ch) {
         0...0x1f, 0x7f, ':', '@', '\\', '/', '.' => return false,
         else => {},
     };
@@ -38,12 +37,13 @@ const url_base = "https://suggestqueries.google.com/complete/search?client=firef
 /// The longest address `url` writes: every byte of the longest query escaped.
 pub const url_max = url_base.len + 3 * max_len;
 
-/// The address that asks for `typed`'s completions (at most `max_len` bytes).
-pub fn url(buf: *[url_max]u8, typed: []const u8) []const u8 {
-    std.debug.assert(typed.len <= max_len);
+/// The address that asks for the completions of `words` (at most `max_len`
+/// bytes, as `eligible` lets out).
+pub fn url(buf: *[url_max]u8, words: []const u8) []const u8 {
+    std.debug.assert(words.len <= max_len);
     var w: std.Io.Writer = .fixed(buf);
     w.writeAll(url_base) catch unreachable;
-    results.escape(&w, typed, true);
+    percentEncode(&w, words, .{ .plus = true }) catch unreachable;
     return w.buffered();
 }
 
@@ -70,7 +70,6 @@ pub fn plain(buf: *[max_len]u8, s: []const u8) []const u8 {
     return buf[0..n];
 }
 
-/// Whether `a` and `b` are the same words.
 pub fn same(a: []const u8, b: []const u8) bool {
     var ba: [max_len]u8 = undefined;
     var bb: [max_len]u8 = undefined;
@@ -94,7 +93,6 @@ pub const List = struct {
         l.n += 1;
     }
 
-    /// Its completions as slices, into `out`.
     pub fn slices(l: *const List, out: *[max_rows][]const u8) []const []const u8 {
         for (0..l.n) |i| out[i] = l.get(i);
         return out[0..l.n];
@@ -187,7 +185,7 @@ pub const Cache = struct {
 test "addresses, emails and paths never go out" {
     const t = std.testing;
     try t.expect(eligible("liquid glass"));
-    try t.expect(eligible("  zig  "));
+    try t.expect(eligible("zig"));
     try t.expect(!eligible("z"));
     for ([_][]const u8{
         "github.com",
@@ -208,7 +206,7 @@ test "the address is escaped" {
     var buf: [url_max]u8 = undefined;
     try std.testing.expectEqualStrings(
         "https://suggestqueries.google.com/complete/search?client=firefox&q=liquid+gl+%26+co",
-        url(&buf, " liquid gl & co "),
+        url(&buf, "liquid gl & co"),
     );
 }
 
@@ -229,7 +227,6 @@ test "an answer counts only for the words it answers" {
     try std.testing.expect(!decode(arena.allocator(), body, "liquid", &l));
     try std.testing.expect(!decode(arena.allocator(), "<html>", "liquid gl", &l));
     try std.testing.expect(!decode(arena.allocator(), "[\"x\"]", "x", &l));
-    // Escapes are read: "caf\u00e9".
     try std.testing.expect(decode(arena.allocator(), "[\"caf\",[\"caf\\u00e9\"]]", "caf", &l));
     try std.testing.expectEqualStrings("café", l.get(0));
 }
@@ -252,6 +249,11 @@ test "a shorter answer stands in, cut to what still fits" {
         var b: [16]u8 = undefined;
         c.put(std.fmt.bufPrint(&b, "q{d}", .{i}) catch unreachable, &said);
     }
-    try std.testing.expect(!c.lookup("liquid gl", &out) or out.n == 0);
-    try std.testing.expect(c.lookup("q63", &out));
+    try std.testing.expect(!c.lookup("liquid gl", &out));
+    try std.testing.expectEqual(@as(usize, 0), out.n);
+    var last: [16]u8 = undefined;
+    try std.testing.expect(c.lookup(
+        std.fmt.bufPrint(&last, "q{d}", .{Cache.slots - 1}) catch unreachable,
+        &out,
+    ));
 }

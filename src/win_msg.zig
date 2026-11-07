@@ -2,7 +2,11 @@
 //! hot key (WM_HOTKEY, hotkey_win.zig) and a second copy sends its command
 //! (`nanolight --toggle`, a newer copy asking this one to quit: single.zig).
 //! nanoui's message loop dispatches to it like to any window of the thread.
+//! Made on first use (`ensure`), by `single_win.claim` or
+//! `hotkey_win.register`, whichever runs first.
 const std = @import("std");
+const single = @import("single.zig");
+const app_name = @import("app_facts.zig").app_name;
 
 pub const HWND = *opaque {};
 const HINSTANCE = ?*anyopaque;
@@ -46,34 +50,36 @@ extern "user32" fn FindWindowExW(
 extern "user32" fn PostMessageW(?HWND, u32, usize, isize) callconv(.winapi) i32;
 extern "kernel32" fn GetModuleHandleW(?[*:0]const u16) callconv(.winapi) HINSTANCE;
 
-pub const wm_hotkey: u32 = 0x0312;
-/// WM_APP + n: a second copy's commands.
-pub const wm_toggle: u32 = 0x8001;
-pub const wm_quit: u32 = 0x8002;
+const wm_hotkey: u32 = 0x0312;
 
-const class_name = std.unicode.utf8ToUtf16LeStringLiteral("NanolightMessages");
+const class_name = std.unicode.utf8ToUtf16LeStringLiteral(app_name ++ "Messages");
 /// HWND_MESSAGE: the parent of message-only windows.
 const message_parent: HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, -3))));
 
-pub const Handler = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque, msg: u32) void };
+/// What the window's messages call, each set by its owner.
+pub const Handlers = struct {
+    hotkey: ?*const fn () void = null,
+    command: ?*const fn (cmd: single.Command) void = null,
+};
 
 var hwnd: ?HWND = null;
-/// The hot key's callback, and the commands'.
-pub var on_hotkey: ?Handler = null;
-pub var on_command: ?Handler = null;
+/// A window procedure has no context of its own.
+var handlers: Handlers = .{};
 
 fn proc(h: HWND, msg: u32, wp: usize, lp: isize) callconv(.winapi) isize {
-    const handler = switch (msg) {
-        wm_hotkey => on_hotkey,
-        wm_toggle, wm_quit => on_command,
-        else => return DefWindowProcW(h, msg, wp, lp),
-    };
-    if (handler) |hd| hd.func(hd.ctx, msg);
+    if (msg == wm_hotkey) {
+        if (handlers.hotkey) |f| f();
+    } else if (single.Command.fromMessage(msg)) |cmd| {
+        if (handlers.command) |f| f(cmd);
+    } else return DefWindowProcW(h, msg, wp, lp);
     return 0;
 }
 
-/// Ours, made the first time it is asked for.
-pub fn window() ?HWND {
+/// Ours, made on the first call; `on`'s handlers are kept (those it leaves
+/// null stay as they were). Null when it can't be made.
+pub fn ensure(on: Handlers) ?HWND {
+    if (on.hotkey) |f| handlers.hotkey = f;
+    if (on.command) |f| handlers.command = f;
     if (hwnd) |h| return h;
     const inst = GetModuleHandleW(null);
     _ = RegisterClassExW(
@@ -83,11 +89,18 @@ pub fn window() ?HWND {
     return hwnd;
 }
 
-/// Another running copy's window (call before making ours).
-pub fn other() ?HWND {
-    return FindWindowExW(message_parent, null, class_name, null);
+/// Ours, once `ensure` made it.
+pub fn window() ?HWND {
+    return hwnd;
 }
 
-pub fn post(to: HWND, msg: u32) bool {
-    return PostMessageW(to, msg, 0, 0) != 0;
+/// Another running copy's window: ours, whenever it was made, is skipped.
+pub fn other() ?HWND {
+    const first = FindWindowExW(message_parent, null, class_name, null);
+    if (first == null or first != hwnd) return first;
+    return FindWindowExW(message_parent, hwnd, class_name, null);
+}
+
+pub fn post(to: HWND, cmd: single.Command) bool {
+    return PostMessageW(to, cmd.message(), 0, 0) != 0;
 }

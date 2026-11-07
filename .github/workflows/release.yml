@@ -53,9 +53,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Zig: build.zig.zon's minimum_zig_version.
       - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
 
       - name: Signing identity
         if: env.MACOS_CERT_P12 != ''
@@ -93,7 +92,7 @@ jobs:
       # archives, each build's debug symbols, and the feed naming them.
       - name: Package
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="$GITHUB_REF_NAME"
           case "$GITHUB_REF" in refs/tags/*) ;; *) version="0.0.0-${GITHUB_SHA::7}" ;; esac
           zig build package -Dversion="$version"
 
@@ -111,7 +110,8 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
           cd zig-out/package
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --prerelease --title "Nanolight ${tag#v}" --notes "Nanolight ${tag#v} for macOS 14 and later (Apple silicon: open the disk image and drag Nanolight to Applications), Windows 10 and later (x86_64: unzip and run nanolight.exe) and Linux (x86_64, arm64; X11, GTK 3: unpack and run nanolight). The -symbols files hold each build's debug symbols, for reading a crash."
+          # The notes (what each build runs on) are tools/release.zig's, which the package wrote.
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --prerelease --title "Nanolight ${tag#v}" --notes-file notes.md
           # Every file the package made: the disk image, the updates, the
           # symbols, each one's .sha256, and the manifest.
           gh release upload "$tag" nanolight-* manifest.json --clobber
@@ -154,6 +154,6 @@ jobs:
               exit 0
             fi
             echo "$GITHUB_REF_NAME isn't the latest yet (try $try); retrying" >&2
-            sleep $((try * ${RETRY_S:-20}))
+            sleep $((try * 20))
           done
           exit 1

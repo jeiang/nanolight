@@ -1,94 +1,11 @@
 //! Conversions typed into the bar: "10 km to mi", "32 f in c", "1.5 GiB to
 //! MB", "100 usd to ttd", "$20 in eur", with math around them: "35 * 7 ttd
-//! to usd" converts 245 TTD, "10 km to mi / 2" halves the miles. Units and
-//! the parser are pure; calc.zig works out the math. Currency rates are a
-//! table fetched elsewhere (`Rates`, the JSON of
-//! github.com/fawazahmed0/exchange-api: lowercase codes, each worth of one
-//! USD) that `answer` is handed; `Feed` holds it and says when to fetch it.
+//! to usd" converts 245 TTD, "10 km to mi / 2" halves the miles. All of it
+//! is pure parsing; calc.zig works out the math. Money is converted by
+//! whatever rates `answer` is handed (a `Lookup`; rates_table.zig's table).
 const std = @import("std");
-const calc = @import("calc.zig");
 const assert = std.debug.assert;
-
-pub const urls = [_][]const u8{
-    "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.min.json",
-    "https://latest.currency-api.pages.dev/v1/currencies/usd.min.json",
-};
-/// A longer table is not read.
-pub const max_bytes = 512 * 1024;
-/// Rates are fetched at most this often (seconds) once they are in hand.
-pub const max_age = 24 * 3600;
-/// A failed fetch is tried again after this long (seconds).
-pub const retry_after = 600;
-
-/// The rates in hand and their fetching: when they were fetched and when a
-/// fetch last began (Unix seconds, 0 for never), and whether one is out.
-pub const Feed = struct {
-    rates: ?Rates = null,
-    fetched_s: i64 = 0,
-    tried_s: i64 = 0,
-    state: State = .idle,
-    /// The cached table was looked for (`cached`), once.
-    cache_read: bool = false,
-
-    pub const State = enum { idle, busy, missed };
-
-    pub fn deinit(f: *Feed) void {
-        if (f.rates) |*r| r.deinit();
-        f.rates = null;
-    }
-
-    pub fn table(f: *const Feed) ?*const Rates {
-        return if (f.rates) |*r| r else null;
-    }
-
-    /// Rates could not be had: the last fetch failed and none are in hand.
-    /// A retry on its way is not a failure.
-    pub fn failed(f: *const Feed) bool {
-        return f.state == .missed and f.rates == null;
-    }
-
-    /// Whether a fetch should begin now: none is out, and the rates are
-    /// missing or a day old; after a failure, not for `retry_after`.
-    pub fn due(f: *const Feed, now_s: i64) bool {
-        if (f.state == .busy) return false;
-        if (f.tried_s != 0 and now_s - f.tried_s < retry_after) return false;
-        return f.rates == null or now_s - f.fetched_s >= max_age;
-    }
-
-    /// What the cache held: the table, if any, and when it was fetched.
-    pub fn cached(f: *Feed, r: ?Rates, fetched_s: i64) void {
-        assert(!f.cache_read);
-        assert(f.state == .idle);
-        f.cache_read = true;
-        f.fetched_s = fetched_s;
-        if (r) |t| f.use(t);
-    }
-
-    pub fn begin(f: *Feed, now_s: i64) void {
-        assert(f.state != .busy);
-        f.state = .busy;
-        f.tried_s = now_s;
-    }
-
-    /// The fetch brought `r`, now the table in use.
-    pub fn landed(f: *Feed, r: Rates, now_s: i64) void {
-        assert(f.state == .busy);
-        f.use(r);
-        f.fetched_s = now_s;
-        f.state = .idle;
-    }
-
-    /// The fetch brought nothing, from any address.
-    pub fn fail(f: *Feed) void {
-        assert(f.state == .busy);
-        f.state = .missed;
-    }
-
-    fn use(f: *Feed, r: Rates) void {
-        f.deinit();
-        f.rates = r;
-    }
-};
+const calc = @import("calc.zig");
 
 const Family = enum { length, mass, temperature, volume, area, speed, data, time };
 
@@ -184,7 +101,14 @@ const units = [_]Unit{
     .{ .family = .time, .names = "y,yr,yrs,year,years", .scale = 31556952 },
 };
 
-/// The unit `name` is, in any case.
+/// The longest unit name an answer gives (`first`), for the room it is shown in.
+pub const unit_name_len = blk: {
+    @setEvalBranchQuota(10_000);
+    var n: usize = 0;
+    for (&units) |*u| n = @max(n, first(u).len);
+    break :blk n;
+};
+
 fn unit(name: []const u8) ?*const Unit {
     if (name.len == 0) return null;
     for (&units) |*u| {
@@ -212,7 +136,7 @@ fn code(word: []const u8, buf: *[3]u8) ?[]const u8 {
     return buf;
 }
 
-pub const Parsed = struct {
+const Parsed = struct {
     amount: f64,
     from: []const u8,
     to: []const u8,
@@ -224,7 +148,7 @@ pub const Parsed = struct {
 /// followed by operators on the converted value: "12 ttd to usd * 12". The
 /// amount is any math (`calc.lead`): "3 * 10 km", "(2 + 3) km", "1,500 m".
 /// Whether the names mean anything, and the operators, is for `answer`.
-pub fn parse(query: []const u8) ?Parsed {
+fn parse(query: []const u8) ?Parsed {
     var s = std.mem.trim(u8, query, " \t");
     var from: []const u8 = "";
     for (symbols) |sym| if (std.mem.startsWith(u8, s, sym.sym)) {
@@ -265,72 +189,18 @@ fn opsStart(s: []const u8) usize {
     for (s, 0..) |ch, i| {
         const in_unit = ch == '/' and i > 0 and i + 1 < s.len and
             std.ascii.isAlphabetic(s[i - 1]) and std.ascii.isAlphabetic(s[i + 1]);
-        if (std.mem.indexOfScalar(u8, "*/+-%^", ch) != null and !in_unit) return i;
-        for ([_][]const u8{ "×", "÷", "−" }) |op| if (std.mem.startsWith(u8, s[i..], op)) return i;
+        if (calc.opLen(s[i..]) > 0 and !in_unit) return i;
     }
     return s.len;
 }
 
-/// Currency rates, each worth of one USD, by lowercase three-letter code.
-pub const Rates = struct {
-    arena: std.heap.ArenaAllocator,
-    map: std.StringHashMapUnmanaged(f64) = .empty,
-    /// YYYY-MM-DD, the day the table is for.
+/// Currency rates to convert money with: `perUsd` is a lowercase code's
+/// worth of one USD (null when unknown), `date` the day they are for
+/// (YYYY-MM-DD).
+pub const Lookup = struct {
+    ctx: *const anyopaque,
+    perUsd: *const fn (ctx: *const anyopaque, code: []const u8) ?f64,
     date: [10]u8,
-
-    pub fn deinit(r: *Rates) void {
-        r.arena.deinit();
-    }
-
-    /// The table in `body` (`{"date":"2026-11-03","usd":{"eur":0.86,…}}`),
-    /// or null if it isn't one. Names longer than three letters are left out.
-    pub fn parse(gpa: std.mem.Allocator, body: []const u8) ?Rates {
-        if (body.len > max_bytes) return null;
-        var tmp: std.heap.ArenaAllocator = .init(gpa);
-        defer tmp.deinit();
-        const v = std.json.parseFromSliceLeaky(
-            std.json.Value,
-            tmp.allocator(),
-            body,
-            .{},
-        ) catch return null;
-        if (v != .object) return null;
-        const day = v.object.get("date") orelse return null;
-        const table = v.object.get("usd") orelse return null;
-        if (day != .string or day.string.len != 10 or table != .object) return null;
-        for (day.string, 0..) |c, i| if (if (i == 4 or
-            i == 7) c != '-' else !std.ascii.isDigit(c)) return null;
-        var r: Rates = .{ .arena = .init(gpa), .date = day.string[0..10].* };
-        const a = r.arena.allocator();
-        var it = table.object.iterator();
-        while (it.next()) |e| {
-            var b: [3]u8 = undefined;
-            const k = code(e.key_ptr.*, &b) orelse continue;
-            const x: f64 = switch (e.value_ptr.*) {
-                .integer => |n| @floatFromInt(n),
-                .float => |f| f,
-                else => continue,
-            };
-            if (!(x > 0) or !std.math.isFinite(x)) continue;
-            const key = a.dupe(u8, k) catch {
-                r.deinit();
-                return null;
-            };
-            r.map.put(a, key, x) catch {
-                r.deinit();
-                return null;
-            };
-        }
-        if (r.map.count() == 0) {
-            r.deinit();
-            return null;
-        }
-        return r;
-    }
-
-    fn get(r: *const Rates, c: []const u8) ?f64 {
-        return r.map.get(c);
-    }
 };
 
 pub const UnitAnswer = struct { amount: f64, value: f64, from: []const u8, to: []const u8 };
@@ -356,7 +226,7 @@ pub const Answer = union(enum) {
 /// compute around it ("10 km to mi *"). The answer's `amount` is the math
 /// before the units worked out, its `value` the converted one carried
 /// through the operators after them.
-pub fn answer(query: []const u8, rates: ?*const Rates) ?Answer {
+pub fn answer(query: []const u8, rates: ?Lookup) ?Answer {
     const p = parse(query) orelse return null;
     const a = unit(p.from);
     const b = unit(p.to);
@@ -378,8 +248,8 @@ pub fn answer(query: []const u8, rates: ?*const Rates) ?Answer {
         _ = calc.carry(p.amount, p.ops) orelse return null;
         return .pending;
     };
-    const rf = table.get(f) orelse return null;
-    const rt = table.get(t) orelse return null;
+    const rf = table.perUsd(table.ctx, f) orelse return null;
+    const rt = table.perUsd(table.ctx, t) orelse return null;
     const rate = rt / rf;
     const v = calc.carry(p.amount * rate, p.ops) orelse return null;
     var m: Money = .{
@@ -399,31 +269,17 @@ fn first(u: *const Unit) []const u8 {
     return u.names[0 .. std.mem.indexOfScalar(u8, u.names, ',') orelse u.names.len];
 }
 
-/// `v` to `decimals` places, with thousands separators when `grouped`.
+/// `v` to `decimals` places, with thousands separators when `grouped`;
+/// `calc.scientific` when the grouped form doesn't fit `buf`.
 fn fixed(buf: []u8, v: f64, decimals: usize, grouped: bool) []const u8 {
+    assert(buf.len >= calc.scientific_len);
     var tmp: [64]u8 = undefined;
-    const s = std.fmt.bufPrint(&tmp, "{d:.[1]}", .{ v, decimals }) catch return "";
-    if (!grouped) return std.fmt.bufPrint(buf, "{s}", .{s}) catch "";
-    const neg = s[0] == '-';
-    const body = s[@intFromBool(neg)..];
-    const int_end = std.mem.indexOfScalar(u8, body, '.') orelse body.len;
-    var o: usize = 0;
-    if (o + 1 > buf.len) return "";
-    if (neg) {
-        buf[o] = '-';
-        o += 1;
-    }
-    for (body, 0..) |ch, i| {
-        const comma = i < int_end and i > 0 and (int_end - i) % 3 == 0;
-        if (o + 1 + @intFromBool(comma) > buf.len) return "";
-        if (comma) {
-            buf[o] = ',';
-            o += 1;
-        }
-        buf[o] = ch;
-        o += 1;
-    }
-    return buf[0..o];
+    const s = std.fmt.bufPrint(&tmp, "{d:.[1]}", .{ v, decimals }) catch
+        return calc.scientific(buf, v);
+    const g = calc.group(buf, s) orelse return calc.scientific(buf, v);
+    if (grouped) return g;
+    @memcpy(buf[0..s.len], s);
+    return buf[0..s.len];
 }
 
 /// A converted amount of money: two places, more for a tiny one.
@@ -434,46 +290,53 @@ pub fn formatMoney(buf: []u8, v: f64, grouped: bool) []const u8 {
     return fixed(buf, v, places, grouped);
 }
 
+/// The room `formatRate` takes.
+const rate_len = 32;
+
 /// An exchange rate to six significant digits, without trailing zeros.
 pub fn formatRate(buf: []u8, v: f64) []const u8 {
     const places: usize = @intFromFloat(std.math.clamp(5 - @floor(@log10(@abs(v))), 0, 12));
     const s = fixed(buf, v, places, false);
-    if (std.mem.indexOfScalar(u8, s, '.') == null) return s;
+    if (std.mem.indexOfScalar(u8, s, '.') == null or std.mem.indexOfScalar(u8, s, 'e') != null)
+        return s;
     return std.mem.trimEnd(u8, std.mem.trimEnd(u8, s, "0"), ".");
 }
 
+/// The room `rateLine` takes.
+pub const rate_line_len = "1 USD =  TTD · 2026-11-03".len + rate_len;
+
 /// "1 USD = 6.785 TTD · 2026-11-03".
 pub fn rateLine(buf: []u8, m: Money) []const u8 {
-    var rb: [40]u8 = undefined;
+    assert(buf.len >= rate_line_len);
+    var rb: [rate_len]u8 = undefined;
     return std.fmt.bufPrint(
         buf,
         "1 {s} = {s} {s} · {s}",
         .{ m.from, formatRate(&rb, m.rate), m.to, m.date },
-    ) catch "";
+    ) catch unreachable;
 }
 
-/// Six significant digits, "9.09091e-13": fixed decimals would print 0.
-fn scientific(buf: []u8, v: f64) []const u8 {
-    var tmp: [40]u8 = undefined;
-    const s = std.fmt.bufPrint(&tmp, "{e:.5}", .{v}) catch return "";
-    const at = std.mem.indexOfScalar(u8, s, 'e') orelse return s;
-    const m = std.mem.trimEnd(u8, std.mem.trimEnd(u8, s[0..at], "0"), ".");
-    return std.fmt.bufPrint(buf, "{s}{s}", .{ m, s[at..] }) catch "";
-}
+/// A number as an answer writes it beside a unit or a currency code. The
+/// row and what it copies take the same room, so they agree on the form.
+pub const number_len = 32;
+
+/// The room `formatUnit` takes.
+pub const unit_len = number_len + " ".len + unit_name_len;
 
 /// The unit answer as the row shows it, and as Return copies it.
 pub fn formatUnit(buf: []u8, a: UnitAnswer, grouped: bool) []const u8 {
-    var nb: [64]u8 = undefined;
+    assert(buf.len >= unit_len);
+    var nb: [number_len]u8 = undefined;
     return std.fmt.bufPrint(
         buf,
         "{s} {s}",
         .{ formatUnitValue(&nb, a.value, grouped), a.to },
-    ) catch "";
+    ) catch unreachable;
 }
 
-/// The number of a unit answer, without its unit.
 pub fn formatUnitValue(buf: []u8, v: f64, grouped: bool) []const u8 {
-    return if (v != 0 and @abs(v) < 1e-4) scientific(buf, v) else calc.format(buf, v, grouped);
+    if (v != 0 and @abs(v) < 1e-4) return calc.scientific(buf, v);
+    return calc.format(buf, v, grouped);
 }
 
 const testing = std.testing;
@@ -601,72 +464,59 @@ test "the parser splits on the first separator" {
     try testing.expect(parse("10 km to * 2") == null);
 }
 
-const sample =
-    \\{"date":"2026-11-03","usd":{"1inch":1.2,"usd":1,"ttd":6.785,"eur":0.86,"gbp":0.75,"jpy":150.0,
-++
-    \\"zzz":0,"bad":"x"}}
-;
+const sample_table = [_]struct { []const u8, f64 }{
+    .{ "usd", 1 },
+    .{ "ttd", 6.785 },
+    .{ "eur", 0.86 },
+    .{ "gbp", 0.75 },
+    .{ "jpy", 150.0 },
+};
 
-test "rates read the fetched table" {
-    var r = Rates.parse(testing.allocator, sample).?;
-    defer r.deinit();
-    try testing.expectEqualStrings("2026-11-03", &r.date);
-    try testing.expectEqual(@as(f64, 6.785), r.get("ttd").?);
-    try testing.expectEqual(@as(f64, 1), r.get("usd").?);
-    try testing.expect(r.get("1inch") == null);
-    try testing.expect(r.get("zzz") == null);
-    for ([_][]const u8{
-        "",
-        "<html>",
-        "[]",
-        "{\"usd\":{\"eur\":1}}",
-        "{\"date\":\"2026-11-03\"}",
-        "{\"date\":\"tomorrow!!\",\"usd\":{\"eur\":1}}",
-        "{\"date\":\"2026-11-03\",\"usd\":{}}",
-    }) |bad|
-        try testing.expect(Rates.parse(testing.allocator, bad) == null);
+fn samplePerUsd(_: *const anyopaque, c: []const u8) ?f64 {
+    for (sample_table) |e| if (std.mem.eql(u8, e[0], c)) return e[1];
+    return null;
 }
 
+const sample: Lookup = .{ .ctx = &sample_table, .perUsd = samplePerUsd, .date = "2026-11-03".* };
+
 test "currencies cross through the dollar" {
-    var r = Rates.parse(testing.allocator, sample).?;
-    defer r.deinit();
-    const m = answer("100 USD in TTD", &r).?.money;
+    const m = answer("100 USD in TTD", sample).?.money;
     try testing.expectApproxEqRel(@as(f64, 678.5), m.value, 1e-12);
     try testing.expectEqualStrings("USD", &m.from);
     var buf: [64]u8 = undefined;
     try testing.expectEqualStrings("678.50", formatMoney(&buf, m.value, false));
     try testing.expectEqualStrings("1 USD = 6.785 TTD · 2026-11-03", rateLine(&buf, m));
-    const x = answer("100 eur to gbp", &r).?.money;
+    const x = answer("100 eur to gbp", sample).?.money;
     try testing.expectApproxEqRel(@as(f64, 100 * 0.75 / 0.86), x.value, 1e-12);
     try testing.expectApproxEqRel(@as(f64, 0.75 / 0.86), x.rate, 1e-12);
     try testing.expectEqualStrings("1 EUR = 0.872093 GBP · 2026-11-03", rateLine(&buf, x));
-    // Symbols.
-    try testing.expectApproxEqRel(@as(f64, 86), answer("$100 to €", &r).?.money.value, 1e-12);
-    try testing.expectApproxEqRel(@as(f64, 86), answer("100 $ to €", &r).?.money.value, 1e-12);
-    try testing.expectApproxEqRel(@as(f64, 15000), answer("100 $ in ¥", &r).?.money.value, 1e-12);
+    try testing.expectApproxEqRel(@as(f64, 86), answer("$100 to €", sample).?.money.value, 1e-12);
+    try testing.expectApproxEqRel(@as(f64, 86), answer("100 $ to €", sample).?.money.value, 1e-12);
     try testing.expectApproxEqRel(
-        @as(f64, 100.0 / 0.75),
-        answer("£100 in usd", &r).?.money.value,
+        @as(f64, 15000),
+        answer("100 $ in ¥", sample).?.money.value,
         1e-12,
     );
-    // A code the table lacks is not a conversion; no table is pending.
-    try testing.expect(answer("100 usd to xyz", &r) == null);
-    try testing.expect(answer("10 foo to bar", &r) == null);
+    try testing.expectApproxEqRel(
+        @as(f64, 100.0 / 0.75),
+        answer("£100 in usd", sample).?.money.value,
+        1e-12,
+    );
+    try testing.expect(answer("100 usd to xyz", sample) == null);
+    try testing.expect(answer("10 foo to bar", sample) == null);
     try testing.expect(answer("100 usd to ttd", null).? == .pending);
     try testing.expect(answer("100 usd to km", null) == null);
 }
 
 test "math around a conversion: the amount before it, the answer after it" {
-    var r = Rates.parse(testing.allocator, sample).?;
-    defer r.deinit();
-    const a = answer("35 * 7 ttd to usd", &r).?.money;
+    const a = answer("35 * 7 ttd to usd", sample).?.money;
     try testing.expectEqual(@as(f64, 245), a.amount);
     try testing.expectApproxEqRel(@as(f64, 245.0 / 6.785), a.value, 1e-12);
     try testing.expectApproxEqRel(@as(f64, 1.0 / 6.785), a.rate, 1e-12);
     try testing.expectEqualStrings("TTD", &a.from);
     try testing.expectEqualStrings("USD", &a.to);
     // The rate is still one of `from`: the operators act on the answer.
-    const b = answer("12 ttd to usd * 12", &r).?.money;
+    const b = answer("12 ttd to usd * 12", sample).?.money;
     try testing.expectEqual(@as(f64, 12), b.amount);
     try testing.expectApproxEqRel(@as(f64, 12.0 * 12 / 6.785), b.value, 1e-12);
     try testing.expectApproxEqRel(@as(f64, 1.0 / 6.785), b.rate, 1e-12);
@@ -678,12 +528,11 @@ test "math around a conversion: the amount before it, the answer after it" {
     const d = answer("10 km to mi / 2", null).?.unit;
     try testing.expectEqual(@as(f64, 10), d.amount);
     try testing.expectApproxEqRel(@as(f64, 10000.0 / 1609.344 / 2.0), d.value, 1e-12);
-    const e = answer("$20 * 3 in eur", &r).?.money;
+    const e = answer("$20 * 3 in eur", sample).?.money;
     try testing.expectEqual(@as(f64, 60), e.amount);
     try testing.expectApproxEqRel(@as(f64, 51.6), e.value, 1e-12);
     try testing.expectEqualStrings("USD", &e.from);
     try testing.expectEqualStrings("EUR", &e.to);
-    // Parentheses, functions and precedence, on either side.
     try expectUnit(10000, "(2 + 3) * 2 km to m");
     try expectUnit(2, "(1,500 + 500) m to km");
     try expectUnit(4000, "sqrt(16) km to m");
@@ -698,15 +547,17 @@ test "math around a conversion: the amount before it, the answer after it" {
     try expectUnit(29.5735295625 * 2, "1 fl oz to ml × 2");
     try testing.expectApproxEqRel(
         @as(f64, 24.0 / 6.785),
-        answer("12 ttd to usd * (1 + 1)", &r).?.money.value,
+        answer("12 ttd to usd * (1 + 1)", sample).?.money.value,
         1e-12,
     );
-    try testing.expectApproxEqRel(@as(f64, 80), answer("$100 to € - 6", &r).?.money.value, 1e-12);
+    try testing.expectApproxEqRel(
+        @as(f64, 80),
+        answer("$100 to € - 6", sample).?.money.value,
+        1e-12,
+    );
 }
 
 test "math that doesn't compute is not a conversion, pending or not" {
-    var r = Rates.parse(testing.allocator, sample).?;
-    defer r.deinit();
     for ([_][]const u8{
         "10 km to mi *",
         "10 km to mi / 0",
@@ -730,9 +581,8 @@ test "math that doesn't compute is not a conversion, pending or not" {
         "$20 * 3 eur",
     }) |q| {
         try testing.expect(answer(q, null) == null);
-        try testing.expect(answer(q, &r) == null);
+        try testing.expect(answer(q, sample) == null);
     }
-    // No table yet: math that computes waits for one, as a plain amount does.
     try testing.expect(answer("35 * 7 ttd to usd", null).? == .pending);
     try testing.expect(answer("12 ttd to usd * 12", null).? == .pending);
     try testing.expect(answer("$20 * 3 in eur", null).? == .pending);
@@ -776,45 +626,13 @@ test "money and rates read as people write them" {
     try testing.expectEqualStrings("2000000 mm", formatUnit(&buf, w, false));
 }
 
-test "rates are fetched when missing or a day old, one at a time, not in a loop" {
-    var f: Feed = .{};
-    defer f.deinit();
-    try testing.expect(f.due(1000));
-    f.begin(1000);
-    // One out: no second, and no failure yet.
-    try testing.expect(!f.due(1000 + retry_after));
-    try testing.expect(!f.failed());
-    f.fail();
-    try testing.expect(f.failed());
-    try testing.expect(!f.due(1000 + retry_after - 1));
-    try testing.expect(f.due(1000 + retry_after));
-    // A retry on its way is not a failure.
-    const t0 = 1000 + retry_after;
-    f.begin(t0);
-    try testing.expect(!f.failed());
-    f.landed(Rates.parse(testing.allocator, sample).?, t0);
-    try testing.expect(!f.failed());
-    try testing.expect(f.table() != null);
-    try testing.expect(!f.due(t0 + max_age - 1));
-    try testing.expect(f.due(t0 + max_age));
-    // Stale and the refresh failed: the old table still answers, and the
-    // next try waits.
-    f.begin(t0 + max_age);
-    f.fail();
-    try testing.expect(!f.failed());
-    try testing.expect(f.table() != null);
-    try testing.expect(!f.due(t0 + max_age + 1));
-}
-
-test "the cache's table and day count as fetched" {
-    var f: Feed = .{};
-    defer f.deinit();
-    f.cached(Rates.parse(testing.allocator, sample).?, 5000);
-    try testing.expect(f.cache_read);
-    try testing.expect(!f.due(5000 + max_age - 1));
-    try testing.expect(f.due(5000 + max_age));
-    var none: Feed = .{};
-    none.cached(null, 0);
-    try testing.expect(none.due(1));
-    try testing.expect(!none.failed());
+test "an amount too long to write out is scientific in the row and the copy" {
+    var buf: [number_len]u8 = undefined;
+    try testing.expectEqualStrings("1e25", formatMoney(&buf, 1e25, true));
+    try testing.expectEqualStrings("1e25", formatMoney(&buf, 1e25, false));
+    try testing.expectEqualStrings("1e40", formatRate(&buf, 1e40));
+    var line: [unit_len]u8 = undefined;
+    const u = answer("1e70 km to m", null).?.unit;
+    try testing.expectEqualStrings("1e73 m", formatUnit(&line, u, true));
+    try testing.expectEqualStrings("1e73", formatUnitValue(&buf, u.value, false));
 }

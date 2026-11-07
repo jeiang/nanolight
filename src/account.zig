@@ -1,24 +1,37 @@
-//! Syncing settings (settings.zig) through a nanolight-server (server.zig)
-//! to every machine on the same account. Off unless `[sync]` in config.toml
-//! names a server (`url`) and a file holding the account's token
-//! (`token_file`); nothing leaves the machine otherwise.
+//! Syncing settings (settings.zig) through a nanolight-server over the sync
+//! wire (sync_protocol.zig) to every machine on the same account. Off unless
+//! `[sync]` in config.toml names a server (`url`) and a file holding the
+//! account's token (`token_file`); nothing leaves the machine otherwise.
 //!
 //! One request does it all: PUT this machine's record, and the server's
 //! answer is the two merged. It runs at launch, when the panel opens if the
 //! last one is five minutes old, and two seconds after a change.
 const std = @import("std");
 const nanoui = @import("nanoui");
+const prefs = @import("prefs.zig");
+const protocol = @import("sync_protocol.zig");
 const settings = @import("settings.zig");
-const config = @import("config.zig");
+const after = @import("after.zig");
+const clock = @import("clock.zig");
 const Settings = settings.Settings;
 
-/// Marks this machine's first sync with a server: the stored record wins.
-const first_header = "X-Nanolight-First";
-/// Holds the server this machine last synced with: a different one is a first sync again.
-const synced_key = "nanolight.account.synced";
 const pull_every_s = 5 * 60;
 const push_after_ms = 2000;
-pub const off_text = "Sync: off (set [sync] in config.toml)";
+/// Seconds without a byte before a sync gives up.
+const timeout = 15;
+
+comptime {
+    // Whatever launches a request sheds to fit, the rest fits.
+    std.debug.assert(settings.max_without_launches <= protocol.max_body);
+}
+
+/// `[sync]` in config.toml.
+pub const Config = struct {
+    /// Empty: syncing is off.
+    url: []const u8 = "",
+    /// The file that holds the bearer token.
+    token_file: []const u8 = "",
+};
 
 pub const Hooks = struct {
     ctx: *anyopaque,
@@ -26,7 +39,6 @@ pub const Hooks = struct {
     snapshot: *const fn (ctx: *anyopaque, arena: std.mem.Allocator) Settings,
     /// The server's settings merged with this machine's: take them.
     apply: *const fn (ctx: *anyopaque, s: Settings) void,
-    /// The sync status changed: the menu changes.
     changed: *const fn (ctx: *anyopaque) void,
 };
 
@@ -65,7 +77,7 @@ pub const Account = struct {
     io: std.Io,
     kv: nanoui.kv.Store,
     hooks: Hooks,
-    cfg: config.Sync,
+    cfg: Config,
     state: Status = .off,
     token: ?[]u8 = null,
     last_pull: i64 = 0,
@@ -73,7 +85,7 @@ pub const Account = struct {
     /// Asked to sync while a request was out: synced once more when it
     /// succeeds. A failure drops it (no retry; the next change or pull asks).
     dirty: bool = false,
-    pushes_waiting: u32 = 0,
+    push_pause: after.Debounce = .{},
     send: Send = fetch,
 
     /// At launch: reads the token and syncs, if `[sync]` is set.
@@ -107,17 +119,18 @@ pub const Account = struct {
         a.hooks.changed(a.hooks.ctx);
     }
 
-    /// "Sync: host, last synced 3 min ago", "Sync: error ...", or `off_text`.
-    pub fn status(a: *const Account, buf: []u8) []const u8 {
+    /// "Sync: host, last synced 3 min ago", "Sync: error ...", or null: off, or
+    /// too long for `buf`.
+    pub fn status(a: *const Account, buf: []u8) ?[]const u8 {
         const host = hostOf(a.cfg.url);
         return switch (a.state) {
-            .off => off_text,
-            .pending => std.fmt.bufPrint(buf, "Sync: {s}, syncing…", .{host}) catch off_text,
+            .off => null,
+            .pending => std.fmt.bufPrint(buf, "Sync: {s}, syncing…", .{host}) catch null,
             .synced => |at| blk: {
                 var ago_buf: [32]u8 = undefined;
-                const when = ago(&ago_buf, now() - at);
+                const when = clock.ago(&ago_buf, clock.now() - at);
                 const line = std.fmt.bufPrint(buf, "Sync: {s}, last synced {s}", .{ host, when });
-                break :blk line catch off_text;
+                break :blk line catch null;
             },
             .failed => |*r| blk: {
                 const line = std.fmt.bufPrint(buf, "Sync: error {s}", .{r.text()});
@@ -128,26 +141,19 @@ pub const Account = struct {
 
     /// When the panel opens: sync, if the last one is old.
     pub fn maybePull(a: *Account) void {
-        if (a.token != null and now() - a.last_pull > pull_every_s) a.sync();
+        if (a.token != null and clock.now() - a.last_pull > pull_every_s) a.sync();
     }
 
     /// This machine's settings changed: sent once changes pause.
     pub fn changed(a: *Account) void {
         if (a.token == null) return;
-        a.pushes_waiting += 1;
-        nanoui.App.after(push_after_ms, a, struct {
-            fn f(ctx: ?*anyopaque) callconv(.c) void {
-                const acc: *Account = @ptrCast(@alignCast(ctx.?));
-                acc.pushes_waiting -= 1;
-                if (acc.pushes_waiting == 0) acc.sync();
-            }
-        }.f);
+        a.push_pause.poke(push_after_ms, Account, "push_pause", sync);
     }
 
     fn firstHere(a: *Account) bool {
-        const have = a.kv.get(a.gpa, synced_key) catch return true;
-        defer if (have) |h| a.gpa.free(h);
-        return !sameServer(have orelse return true, a.cfg.url);
+        const have = prefs.text(a.kv, a.gpa, .account_synced) orelse return true;
+        defer a.gpa.free(have);
+        return !sameServer(have, a.cfg.url);
     }
 
     /// Sends this machine's record; with one out already, sent again once
@@ -158,36 +164,37 @@ pub const Account = struct {
             a.dirty = true;
             return;
         }
-        a.last_pull = now();
+        a.last_pull = clock.now();
         var arena: std.heap.ArenaAllocator = .init(a.gpa);
         defer arena.deinit();
         const al = arena.allocator();
         const sent = a.hooks.snapshot(a.hooks.ctx, al);
-        const body = settings.encode(al, sent) catch return a.fail("out of memory");
+        const body = (settings.encodeWithin(al, sent, protocol.max_body) catch
+            return a.fail("out of memory")) orelse return a.fail("the settings are too big");
         const base = baseUrl(a.cfg.url).?;
         const url = std.fmt.allocPrint(
             al,
-            "{s}/v1/sync",
+            "{s}" ++ protocol.path,
             .{base},
         ) catch return a.fail("out of memory");
         const auth = std.fmt.allocPrint(
             al,
-            "Bearer {s}",
+            protocol.bearer_prefix ++ "{s}",
             .{token},
         ) catch return a.fail("out of memory");
         var headers = [_]nanoui.http.Header{
-            .{ .name = "Authorization", .value = auth },
-            .{ .name = "Content-Type", .value = "application/json" },
-            .{ .name = first_header, .value = "1" },
+            .{ .name = protocol.authorization_header, .value = auth },
+            .{ .name = protocol.content_type_header, .value = protocol.content_type },
+            .{ .name = protocol.first_header, .value = protocol.first_value },
         };
         const first = a.firstHere();
         a.inflight = .{ .first = first, .sent_at = sent.at };
         a.send(a, .{
             .url = url,
-            .method = "PUT",
+            .method = protocol.method_put,
             .headers = headers[0..if (first) 3 else 2],
             .body = body,
-            .timeout = 15,
+            .timeout = timeout,
         });
     }
 
@@ -213,9 +220,9 @@ pub const Account = struct {
             first,
         ) catch return a.fail("out of memory");
         a.hooks.apply(a.hooks.ctx, merged);
-        // best effort: unkept, the next sync is sent as a first one again.
-        a.kv.set(synced_key, a.cfg.url) catch {};
-        a.state = .{ .synced = now() };
+        // Unkept, the next sync is sent as a first one again.
+        prefs.keepText(a.kv, .account_synced, a.cfg.url);
+        a.state = .{ .synced = clock.now() };
         a.hooks.changed(a.hooks.ctx);
         if (!settings.same(merged, theirs)) a.changed();
         if (a.dirty) {
@@ -232,7 +239,6 @@ fn baseUrl(url: []const u8) ?[]const u8 {
     return std.mem.trimEnd(u8, url, "/");
 }
 
-/// The same server whatever the trailing slash.
 fn sameServer(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, std.mem.trimEnd(u8, a, "/"), std.mem.trimEnd(u8, b, "/"));
 }
@@ -251,25 +257,6 @@ fn tokenOf(text: []const u8) ?[]const u8 {
     return t;
 }
 
-fn ago(buf: []u8, secs: i64) []const u8 {
-    const s = @max(secs, 0);
-    return (if (s < 60)
-        std.fmt.bufPrint(buf, "just now", .{})
-    else if (s < 3600)
-        std.fmt.bufPrint(buf, "{d} min ago", .{@divFloor(s, 60)})
-    else if (s < 86400)
-        std.fmt.bufPrint(buf, "{d} h ago", .{@divFloor(s, 3600)})
-    else
-        std.fmt.bufPrint(buf, "{d} d ago", .{@divFloor(s, 86400)})) catch "";
-}
-
-extern "c" fn time(t: ?*i64) i64;
-
-/// Unix seconds.
-pub fn now() i64 {
-    return time(null);
-}
-
 test "the server's address and the token file's token" {
     try std.testing.expectEqualStrings(
         "http://100.64.0.3:8890",
@@ -285,11 +272,6 @@ test "the server's address and the token file's token" {
 }
 
 test "the status line says when it last synced" {
-    var buf: [32]u8 = undefined;
-    try std.testing.expectEqualStrings("just now", ago(&buf, 5));
-    try std.testing.expectEqualStrings("3 min ago", ago(&buf, 190));
-    try std.testing.expectEqualStrings("2 h ago", ago(&buf, 7300));
-    try std.testing.expectEqualStrings("2 d ago", ago(&buf, 2 * 86400 + 5));
     const off: Account = .{
         .gpa = std.testing.allocator,
         .io = std.testing.io,
@@ -298,7 +280,7 @@ test "the status line says when it last synced" {
         .cfg = .{},
     };
     var line: [160]u8 = undefined;
-    try std.testing.expectEqualStrings(off_text, off.status(&line));
+    try std.testing.expect(off.status(&line) == null);
     var bad = off;
     bad.cfg = .{ .url = "http://h:1" };
     var reason: Reason = .{};
@@ -306,10 +288,10 @@ test "the status line says when it last synced" {
     reason.len = (std.fmt.bufPrint(&reason.buf, why, .{}) catch unreachable).len;
     bad.state = .{ .failed = reason };
     const said = "Sync: error the server rejected the token";
-    try std.testing.expectEqualStrings(said, bad.status(&line));
+    try std.testing.expectEqualStrings(said, bad.status(&line).?);
     var good = bad;
-    good.state = .{ .synced = now() - 400 };
-    try std.testing.expectEqualStrings("Sync: h:1, last synced 6 min ago", good.status(&line));
+    good.state = .{ .synced = clock.now() - 400 };
+    try std.testing.expectEqualStrings("Sync: h:1, last synced 6 min ago", good.status(&line).?);
 }
 
 /// An account whose requests are only counted: tests answer them.
@@ -346,7 +328,6 @@ const TestSync = struct {
         const t: *TestSync = @fieldParentPtr("acc", a);
         t.sends += 1;
     }
-    /// The server agreeing with this machine.
     fn agree(t: *TestSync) !void {
         const body = try settings.encode(std.testing.allocator, t.here);
         defer std.testing.allocator.free(body);
@@ -360,7 +341,6 @@ test "a failed sync says why and is not retried, even if asked again meanwhile" 
     t.init();
     t.acc.sync();
     try std.testing.expectEqual(@as(u32, 1), t.sends);
-    // Asked again while it is out: not sent now.
     t.acc.sync();
     try std.testing.expectEqual(@as(u32, 1), t.sends);
     try std.testing.expect(t.acc.dirty);
@@ -368,7 +348,8 @@ test "a failed sync says why and is not retried, even if asked again meanwhile" 
     try std.testing.expectEqual(@as(u32, 1), t.sends);
     try std.testing.expect(t.acc.inflight == null and !t.acc.dirty);
     var line: [160]u8 = undefined;
-    try std.testing.expectEqualStrings("Sync: error the server answered 500", t.acc.status(&line));
+    const said = "Sync: error the server answered 500";
+    try std.testing.expectEqualStrings(said, t.acc.status(&line).?);
 }
 
 test "a change made while a sync is out is sent once that one succeeds" {
@@ -382,7 +363,6 @@ test "a change made while a sync is out is sent once that one succeeds" {
     try std.testing.expectEqual(@as(u32, 1), t.sends);
     try t.agree();
     try std.testing.expect(t.acc.state == .synced);
-    // Sent again, once.
     try std.testing.expectEqual(@as(u32, 2), t.sends);
     try std.testing.expect(t.acc.inflight != null and !t.acc.dirty);
     try t.agree();

@@ -2,7 +2,6 @@
   lib,
   stdenv,
   callPackage,
-  zig_0_17,
   wrapGAppsHook3,
   patchelf,
   gtk3,
@@ -25,12 +24,13 @@ in
     inherit (source) version src;
 
     nativeBuildInputs =
-      [zig_0_17.hook]
+      [source.zig.hook]
       ++ lib.optionals stdenv.hostPlatform.isLinux [wrapGAppsHook3 patchelf];
     buildInputs = lib.optionals stdenv.hostPlatform.isLinux dlopened;
 
-    zigBuildFlags = ["-Dnix=true" "-Dversion=${source.version}"];
-    zigCheckFlags = ["-Dnix=true"];
+    # Nix's sandbox has no macOS SDK for the Mac's release tools' frameworks.
+    zigBuildFlags = ["-Dnix=true" "-Dmac-tools=false"];
+    zigCheckFlags = ["-Dnix=true" "-Dmac-tools=false"];
     doCheck = true;
 
     postConfigure = source.seedZigDeps;

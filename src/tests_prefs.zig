@@ -4,11 +4,17 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const pipeline = @import("pipeline.zig");
+const Nanolight = @import("nanolight.zig").Nanolight;
+const chrome = @import("chrome.zig");
+const Theme = @import("palette.zig").Theme;
 const settings_view = @import("settings_view.zig");
 const support = @import("test_support.zig");
 const Rig = support.Rig;
+const test_apps = @import("test_apps.zig");
 const suggest = @import("suggest.zig");
-const mac = @import("builtin").os.tag == .macos;
+const platform = @import("platform.zig");
+const keys = @import("keys.zig");
 const placeholder = "Search apps, do math, search the web…";
 
 /// Where the field's placeholder is in the first frame after the panel
@@ -18,9 +24,8 @@ fn firstAndSettled(fades: bool) ![2]ui.Rect {
     rig.init(std.testing.allocator);
     defer rig.deinit();
     const t = &rig.t;
-    rig.s.window_fades = fades;
-    rig.s.margin = view.shadow_margin;
-    try rig.mount(.{ .width = view.width + 2 * view.shadow_margin, .settle = false });
+    rig.s.fit = .{ .margin = chrome.shadow_margin, .window_fades = fades };
+    try rig.mount(.{ .width = chrome.width + 2 * chrome.shadow_margin, .settle = false });
     t.frame();
     const first = t.findText(placeholder) orelse return error.NoField;
     t.settle(1);
@@ -39,7 +44,7 @@ test "on the Mac the panel's first frame is where it settles (issue #9)" {
     try std.testing.expect(own[0].y < own[1].y);
 }
 
-fn findRow(t: *ui.Tester, s: *view.Nanolight, words: []const u8) void {
+fn findRow(t: *ui.Tester, s: *Nanolight, words: []const u8) void {
     support.retype(t, words);
     while (!support.onFirstQuicklink(s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
 }
@@ -62,10 +67,10 @@ test "searches can open in the browser, ⌘↩ showing them in the panel (issue 
         "https://www.google.com/search?q=pizza",
         web.probe.opened[0..web.probe.opened_len],
     );
-    try std.testing.expect(web.probe.hidden and web.page_len == null and !s.previewing);
+    try std.testing.expect(web.probe.hidden and web.page_len == null and s.screen != .preview);
     // ⌘↩: the page in the panel, which stays.
     web.probe = .{};
-    s.reveal();
+    _ = s.show(0);
     t.settle(1);
     findRow(t, s, "pasta");
     try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
@@ -73,11 +78,12 @@ test "searches can open in the browser, ⌘↩ showing them in the panel (issue 
         "https://www.google.com/search?q=pasta",
         web.page[0..web.page_len.?],
     );
-    try std.testing.expect(!web.probe.hidden and web.probe.opened_len == 0 and s.previewing);
+    try std.testing.expect(!web.probe.hidden and web.probe.opened_len == 0);
+    try std.testing.expect(s.screen == .preview);
 }
 
 test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" {
-    if (!mac) return error.SkipZigTest;
+    if (!platform.tray or !platform.preview) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var prefs: support.Prefs = .{};
     prefs.init();
@@ -90,23 +96,23 @@ test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" 
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try t.clickText("Show in Menu Bar");
     t.settle(1);
-    try std.testing.expect(!prefs.menu_bar_on);
+    try std.testing.expect(!prefs.on.get(.menu_bar));
     try t.clickText("Open Searches in Browser");
     t.settle(1);
-    try std.testing.expect(s.searches_out and prefs.searches_out.?);
+    try std.testing.expect(s.searches_out and prefs.on.get(.browser));
     // Twice more each: back as they were.
     try t.clickText("Show in Menu Bar");
     try t.clickText("Open Searches in Browser");
     t.settle(1);
-    try std.testing.expect(prefs.menu_bar_on and !s.searches_out and !prefs.searches_out.?);
+    try std.testing.expect(prefs.on.get(.menu_bar) and !s.searches_out and !prefs.on.get(.browser));
     // The rows fit: the last one is inside Settings, Settings in the window.
     const quit = t.findText("Quit Nanolight").?;
-    try std.testing.expect(quit.y + quit.h <= settings_view.height);
-    try std.testing.expect(settings_view.height <= view.max_height);
+    try std.testing.expect(quit.y + quit.h <= settings_view.height(s.hasClipboard()));
+    try std.testing.expect(view.height(s) <= chrome.max_height);
 }
 
 test "Settings' Open at Login flips what the system says, not a copy" {
-    if (@import("build_options").nix_managed) return error.SkipZigTest;
+    if (!platform.login_ui) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var prefs: support.Prefs = .{};
     prefs.init();
@@ -117,18 +123,18 @@ test "Settings' Open at Login flips what the system says, not a copy" {
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try t.clickText("Open at Login");
     t.settle(1);
-    try std.testing.expect(prefs.login_on);
+    try std.testing.expect(prefs.on.get(.login));
     // Turned off elsewhere (System Settings) while Settings is open: the
     // next click turns it on again, from what the system says.
-    prefs.login_on = false;
+    prefs.on.set(.login, false);
     t.settle(1);
     try t.clickText("Open at Login");
     t.settle(1);
-    try std.testing.expect(prefs.login_on);
+    try std.testing.expect(prefs.on.get(.login));
 }
 
 test "recording a key: idle, recording, refused, and never without a recorder" {
-    if (!mac) return error.SkipZigTest;
+    if (!keys.any_key) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var prefs: support.Prefs = .{};
     prefs.init();
@@ -136,36 +142,56 @@ test "recording a key: idle, recording, refused, and never without a recorder" {
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
+    const t = &rig.t;
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
-    const ui_s = &s.settings_ui;
-    const shortcut = @import("shortcut.zig");
-    // Return on the shortcut row: recording, the recorder with it.
-    ui_s.activateSelected(s);
-    try std.testing.expectEqual(settings_view.KeyInput.recording, ui_s.key_input);
-    try std.testing.expect(prefs.recording);
+    const waiting = "Type a shortcut";
+    const refused = "Add ⌘, ⌥ or ⌃";
+    const enter: []const ui.TextOp = &.{.{ .command = .insert_newline }};
+    // Return on the shortcut row, the first: recording, the recorder with it.
+    support.press(t, enter);
+    try std.testing.expect(t.hasText(waiting) and prefs.recording);
     // A letter alone is refused; it still waits.
-    ui_s.took(s, shortcut.recorded(7, 0, 'x'));
-    try std.testing.expectEqual(settings_view.KeyInput.refused, ui_s.key_input);
-    try std.testing.expect(prefs.recording);
+    s.recorded(keys.recorded(7, 0, 'x'));
+    t.settle(1);
+    try std.testing.expect(t.hasText(refused) and prefs.recording);
     // ⌥X is taken: idle, the recorder stopped, the key applied.
-    ui_s.took(s, shortcut.recorded(7, 1 << 19, 'x'));
-    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    s.recorded(keys.recorded(7, keys.ns_opt, 'x'));
+    t.settle(1);
+    try std.testing.expect(!t.hasText(refused) and !t.hasText(waiting));
     try std.testing.expect(!prefs.recording);
-    try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = 1 << 11 }));
+    try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = keys.option }));
     // Esc while recording: idle, nothing applied.
     prefs.applied = null;
-    ui_s.activateSelected(s);
-    ui_s.took(s, shortcut.recorded(53, 0, 0));
-    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    support.press(t, enter);
+    try std.testing.expect(t.hasText(waiting));
+    s.recorded(keys.recorded(keys.escape, 0, 0));
+    t.settle(1);
+    try std.testing.expect(!t.hasText(waiting));
     try std.testing.expect(prefs.applied == null and !prefs.recording);
     // A key pressed while idle is no one's.
-    ui_s.took(s, shortcut.recorded(7, 1 << 19, 'x'));
+    s.recorded(keys.recorded(7, keys.ns_opt, 'x'));
     try std.testing.expect(prefs.applied == null);
     // The recorder could not start: not recording.
     prefs.can_record = false;
-    ui_s.activateSelected(s);
-    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    support.press(t, enter);
+    try std.testing.expect(!t.hasText(waiting) and !prefs.recording);
+}
+
+test "leaving Settings while recording a key stops the recorder" {
+    if (!platform.record) return error.SkipZigTest;
+    var prefs: support.Prefs = .{};
+    prefs.init();
+    var rig: Rig = undefined;
+    rig.init(std.testing.allocator);
+    defer rig.deinit();
+    const s = &rig.s;
+    try rig.mount(.{ .host = prefs.host(), .screen = .settings });
+    support.press(&rig.t, &.{.{ .command = .insert_newline }});
+    try std.testing.expect(prefs.recording);
+    // Another screen over it (Welcome… is one): the key is the panel's again.
+    s.open(.clipboard);
     try std.testing.expect(!prefs.recording);
+    try std.testing.expectEqual(settings_view.KeyInput.idle, s.settings_ui.key_input);
 }
 
 test "Settings' header picks the panel's theme, and keeps it" {
@@ -177,6 +203,7 @@ test "Settings' header picks the panel's theme, and keeps it" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
+    prefs.nl = s;
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try std.testing.expect(t.findText("System") != null);
     // ↑ from the first row: round to the header's swatches; → twice.
@@ -184,22 +211,22 @@ test "Settings' header picks the panel's theme, and keeps it" {
     _ = t.shortcut(.{ .key = ui.Shortcut.right });
     _ = t.shortcut(.{ .key = ui.Shortcut.right });
     t.settle(1);
-    try std.testing.expectEqual(view.Theme.forest, s.theme);
-    try std.testing.expectEqual(view.Theme.forest, prefs.theme.?);
+    try std.testing.expectEqual(Theme.forest, s.theme);
+    try std.testing.expectEqual(Theme.forest, prefs.tint);
     try std.testing.expect(t.findText("Forest") != null);
     // ← past the first: round to the last.
     _ = t.shortcut(.{ .key = ui.Shortcut.left });
     _ = t.shortcut(.{ .key = ui.Shortcut.left });
     _ = t.shortcut(.{ .key = ui.Shortcut.left });
     t.settle(1);
-    try std.testing.expectEqual(view.Theme.violet, prefs.theme.?);
+    try std.testing.expectEqual(Theme.violet, prefs.tint);
     // In the header, which the rows can't push out of sight.
     const name = t.findText("Violet").?;
-    try std.testing.expect(name.y + name.h <= view.header_h);
+    try std.testing.expect(name.y + name.h <= chrome.header_h);
 }
 
 test "System Settings' panes open from the panel, which stays in its window (#12)" {
-    if (!mac) return error.SkipZigTest;
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var web: support.Web = .{};
     var rig: Rig = undefined;
@@ -207,7 +234,8 @@ test "System Settings' panes open from the panel, which stays in its window (#12
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    try rig.ix.add("System Settings", "/System/Applications/System Settings.app");
+    const settings_app = "/System/Applications/System Settings.app";
+    try test_apps.add(rig.ix.sink(), "System Settings", settings_app);
     try rig.apps(&.{ "Sound A", "Sound B", "Sound C", "Sound D", "Sound E", "Sound F" });
     try rig.mount(.{ .host = web.host() });
     support.press(t, &.{.{ .insert = "login items" }});
@@ -221,14 +249,14 @@ test "System Settings' panes open from the panel, which stays in its window (#12
     try std.testing.expect(web.probe.hidden);
     // Every app row, a pane, and Google's completions: the tallest list
     // with four sections still fits.
-    s.reveal();
+    _ = s.show(0);
     support.retype(t, "sound");
     var four: @import("suggest.zig").List = .{};
     for ([_][]const u8{ "sound 1", "sound 2", "sound 3", "sound 4" }) |w| four.push(w);
-    s.answered("sound", &four);
+    pipeline.answered(s, "sound", &four);
     t.settle(1);
     try std.testing.expect(t.hasText("System Settings"));
-    try std.testing.expect(s.height() <= view.max_height);
+    try std.testing.expect(view.height(s) <= chrome.max_height);
 }
 
 test "the panel's height lands at once, and keeps Google's room between keys" {
@@ -240,42 +268,47 @@ test "the panel's height lands at once, and keeps Google's room between keys" {
     const s = &rig.s;
     const t = &rig.t;
     s.host = web.host();
-    s.host.?.resize = struct {
-        fn f(_: *anyopaque, _: f32) void {}
-    }.f;
+    // The heights the panel asks its window for.
+    const Asked = struct {
+        var h: f32 = 0;
+        fn f(_: *anyopaque, to: f32) void {
+            h = to;
+        }
+    };
+    s.host.resize = Asked.f;
     try rig.mount(.{ .dark = false, .settle = false });
     t.frame();
+    const empty = Asked.h;
     t.textOps(&.{.{ .insert = "liq" }});
     t.frame();
-    const bare = s.last_h;
+    const bare = Asked.h;
     // Google's rows: taller, in the one frame that lists them.
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
-    s.answered("liq", &said);
+    pipeline.answered(s, "liq", &said);
     t.frame();
-    const full = s.last_h;
+    const full = Asked.h;
     try std.testing.expect(full > bare);
     // A key none of them begins with clears them, and the panel keeps
     // their room.
     t.textOps(&.{.{ .insert = "x" }});
     t.frame();
-    try std.testing.expectEqual(@as(usize, 0), s.web.n);
-    try std.testing.expectEqual(full, s.last_h);
+    try std.testing.expect(!t.hasText("liquid glass"));
+    try std.testing.expectEqual(full, Asked.h);
     // An answer to older words is no answer to these.
-    s.unanswered("liq");
+    pipeline.answered(s, "liq", null);
     t.frame();
-    try std.testing.expectEqual(full, s.last_h);
+    try std.testing.expectEqual(full, Asked.h);
     // No answer is coming: the room goes, at once.
-    s.unanswered("liqx");
+    pipeline.answered(s, "liqx", null);
     t.frame();
-    try std.testing.expectEqual(bare, s.last_h);
+    try std.testing.expectEqual(bare, Asked.h);
     // Nothing is asked about an empty field, so nothing is kept for it.
-    s.answered("liqx", &said);
+    pipeline.answered(s, "liqx", &said);
     t.frame();
     t.textOps(&.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
     t.frame();
-    try std.testing.expectEqual(s.height(), s.last_h);
-    try std.testing.expectEqual(@as(f32, 0), s.held_h);
+    try std.testing.expectEqual(empty, Asked.h);
 }
 
 test "Google's answer landing after suggestions are turned off lists nothing" {
@@ -290,16 +323,16 @@ test "Google's answer landing after suggestions are turned off lists nothing" {
     t.frame();
     t.textOps(&.{.{ .insert = "liq" }});
     t.frame();
+    const bare = view.height(s);
     // Asked while on; turned off (the menu, Settings or sync) before it lands.
-    s.suggest_on = false;
-    s.built = 1;
+    s.turn(.suggest, false);
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
-    s.answered("liq", &said);
+    pipeline.answered(s, "liq", &said);
     t.settle(1);
-    try std.testing.expectEqual(@as(usize, 0), s.web.n);
-    try std.testing.expect(!t.hasText("liquid glass"));
-    try std.testing.expectEqual(@as(f32, 0), s.held_h);
+    try std.testing.expect(!t.hasText("liquid") and !t.hasText("liquid glass"));
+    // No room kept for them.
+    try std.testing.expectEqual(bare, view.height(s));
     // Nor is it kept for when they come back on.
     var cached: suggest.List = .{};
     try std.testing.expect(!s.cache.lookup("liq", &cached));

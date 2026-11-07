@@ -1,79 +1,25 @@
-//! Clipboard history on X11, over an Xlib connection of its own (libX11,
-//! libXfixes and libXtst, opened with dlopen) whose socket nanoui's loop
+//! Clipboard history on X11, over an Xlib connection of its own (x11.zig,
+//! with libXfixes and libXtst, opened with dlopen) whose socket nanoui's loop
 //! watches. XFixes says when the CLIPBOARD's owner changes; the copy is read
 //! from the owner into a hidden window of ours (TARGETS first, then the types
-//! clipboard_linux.zig's plan picks; INCR transfers too). A paste makes that
+//! clipboard_offer.zig's plan picks; INCR transfers too). A paste makes that
 //! window the owner, answers other clients' requests for as long as it is
 //! (INCR for what one request cannot carry), and sends Ctrl+V with XTest once
 //! the panel has gone.
 const std = @import("std");
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
-const lx = @import("clipboard_linux.zig");
+const clipboard = @import("clipboard_types.zig");
+const offer = @import("clipboard_offer.zig");
+const dl = @import("dl.zig");
+const x11 = @import("x11.zig");
 
-const Display = opaque {};
-const Window = c_ulong;
-const Atom = c_ulong;
-const ErrorHandler = *const fn (*Display, *anyopaque) callconv(.c) c_int;
-
-const Xlib = struct {
-    XOpenDisplay: *const fn (?[*:0]const u8) callconv(.c) ?*Display,
-    XCloseDisplay: *const fn (*Display) callconv(.c) c_int,
-    XDefaultRootWindow: *const fn (*Display) callconv(.c) Window,
-    XConnectionNumber: *const fn (*Display) callconv(.c) c_int,
-    XPending: *const fn (*Display) callconv(.c) c_int,
-    XNextEvent: *const fn (*Display, *Event) callconv(.c) c_int,
-    XFlush: *const fn (*Display) callconv(.c) c_int,
-    XSync: *const fn (*Display, c_int) callconv(.c) c_int,
-    XSetErrorHandler: *const fn (?ErrorHandler) callconv(.c) ?ErrorHandler,
-    XCreateSimpleWindow: *const fn (
-        *Display,
-        Window,
-        c_int,
-        c_int,
-        c_uint,
-        c_uint,
-        c_uint,
-        c_ulong,
-        c_ulong,
-    ) callconv(.c) Window,
-    XDestroyWindow: *const fn (*Display, Window) callconv(.c) c_int,
-    XSelectInput: *const fn (*Display, Window, c_long) callconv(.c) c_int,
-    XInternAtom: *const fn (*Display, [*:0]const u8, c_int) callconv(.c) Atom,
-    XGetAtomName: *const fn (*Display, Atom) callconv(.c) ?[*:0]u8,
-    XConvertSelection: *const fn (*Display, Atom, Atom, Atom, Window, c_ulong) callconv(.c) c_int,
-    XSetSelectionOwner: *const fn (*Display, Atom, Window, c_ulong) callconv(.c) c_int,
-    XGetSelectionOwner: *const fn (*Display, Atom) callconv(.c) Window,
-    XGetWindowProperty: *const fn (
-        *Display,
-        Window,
-        Atom,
-        c_long,
-        c_long,
-        c_int,
-        Atom,
-        *Atom,
-        *c_int,
-        *c_ulong,
-        *c_ulong,
-        *?[*]u8,
-    ) callconv(.c) c_int,
-    XChangeProperty: *const fn (
-        *Display,
-        Window,
-        Atom,
-        Atom,
-        c_int,
-        c_int,
-        [*]const u8,
-        c_int,
-    ) callconv(.c) c_int,
-    XDeleteProperty: *const fn (*Display, Window, Atom) callconv(.c) c_int,
-    XSendEvent: *const fn (*Display, Window, c_int, c_long, *Event) callconv(.c) c_int,
-    XKeysymToKeycode: *const fn (*Display, c_ulong) callconv(.c) u8,
-    XMaxRequestSize: *const fn (*Display) callconv(.c) c_long,
-    XFree: *const fn (?*anyopaque) callconv(.c) c_int,
-};
+const Display = x11.Display;
+const Window = x11.Window;
+const Atom = x11.Atom;
+const Event = x11.Event;
+const ErrorHandler = x11.ErrorHandler;
+const property_notify = x11.property_notify;
+const property_change_mask = x11.property_change_mask;
 
 const Xfixes = struct {
     XFixesQueryExtension: *const fn (*Display, *c_int, *c_int) callconv(.c) c_int,
@@ -85,8 +31,6 @@ const Xtst = struct {
     XTestFakeKeyEvent: *const fn (*Display, c_uint, c_int, c_ulong) callconv(.c) c_int,
 };
 
-/// XEvent: a union 24 longs long; `type` first.
-const Event = extern union { type: c_int, pad: [24]c_long };
 const SelectionEvent = extern struct {
     type: c_int,
     serial: c_ulong,
@@ -146,23 +90,19 @@ fn as(comptime T: type, ev: *const Event) *const T {
     return @ptrCast(ev);
 }
 
-const property_notify = 28;
 const selection_clear = 29;
 const selection_request = 30;
 const selection_notify = 31;
-const property_change_mask: c_long = 1 << 22;
 const property_new_value = 0;
 const property_delete = 1;
 const prop_mode_replace = 0;
-const xa_atom: Atom = 4;
-const xa_string: Atom = 31;
+const xa_atom = x11.xa_atom;
+const xa_string = x11.xa_string;
 const xk_control_l: c_ulong = 0xffe3;
 const xk_v: c_ulong = 0x76;
 const select_owner_mask: c_ulong = 1;
 /// A client that does not answer one request in this long is given up on.
 const step_ms = 2000;
-/// Time for the window that had the keys to take them back before Ctrl+V.
-const paste_delay_ms = 150;
 const max_names = 128;
 
 var x_failed = false;
@@ -174,7 +114,7 @@ fn onError(_: *Display, _: *anyopaque) callconv(.c) c_int {
 
 pub const X11 = struct {
     sink: ?clipboard.Sink = null,
-    xl: Xlib = undefined,
+    xl: x11.Lib = undefined,
     fx: Xfixes = undefined,
     xtst: ?Xtst = null,
     d: ?*Display = null,
@@ -185,13 +125,12 @@ pub const X11 = struct {
     targets_atom: Atom = 0,
     incr_atom: Atom = 0,
     prop_atom: Atom = 0,
+    own_atom: Atom = 0,
 
-    // The copy being read.
     phase: Phase = .idle,
-    /// Counts the steps of the read, so only the last one's timer counts.
-    tick: u32 = 0,
+    limit: offer.Timeout = .{},
     time: c_ulong = 0,
-    gather: lx.Gather = undefined,
+    gather: offer.Gather = undefined,
     want: Atom = 0,
     cap: usize = 0,
     names: std.ArrayList([]const u8) = .empty,
@@ -201,13 +140,16 @@ pub const X11 = struct {
     queued: ?struct { owner: Window, time: c_ulong } = null,
 
     // What Nanolight owns the clipboard with.
-    served: ?lx.Served = null,
-    served_atoms: [lx.max_served_mimes]Atom = undefined,
+    served: ?offer.Served = null,
+    /// Its formats, each with the atom it is asked for by.
+    offered: [offer.max_served_mimes]Offered = undefined,
     /// The most one ChangeProperty carries.
     chunk_max: usize = 0,
-    /// A transfer to a client in pieces, and its own timer's count.
+    /// A transfer to a client in pieces, with its own time limit.
     out: ?Out = null,
-    out_tick: u32 = 0,
+    out_limit: offer.Timeout = .{},
+
+    const Offered = struct { atom: Atom, part: offer.Served.Part };
 
     /// What is sent to one requestor, in INCR pieces; its own copy of the bytes.
     const Out = struct { requestor: Window, prop: Atom, kind: Atom, data: []u8, at: usize = 0 };
@@ -219,8 +161,9 @@ pub const X11 = struct {
     const gpa = std.heap.c_allocator;
 
     pub fn open(x: *X11) error{ NoLibrary, NoConnection, NoXFixes }!void {
-        x.xl = lx.dlLoad(Xlib, "libX11.so.6") orelse return error.NoLibrary;
-        x.fx = lx.dlLoad(Xfixes, "libXfixes.so.3") orelse return error.NoLibrary;
+        x.xl = x11.load() orelse return error.NoLibrary;
+        const fixes = [_]dl.Lib{.{ .name = "libXfixes.so.3" }};
+        x.fx = dl.table(Xfixes, &fixes, "no X11 clipboard history") orelse return error.NoLibrary;
         const xl = x.xl;
         const d = xl.XOpenDisplay(null) orelse return error.NoConnection;
         x.d = d;
@@ -228,7 +171,7 @@ pub const X11 = struct {
         var err: c_int = 0;
         if (x.fx.XFixesQueryExtension(d, &base, &err) == 0) return error.NoXFixes;
         x.fixes_event = base;
-        if (lx.dlLoad(Xtst, "libXtst.so.6")) |t| {
+        if (dl.table(Xtst, &.{.{ .name = "libXtst.so.6" }}, "a paste only copies")) |t| {
             var a: c_int = 0;
             var b: c_int = 0;
             var c: c_int = 0;
@@ -241,6 +184,7 @@ pub const X11 = struct {
         x.targets_atom = x.atom("TARGETS");
         x.incr_atom = x.atom("INCR");
         x.prop_atom = x.atom("NANOLIGHT_CLIPBOARD");
+        x.own_atom = x.atom(offer.own_mime);
         x.chunk_max = @min(
             @as(usize, @intCast(@max(0, xl.XMaxRequestSize(d)))) *| 4 -| 100,
             256 * 1024,
@@ -286,8 +230,8 @@ pub const X11 = struct {
             _ = x.xl.XNextEvent(d, &ev);
             if (ev.type == x.fixes_event) {
                 const e = as(FixesEvent, &ev);
-                if (e.selection == x.clipboard_atom and e.owner != 0 and
-                    e.owner != x.win) x.begin(e.owner, e.selection_timestamp);
+                if (e.selection == x.clipboard_atom and e.owner != 0)
+                    x.begin(e.owner, e.selection_timestamp);
                 continue;
             }
             switch (ev.type) {
@@ -373,16 +317,12 @@ pub const X11 = struct {
     }
 
     fn step(x: *X11) void {
-        x.tick +%= 1;
-        lx.after(X11, x, x.tick, step_ms, expired);
-    }
-
-    fn expired(x: *X11, id: u32) void {
-        if (x.phase != .idle and id == x.tick) x.finish();
+        x.limit.restart(X11, "limit", step_ms, finish);
     }
 
     fn finish(x: *X11) void {
         x.phase = .idle;
+        x.limit.cancel();
         for (x.names.items) |n| gpa.free(n);
         x.names.clearRetainingCapacity();
         x.buf.clearRetainingCapacity();
@@ -460,19 +400,16 @@ pub const X11 = struct {
             };
         }
         x.phase = .data;
-        x.gather.plan = lx.plan(x.names.items);
+        x.gather.plan = offer.plan(x.names.items);
         if (x.gather.plan.own) return x.finish();
-        const r = x.gather.first() orelse return x.finish();
+        const r = x.gather.next() orelse return x.finish();
         x.fetch(r);
     }
 
-    fn fetch(x: *X11, r: lx.Request) void {
-        var name: [128:0]u8 = undefined;
-        const n = @min(r.mime.len, name.len);
-        @memcpy(name[0..n], r.mime[0..n]);
-        name[n] = 0;
+    fn fetch(x: *X11, r: offer.Request) void {
+        var name: [offer.max_mime_name + 1]u8 = undefined;
         x.phase = .data;
-        x.ask(x.atom(&name), r.cap);
+        x.ask(x.atom(offer.mimeZ(&name, r.mime).ptr), r.cap);
     }
 
     /// A read gave `bytes` (null: it failed); on to the next or done.
@@ -509,15 +446,12 @@ pub const X11 = struct {
         x.served = null;
     }
 
-    fn serve(x: *X11, c: clipboard.Content) bool {
-        var s = lx.Served.init(gpa, c) catch return false;
-        const mimes = s.mimes();
-        for (mimes, 0..) |m, i| {
-            var name: [lx.max_mime_name + 1:0]u8 = undefined;
-            std.debug.assert(m.len < name.len);
-            @memcpy(name[0..m.len], m);
-            name[m.len] = 0;
-            x.served_atoms[i] = x.atom(&name);
+    /// Owns the clipboard with `c`, offered in its formats and as Nanolight's own.
+    pub fn copy(x: *X11, c: clipboard.Content) bool {
+        var s = offer.Served.init(gpa, c) catch return false;
+        for (s.formats(), x.offered[0..s.formats().len]) |f, *o| {
+            var name: [offer.max_mime_name + 1]u8 = undefined;
+            o.* = .{ .atom = x.atom(offer.mimeZ(&name, f.mime).ptr), .part = f.part };
         }
         x.release();
         x.served = s;
@@ -551,20 +485,21 @@ pub const X11 = struct {
 
     fn reply(x: *X11, e: *const SelectionRequest, prop: Atom) bool {
         const s = &(x.served orelse return false);
-        const mimes = s.mimes();
+        const offered = x.offered[0..s.formats().len];
         var data: []const u8 = undefined;
         var kind: Atom = e.target;
         var format: c_int = 8;
-        var atoms: [lx.max_served_mimes + 1]c_ulong = undefined;
+        var atoms: [offer.max_served_mimes + 2]c_ulong = undefined;
         if (e.target == x.targets_atom) {
             atoms[0] = x.targets_atom;
-            for (mimes, 0..) |_, i| atoms[i + 1] = x.served_atoms[i];
-            data = std.mem.sliceAsBytes(atoms[0 .. mimes.len + 1]);
+            atoms[1] = x.own_atom;
+            for (offered, atoms[2..][0..offered.len]) |o, *a| a.* = o.atom;
+            data = std.mem.sliceAsBytes(atoms[0 .. offered.len + 2]);
             kind = xa_atom;
             format = 32;
         } else {
-            data = for (mimes, 0..) |m, i| {
-                if (x.served_atoms[i] == e.target) break s.bytes(m) orelse return false;
+            data = for (offered) |o| {
+                if (o.atom == e.target) break s.part(o.part);
             } else return false;
             if (data.len > x.chunk_max) return x.startOut(e.requestor, prop, kind, data);
         }
@@ -606,22 +541,14 @@ pub const X11 = struct {
             return false;
         }
         x.out = .{ .requestor = requestor, .prop = prop, .kind = kind, .data = dup };
-        x.stepOut();
+        x.out_limit.restart(X11, "out_limit", step_ms, endOut);
         return true;
-    }
-
-    fn stepOut(x: *X11) void {
-        x.out_tick +%= 1;
-        lx.after(X11, x, x.out_tick, step_ms, expiredOut);
-    }
-
-    fn expiredOut(x: *X11, id: u32) void {
-        if (x.out != null and id == x.out_tick) x.endOut();
     }
 
     fn endOut(x: *X11) void {
         const o = x.out orelse return;
         x.out = null;
+        x.out_limit.cancel();
         const before = x.trap();
         _ = x.xl.XSelectInput(x.d.?, o.requestor, 0);
         _ = x.untrap(before);
@@ -647,20 +574,16 @@ pub const X11 = struct {
         );
         const ok = x.untrap(before);
         o.at += n;
-        if (n == 0 or !ok) x.endOut() else x.stepOut();
+        if (n == 0 or !ok) x.endOut() else x.out_limit.restart(X11, "out_limit", step_ms, endOut);
     }
 
     // ----- paste -----
 
-    pub fn copy(x: *X11, c: clipboard.Content) bool {
-        return x.serve(c);
-    }
-
     pub fn paste(x: *X11, c: clipboard.Content, hide: clipboard.Hide) clipboard.PasteResult {
-        if (!x.serve(c)) return .failed;
+        if (!x.copy(c)) return .failed;
         if (x.xtst == null) return .copied_unsupported;
         hide.func(hide.ctx);
-        lx.after(X11, x, 0, paste_delay_ms, sendKeys);
+        offer.after(X11, x, 0, offer.paste_delay_ms, sendKeys);
         return .pasted;
     }
 

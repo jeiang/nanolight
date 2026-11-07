@@ -1,24 +1,73 @@
 //! How well a query matches a name, and which of its bytes matched (drawn
-//! brighter in the row). Case-insensitive, ASCII-folded, no allocation:
-//! it runs on every name at every keystroke, so it stays a few loops.
+//! brighter in the row).
+//! Case-insensitive (ASCII letters fold), no allocation: it runs on every
+//! name at every keystroke, so it stays a few loops. ASCII text is read a
+//! byte at a time, other text a codepoint at a time, by the same code.
 //!
 //! Tiers, best first: the whole name, its start, a word's start, the
 //! words' initials ("vsc" for Visual Studio Code), anywhere inside it,
 //! then the letters in order (a subsequence), worse the more they spread,
 //! and last, typos: a name or a word in it that begins like the query but
 //! for a letter or two swapped, wrong, missing or extra ("chorme" for
-//! Chrome, "calandar" for Calendar).
+//! Chrome, "calandar" for Calendar). Text that isn't all ASCII has the
+//! start, inside and in-order tiers only.
 const std = @import("std");
-const text = @import("text.zig");
 const assert = std.debug.assert;
 
+const tier = struct {
+    const exact = 1000;
+    const start = 900;
+    const word = 800;
+    const initials = 750;
+    const inside = 600;
+    const in_order = 300;
+    const typo = 260;
+};
+/// A longer name, or a match further into it, lowers a tier by up to this.
+const max_slack = 60;
+/// Letters in order: one on a word's start or right after the last one
+/// scores more; a gap before one costs up to `max_gap`.
+const word_bonus = 12;
+const next_bonus = 8;
+const max_gap = 20;
+/// Each edit a typo needs costs this.
+const typo_cost = 70;
+/// A word for a thing (a pane's, a command's) matches a little lower than
+/// its name, and lights nothing in the name shown.
+const keyword_cost = 40;
+
+// The callers' offsets, set against the tiers above: retuning a tier
+// re-ranks what they lift or lower.
+/// Each time an app or script was opened lifts it this much, up to
+/// `max_launch_boost` (launchers.zig): a much-opened app can pass more
+/// than two tiers.
+pub const launch_boost = 25;
+pub const max_launch_boost = 250;
+/// A match through an app's pinyin scores one typo edit under its name's
+/// (apps.zig).
+pub const pinyin_cost = typo_cost;
+/// The app a thing was copied from matches this much under the thing
+/// (clipboard.zig).
+pub const source_cost = 100;
+
+/// Below this a match is letters in order or a typo: too loose for a
+/// short name that would list under nearly every query (a command, a pane).
+pub const min_loose = 500;
+/// `min_loose` for a long text: slack and the place a match starts lower
+/// one inside it by up to 2 * `max_slack`, still kept, with some to spare.
+pub const min_loose_long = tier.inside - 2 * max_slack - 30;
+/// A path typed out in full: above every tier.
+pub const exact_path = 2000;
+
 /// Up to this many matched bytes are kept for highlighting.
-pub const max_hits = 32;
+const max_hits = 32;
+/// Hits are bytes: only a name's first 256 can be lit.
+const Hit = u8;
 
 pub const Match = struct {
     score: i32,
     /// The bytes of the name the query matched, in order.
-    hits: [max_hits]u8 = undefined,
+    hits: [max_hits]Hit = undefined,
     n: u8 = 0,
 
     pub fn matched(m: *const Match) []const u8 {
@@ -31,173 +80,231 @@ pub const Match = struct {
         return m;
     }
 
+    /// Past `max_hits`, or a byte past what a `Hit` holds, is not lit.
     fn add(m: *Match, i: usize) void {
-        if (m.n < max_hits and i < 256) {
+        if (m.n < max_hits and i <= std.math.maxInt(Hit)) {
             m.hits[m.n] = @intCast(i);
             m.n += 1;
         }
     }
 };
 
-fn lower(ch: u8) u8 {
-    return std.ascii.toLower(ch);
+fn capped(n: usize, max: usize) i32 {
+    return @intCast(@min(n, max));
+}
+
+/// What a long name costs a loose tier (in order, typos).
+fn spread(len: usize) i32 {
+    return @intCast(@min(len, max_slack) / 4);
+}
+
+// ----- characters -----
+
+/// How text is read: a byte at a time when all of it is ASCII (the usual
+/// case, and the fast one), else a codepoint at a time.
+const Mode = enum { ascii, utf8 };
+
+const Char = struct { cp: u21, len: usize };
+
+fn hasNonAscii(s: []const u8) bool {
+    for (s) |b| if (b >= 0x80) return true;
+    return false;
+}
+
+fn modeOf(a: []const u8, b: []const u8) Mode {
+    return if (hasNonAscii(a) or hasNonAscii(b)) .utf8 else .ascii;
+}
+
+/// The character at byte `i < s.len`, or null where `s` is not UTF-8.
+inline fn charAt(comptime mode: Mode, s: []const u8, i: usize) ?Char {
+    return switch (mode) {
+        .ascii => .{ .cp = s[i], .len = 1 },
+        .utf8 => decodeAt(s, i),
+    };
+}
+
+fn decodeAt(s: []const u8, i: usize) ?Char {
+    if (i >= s.len) return null;
+    const len = std.unicode.utf8ByteSequenceLength(s[i]) catch return null;
+    if (i + len > s.len) return null;
+    const cp = std.unicode.utf8Decode(s[i..][0..len]) catch return null;
+    return .{ .cp = cp, .len = len };
+}
+
+/// Where the character before byte `i > 0` starts.
+fn charBefore(comptime mode: Mode, s: []const u8, i: usize) usize {
+    var p = i - 1;
+    if (mode == .ascii) return p;
+    while (p > 0 and s[p] & 0xC0 == 0x80) p -= 1;
+    return p;
+}
+
+/// How far a search moves on from byte `i`.
+fn step(comptime mode: Mode, s: []const u8, i: usize) usize {
+    return switch (mode) {
+        .ascii => 1,
+        .utf8 => std.unicode.utf8ByteSequenceLength(s[i]) catch 1,
+    };
+}
+
+fn fold(cp: u21) u21 {
+    if (cp >= 'A' and cp <= 'Z') return cp + ('a' - 'A');
+    return cp;
+}
+
+fn isCjk(cp: u21) bool {
+    return (cp >= 0x3400 and cp <= 0x9FFF) or (cp >= 0xF900 and cp <= 0xFAFF);
+}
+
+/// Whether `s` has a CJK ideograph (a name a pinyin key can spell).
+pub fn hasCjk(s: []const u8) bool {
+    var i: usize = 0;
+    while (decodeAt(s, i)) |d| : (i += d.len) if (isCjk(d.cp)) return true;
+    return false;
+}
+
+fn isSeparator(cp: u21) bool {
+    return cp == ' ' or cp == '-' or cp == '_' or cp == '.' or cp == '/' or cp == '(';
 }
 
 /// Whether byte `i` of `name` starts a word: the name's start, after a
-/// space or punctuation, or a capital after a lowercase letter (FaceTime).
-pub fn wordStart(name: []const u8, i: usize) bool {
+/// space or punctuation, a capital after a lowercase letter (FaceTime),
+/// or a CJK ideograph.
+fn wordStart(comptime mode: Mode, name: []const u8, i: usize) bool {
     if (i == 0) return true;
-    const prev = name[i - 1];
-    const ch = name[i];
-    if (prev == ' ' or prev == '-' or prev == '_' or prev == '.' or prev == '/' or
-        prev == '(') return ch != ' ';
-    return std.ascii.isUpper(ch) and std.ascii.isLower(prev);
+    const ch = charAt(mode, name, i) orelse return false;
+    const prev = charAt(mode, name, charBefore(mode, name, i)) orelse return true;
+    if (isSeparator(prev.cp)) return ch.cp != ' ';
+    if (ch.cp < 0x80 and prev.cp < 0x80) return std.ascii.isUpper(@intCast(ch.cp)) and
+        std.ascii.isLower(@intCast(prev.cp));
+    return isCjk(ch.cp);
 }
 
-fn startsWithFold(hay: []const u8, needle: []const u8) bool {
+fn startsWithIn(comptime mode: Mode, hay: []const u8, needle: []const u8) bool {
+    // Folding keeps a character's length, so a longer needle never fits.
     if (needle.len > hay.len) return false;
-    for (needle, 0..) |ch, i| if (lower(hay[i]) != lower(ch)) return false;
+    var i: usize = 0;
+    while (i < needle.len) {
+        const h = charAt(mode, hay, i) orelse return false;
+        const n = charAt(mode, needle, i) orelse return false;
+        if (fold(h.cp) != fold(n.cp)) return false;
+        i += n.len;
+    }
     return true;
 }
 
-fn indexOfFold(hay: []const u8, needle: []const u8, from: usize) ?usize {
+/// Case-insensitive prefix on whole characters (ASCII letters folded).
+pub fn startsWithFold(hay: []const u8, needle: []const u8) bool {
+    return switch (modeOf(hay, needle)) {
+        inline else => |mode| startsWithIn(mode, hay, needle),
+    };
+}
+
+fn indexOfIn(comptime mode: Mode, hay: []const u8, needle: []const u8, from: usize) ?usize {
     if (needle.len == 0 or needle.len > hay.len) return null;
     var i = from;
-    while (i + needle.len <= hay.len) : (i += 1) if (startsWithFold(hay[i..], needle)) return i;
+    while (i + needle.len <= hay.len) : (i += step(mode, hay, i)) {
+        if (startsWithIn(mode, hay[i..], needle)) return i;
+    }
     return null;
 }
+
+// ----- scores -----
 
 /// The match of `query` in `name`, or null when its letters aren't all
 /// there in order. Spaces in the query are ignored past its first word.
 pub fn score(query_in: []const u8, name: []const u8) ?Match {
     const query = std.mem.trim(u8, query_in, " ");
     if (query.len == 0 or name.len == 0) return null;
-    if (text.hasNonAscii(query) or text.hasNonAscii(name)) return scoreUnicode(query, name);
-    return scoreAscii(query, name);
+    return switch (modeOf(query, name)) {
+        inline else => |mode| scoreIn(mode, query, name),
+    };
 }
 
-fn scoreAscii(query: []const u8, name: []const u8) ?Match {
-    const slack: i32 = @intCast(@min(name.len -| query.len, 60));
-    if (query.len == name.len and startsWithFold(name, query)) return .run(1000, 0, name.len);
-    if (startsWithFold(name, query)) return .run(900 - slack, 0, query.len);
-    // A word's start: "code" in Visual Studio Code.
-    var at: usize = 0;
-    while (indexOfFold(name, query, at)) |i| : (at = i + 1) {
-        if (wordStart(name, i)) return .run(
-            800 - slack - @as(i32, @intCast(@min(i, 60))),
-            i,
-            query.len,
-        );
+/// `score` for text known to be ASCII (a pinyin key): the query as it is,
+/// read a byte at a time.
+pub fn scoreAscii(query: []const u8, name: []const u8) ?Match {
+    return scoreIn(.ascii, query, name);
+}
+
+fn scoreIn(comptime mode: Mode, query: []const u8, name: []const u8) ?Match {
+    const slack = capped(name.len -| query.len, max_slack);
+    if (mode == .ascii and query.len == name.len and
+        startsWithIn(mode, name, query)) return .run(tier.exact, 0, name.len);
+    if (startsWithIn(mode, name, query)) return .run(tier.start - slack, 0, query.len);
+    if (mode == .ascii) {
+        // A word's start: "code" in Visual Studio Code.
+        var at: usize = 0;
+        while (indexOfIn(mode, name, query, at)) |i| : (at = i + 1) {
+            if (wordStart(mode, name, i)) return .run(
+                tier.word - slack - capped(i, max_slack),
+                i,
+                query.len,
+            );
+        }
+        if (initials(query, name)) |m| return m;
     }
-    if (initials(query, name)) |m| return m;
-    if (indexOfFold(name, query, 0)) |i| return .run(
-        600 - slack - @as(i32, @intCast(@min(i, 60))),
+    if (indexOfIn(mode, name, query, 0)) |i| return .run(
+        tier.inside - slack - capped(i, max_slack),
         i,
         query.len,
     );
-    return subsequence(query, name) orelse typo(query, name);
+    if (inOrder(mode, query, name)) |m| return m;
+    return if (mode == .ascii) typo(query, name) else null;
 }
 
-fn cpWordStart(name: []const u8, byte_i: usize) bool {
-    if (byte_i == 0) return true;
-    const ch = text.decodeAt(name, byte_i) orelse return false;
-    const ch_cp = ch.cp;
-    var pi = byte_i;
-    while (pi > 0) {
-        pi -= 1;
-        if ((name[pi] & 0xC0) != 0x80) break;
-    }
-    const prev = text.decodeAt(name, pi) orelse return true;
-    const prev_cp = prev.cp;
-    if (prev_cp == ' ' or prev_cp == '-' or prev_cp == '_' or prev_cp == '.' or prev_cp == '/' or
-        prev_cp == '(') return ch_cp != ' ';
-    if (ch_cp < 0x80 and prev_cp < 0x80) return std.ascii.isUpper(@intCast(ch_cp)) and
-        std.ascii.isLower(@intCast(prev_cp));
-    if (ch_cp >= 0x3400 and ch_cp <= 0x9FFF) return true;
-    return false;
-}
-
-fn scoreUnicode(query: []const u8, name: []const u8) ?Match {
-    const slack: i32 = @intCast(@min(name.len -| query.len, 60));
-    if (text.utf8StartsWithFold(name, query)) {
-        var m: Match = .{ .score = 900 - slack };
-        var ni: usize = 0;
-        var hi: usize = 0;
-        while (ni < query.len and hi < name.len) {
-            const nl = std.unicode.utf8ByteSequenceLength(query[ni]) catch break;
-            const hl = std.unicode.utf8ByteSequenceLength(name[hi]) catch break;
-            for (0..hl) |d| m.add(hi + d);
-            ni += nl;
-            hi += hl;
-        }
-        return m;
-    }
-    if (indexOfUnicode(name, query)) |i| {
-        var m: Match = .{ .score = 600 - slack - @as(i32, @intCast(@min(i, 60))) };
-        var ni: usize = 0;
-        var at = i;
-        while (ni < query.len and at < name.len) {
-            const nl = std.unicode.utf8ByteSequenceLength(query[ni]) catch break;
-            const hl = std.unicode.utf8ByteSequenceLength(name[at]) catch break;
-            for (0..hl) |d| m.add(at + d);
-            ni += nl;
-            at += hl;
-        }
-        return m;
-    }
-    return subsequenceUnicode(query, name);
-}
-
-fn indexOfUnicode(hay: []const u8, needle: []const u8) ?usize {
-    var i: usize = 0;
-    while (i < hay.len) {
-        if (text.utf8StartsWithFold(hay[i..], needle)) return i;
-        const l = std.unicode.utf8ByteSequenceLength(hay[i]) catch {
-            i += 1;
-            continue;
-        };
-        i += l;
-    }
-    return null;
-}
-
-fn subsequenceUnicode(query: []const u8, name: []const u8) ?Match {
-    var m: Match = .{ .score = 300 };
-    var last: ?usize = null;
+/// The letters in order anywhere; each one on a word's start or right
+/// after the last scores more, gaps score less.
+fn inOrder(comptime mode: Mode, query: []const u8, name: []const u8) ?Match {
+    const Found = struct { at: usize, len: usize };
+    var m: Match = .{ .score = tier.in_order };
+    var last: ?Found = null;
     var qi: usize = 0;
-    var hi: usize = 0;
+    var ni: usize = 0;
     while (qi < query.len) {
         if (query[qi] == ' ') {
             qi += 1;
             continue;
         }
-        const qd = text.decodeAt(query, qi) orelse return null;
-        const qc = qd.cp;
-        var found: ?usize = null;
-        while (hi < name.len) {
-            const hd = text.decodeAt(name, hi) orelse {
-                hi += 1;
+        const q = charAt(mode, query, qi) orelse return null;
+        const found: Found = while (ni < name.len) {
+            const c = charAt(mode, name, ni) orelse {
+                ni += 1;
                 continue;
             };
-            if (text.fold(hd.cp) == text.fold(qc)) {
-                found = hi;
-                hi += hd.len;
-                break;
-            }
-            hi += hd.len;
-        }
-        const at = found orelse return null;
-        if (cpWordStart(name, at)) m.score += 12;
+            ni += c.len;
+            if (fold(c.cp) == fold(q.cp)) break .{ .at = ni - c.len, .len = c.len };
+        } else return null;
+        if (wordStart(mode, name, found.at)) m.score += word_bonus;
         if (last) |l| {
-            const step_len = if (text.decodeAt(name, l)) |d| d.len else 1;
-            if (at == l + step_len) m.score += 8 else m.score -= @intCast(@min(at - l, 20));
-        } else m.score -= @intCast(@min(at, 20));
-        const at_len = if (text.decodeAt(name, at)) |d| d.len else 1;
-        for (0..at_len) |d| m.add(at + d);
-        last = at;
-        qi += qd.len;
+            if (found.at == l.at + l.len)
+                m.score += next_bonus
+            else
+                m.score -= capped(found.at - l.at, max_gap);
+        } else m.score -= capped(found.at, max_gap);
+        for (found.at..found.at + found.len) |i| m.add(i);
+        last = found;
+        qi += q.len;
     }
-    m.score -= @intCast(@min(name.len, 60) / 4);
+    m.score -= spread(name.len);
+    return m;
+}
+
+/// The query as the words' initials, in order, every one of them.
+fn initials(query: []const u8, name: []const u8) ?Match {
+    if (query.len < 2) return null;
+    var m: Match = .{ .score = 0 };
+    var q: usize = 0;
+    for (name, 0..) |ch, i| {
+        if (q == query.len) break;
+        if (!wordStart(.ascii, name, i)) continue;
+        if (fold(ch) == fold(query[q])) {
+            m.add(i);
+            q += 1;
+        }
+    }
+    if (q < query.len) return null;
+    m.score = tier.initials - capped(name.len, max_slack);
     return m;
 }
 
@@ -207,7 +314,9 @@ fn allowed(len: usize) u8 {
     return if (len < 4) 0 else if (len < 7) 1 else 2;
 }
 
+/// A longer query is not guessed at.
 const max_q = 32;
+/// Only this much of a word is lined up with the query.
 const max_n = 64;
 /// Edit distances between the query's first i bytes and the name's first
 /// j bytes from a word's start (`dist`).
@@ -222,7 +331,7 @@ fn typo(query: []const u8, name: []const u8) ?Match {
     var t: Table = undefined;
     var best: ?struct { errs: u8, start: usize, end: usize } = null;
     for (0..name.len) |s| {
-        if (!wordStart(name, s)) continue;
+        if (!wordStart(.ascii, name, s)) continue;
         const word = name[s..@min(name.len, s + max_n)];
         const r = dist(&t, query, word);
         if (r.errs <= most and (best == null or
@@ -232,21 +341,22 @@ fn typo(query: []const u8, name: []const u8) ?Match {
     // The bytes that line up with the query's, for the row's highlight.
     const word = name[b.start..@min(name.len, b.start + max_n)];
     _ = dist(&t, query, word);
-    var back: [max_hits]u8 = undefined;
+    var back: [max_hits]Hit = undefined;
     var n: usize = 0;
     var i = query.len;
     var j = b.end;
+    const last_hit = std.math.maxInt(Hit);
     while (i > 0 and j > 0) {
         const here = t[i][j];
-        if (lower(query[i - 1]) == lower(word[j - 1]) and here == t[i - 1][j - 1]) {
-            if (n < back.len) back[n] = @intCast(@min(b.start + j - 1, 255));
+        if (fold(query[i - 1]) == fold(word[j - 1]) and here == t[i - 1][j - 1]) {
+            if (n < back.len) back[n] = @intCast(@min(b.start + j - 1, last_hit));
             n += 1;
             i -= 1;
             j -= 1;
         } else if (i > 1 and j > 1 and swapped(query, word, i, j) and here == t[i - 2][j - 2] + 1) {
             // Both letters are there, the wrong way round: both lit.
             for ([_]usize{ 1, 2 }) |d| {
-                if (n < back.len) back[n] = @intCast(@min(b.start + j - d, 255));
+                if (n < back.len) back[n] = @intCast(@min(b.start + j - d, last_hit));
                 n += 1;
             }
             i -= 2;
@@ -259,10 +369,8 @@ fn typo(query: []const u8, name: []const u8) ?Match {
         } else j -= 1;
     }
     var m: Match = .{
-        .score = 260 - 70 * @as(i32, b.errs) - @as(
-            i32,
-            @intCast(@min(name.len, 60) / 4),
-        ) - @as(i32, @intCast(@min(b.start, 20))),
+        .score = tier.typo - typo_cost * @as(i32, b.errs) - spread(name.len) -
+            capped(b.start, max_gap),
     };
     var k = @min(n, back.len);
     while (k > 0) : (k -= 1) m.add(back[k - 1]);
@@ -270,7 +378,7 @@ fn typo(query: []const u8, name: []const u8) ?Match {
 }
 
 fn swapped(q: []const u8, w: []const u8, i: usize, j: usize) bool {
-    return lower(q[i - 1]) == lower(w[j - 2]) and lower(q[i - 2]) == lower(w[j - 1]);
+    return fold(q[i - 1]) == fold(w[j - 2]) and fold(q[i - 2]) == fold(w[j - 1]);
 }
 
 /// Fills `t` (optimal string alignment: insert, delete, change, swap
@@ -281,7 +389,7 @@ fn dist(t: *Table, q: []const u8, word: []const u8) struct { errs: u8, end: usiz
     for (1..q.len + 1) |i| {
         t[i][0] = @intCast(i);
         for (1..word.len + 1) |j| {
-            const same = lower(q[i - 1]) == lower(word[j - 1]);
+            const same = fold(q[i - 1]) == fold(word[j - 1]);
             var v = @min(t[i - 1][j] + 1, t[i][j - 1] + 1, t[i - 1][j - 1] + @intFromBool(!same));
             if (i > 1 and j > 1 and swapped(q, word, i, j)) v = @min(v, t[i - 2][j - 2] + 1);
             t[i][j] = v;
@@ -294,47 +402,6 @@ fn dist(t: *Table, q: []const u8, word: []const u8) struct { errs: u8, end: usiz
         end = j;
     };
     return .{ .errs = errs, .end = end };
-}
-
-/// The query as the words' initials, in order, every one of them.
-fn initials(query: []const u8, name: []const u8) ?Match {
-    if (query.len < 2) return null;
-    var m: Match = .{ .score = 0 };
-    var q: usize = 0;
-    for (name, 0..) |ch, i| {
-        if (q == query.len) break;
-        if (!wordStart(name, i)) continue;
-        if (lower(ch) == lower(query[q])) {
-            m.add(i);
-            q += 1;
-        }
-    }
-    if (q < query.len) return null;
-    m.score = 750 - @as(i32, @intCast(@min(name.len, 60)));
-    return m;
-}
-
-/// The letters in order anywhere; each one on a word's start or right
-/// after the last scores more, gaps score less.
-fn subsequence(query: []const u8, name: []const u8) ?Match {
-    var m: Match = .{ .score = 300 };
-    var last: ?usize = null;
-    var i: usize = 0;
-    for (query) |qc| {
-        if (qc == ' ') continue;
-        const found = while (i < name.len) : (i += 1) {
-            if (lower(name[i]) == lower(qc)) break i;
-        } else return null;
-        if (wordStart(name, found)) m.score += 12;
-        if (last) |l| {
-            if (found == l + 1) m.score += 8 else m.score -= @intCast(@min(found - l, 20));
-        } else m.score -= @intCast(@min(found, 20));
-        m.add(found);
-        last = found;
-        i = found + 1;
-    }
-    m.score -= @intCast(@min(name.len, 60) / 4);
-    return m;
 }
 
 /// A ranked candidate: which one (an index the caller keeps) and its score.
@@ -370,10 +437,6 @@ pub const Top = struct {
     }
 };
 
-/// A word for a thing (a pane's, a command's) matches a little lower than
-/// its name, and lights nothing in the name shown.
-const keyword_cost = 40;
-
 /// The match of `query` in `name` or one of its `keywords`, null below
 /// `min` (letters in order and typos are too loose for these).
 pub fn scoreNamed(
@@ -391,31 +454,6 @@ pub fn scoreNamed(
         if (m.score >= min and (best == null or via.score > best.?.score)) best = via;
     };
     return best;
-}
-
-const apps = @import("apps.zig");
-const Index = apps.Index;
-
-/// A match through an app's pinyin scores this much under its name's.
-const pinyin_cost = 70;
-
-/// The best `out.len` apps for `query`, best first: by name or pinyin,
-/// lifted by how often each was opened.
-pub fn rankApps(query: []const u8, ix: *const Index, out: []Ranked) usize {
-    var top: Top = .init(out);
-    for (ix.apps.items, 0..) |app, i| {
-        var m = score(query, app.name);
-        if (app.pinyin.len > 0) if (scoreAscii(query, app.pinyin)) |mp| {
-            var via = mp;
-            via.score -= pinyin_cost;
-            via.n = 0;
-            if (m == null or via.score > m.?.score) m = via;
-        };
-        var scored = m orelse continue;
-        scored.score += @min(@as(i32, app.launches) * 25, 250);
-        top.offer(.{ .index = @intCast(i), .match = scored });
-    }
-    return top.n;
 }
 
 test "the tiers rank as they should" {
@@ -478,41 +516,6 @@ test "unicode display names match by prefix and subsequence" {
     try t.expect(score("wx", "微信") == null);
 }
 
-test "pinyin keys find CJK display names" {
-    const t = std.testing;
-    var ix = Index.init(t.allocator);
-    defer ix.deinit();
-    try ix.add("WeChat", "/Applications/WeChat.app");
-    const a = ix.arena.allocator();
-    ix.apps.items[0].name = try a.dupe(u8, "微信");
-    ix.apps.items[0].pinyin = try a.dupe(u8, "weixin");
-    var out: [1]Ranked = undefined;
-    try t.expectEqual(@as(usize, 1), rankApps("weixin", &ix, &out));
-    try t.expectEqual(@as(u32, 0), out[0].index);
-}
-
-test "rank keeps the best, best first, and opening often lifts a name" {
-    const t = std.testing;
-    var ix = Index.init(t.allocator);
-    defer ix.deinit();
-    for ([_][]const u8{ "Notes Helper", "Notes", "Numbers", "Keynote" }) |name| {
-        try ix.add(name, name);
-    }
-    var out: [3]Ranked = undefined;
-    try t.expectEqual(@as(usize, 3), rankApps("no", &ix, &out));
-    try t.expectEqual(@as(u32, 1), out[0].index);
-    try t.expectEqual(@as(u32, 3), out[2].index);
-    // The helper, opened once, climbs past Notes.
-    ix.apps.items[0].launches = 1;
-    try t.expectEqual(@as(usize, 3), rankApps("no", &ix, &out));
-    try t.expectEqual(@as(u32, 0), out[0].index);
-    // Only as many as there's room for: the worst one is the one dropped.
-    ix.apps.items[0].launches = 0;
-    var two: [2]Ranked = undefined;
-    try t.expectEqual(@as(usize, 2), rankApps("no", &ix, &two));
-    try t.expectEqual(@as(u32, 0), two[1].index);
-}
-
 test "top keeps at most its room, best first, the first of equals first" {
     const t = std.testing;
     var out: [3]Ranked = undefined;
@@ -525,7 +528,6 @@ test "top keeps at most its room, best first, the first of equals first" {
     var got: [3]u32 = undefined;
     for (top.ranked(), &got) |r, *g| g.* = r.index;
     try t.expectEqualSlices(u32, &.{ 1, 4, 5 }, &got);
-    // No room: nothing is kept, and nothing breaks.
     var none: Top = .init(&.{});
     none.offer(.{ .index = 0, .match = .{ .score = 1 } });
     try t.expectEqual(@as(usize, 0), none.n);
@@ -533,9 +535,12 @@ test "top keeps at most its room, best first, the first of equals first" {
 
 test "a keyword matches under the name and lights nothing; loose letters miss" {
     const t = std.testing;
-    try t.expectEqual(@as(u8, 4), scoreNamed("blue", "Bluetooth", &.{"wireless"}, 500).?.n);
-    const k = scoreNamed("wireless", "Network", &.{"wireless"}, 500).?;
-    try t.expectEqual(@as(i32, 1000 - keyword_cost), k.score);
+    try t.expectEqual(
+        @as(u8, 4),
+        scoreNamed("blue", "Bluetooth", &.{"wireless"}, min_loose).?.n,
+    );
+    const k = scoreNamed("wireless", "Network", &.{"wireless"}, min_loose).?;
+    try t.expectEqual(@as(i32, tier.exact - keyword_cost), k.score);
     try t.expectEqual(@as(u8, 0), k.n);
-    try t.expect(scoreNamed("sfr", "Safari", &.{}, 500) == null);
+    try t.expect(scoreNamed("sfr", "Safari", &.{}, min_loose) == null);
 }

@@ -5,13 +5,13 @@
 //! never listed.
 const std = @import("std");
 const search = @import("search.zig");
-const mac = @import("builtin").os.tag == .macos;
+const platform = @import("platform.zig");
 
 pub const Pane = struct {
     name: []const u8,
     /// The extension's bundle id: its address is `url_prefix ++ id`.
     id: []const u8,
-    /// Its bundle, without `.appex` (`present` says where it is looked for).
+    /// Its bundle, without `.appex` (`Present.look` says where it is looked for).
     appex: []const u8,
     keywords: []const []const u8 = &.{},
 
@@ -20,7 +20,10 @@ pub const Pane = struct {
     }
 };
 
-pub const url_prefix = "x-apple.systempreferences:";
+const url_prefix = "x-apple.systempreferences:";
+
+/// System Settings itself: its icon is each pane's row's.
+pub const app = "/System/Applications/System Settings.app";
 
 pub const all = [_]Pane{
     .{
@@ -293,39 +296,50 @@ pub const urls = blk: {
     break :blk u;
 };
 
-/// Whether this Mac has each pane, looked at once.
-var have: [all.len]bool = undefined;
-var looked = false;
+/// The pane called `name`; one `all` doesn't have fails the build.
+pub fn named(comptime name: []const u8) Pane {
+    inline for (all) |p| {
+        if (comptime std.mem.eql(u8, p.name, name)) return p;
+    }
+    @compileError("no System Settings pane named " ++ name);
+}
 
-fn present(i: usize) bool {
-    if (!mac) return false;
-    if (!looked) {
-        const io = std.Io.Threaded.global_single_threaded.io();
+/// Which panes this Mac has, looked at the first time it is asked.
+pub const Present = struct {
+    looked: bool = false,
+    have: [all.len]bool = undefined,
+
+    pub fn has(p: *Present, io: std.Io, i: usize) bool {
+        if (!platform.panes) return false;
+        if (!p.looked) p.look(io);
+        return p.have[i];
+    }
+
+    fn look(p: *Present, io: std.Io) void {
         var buf: [256]u8 = undefined;
         // Most panes are system extensions. General ships inside System
         // Settings itself before macOS 27.
         const dirs = [_][]const u8{
             "/System/Library/ExtensionKit/Extensions",
-            "/System/Applications/System Settings.app/Contents/PlugIns",
+            app ++ "/Contents/PlugIns",
         };
-        for (all, 0..) |p, k| {
-            have[k] = false;
+        for (all, 0..) |pane, k| {
+            p.have[k] = false;
             for (dirs) |d| {
                 const path = std.fmt.bufPrint(
                     &buf,
                     "{s}/{s}.appex",
-                    .{ d, p.appex },
+                    .{ d, pane.appex },
                 ) catch continue;
                 if (std.Io.Dir.accessAbsolute(io, path, .{})) |_| {
-                    have[k] = true;
+                    p.have[k] = true;
                     break;
                 } else |_| {}
             }
         }
-        looked = true;
+        p.looked = true;
     }
-    return have[i];
-}
+};
 
 /// What System Settings' own words add nothing to: "login settings" is
 /// asking for login.
@@ -342,60 +356,64 @@ fn strip(query: []const u8) []const u8 {
     return q;
 }
 
-/// Below this, a match is letters in order or a typo: too loose for a
-/// pane, which would list under nearly every query.
-const min_score = 500;
-
-/// The panes `query` asks for, best first (table order among equals),
-/// into `out`; how many.
-pub fn rank(query: []const u8, out: []search.Ranked) usize {
+/// The panes `query` asks for, among those `present`, best first (table
+/// order among equals), into `out`; how many.
+pub fn rank(query: []const u8, present: *Present, io: std.Io, out: []search.Ranked) usize {
     const q = strip(query);
     if (q.len < 2) return 0;
     var top: search.Top = .init(out);
     for (all, 0..) |p, i| {
-        const m = search.scoreNamed(q, p.name, p.keywords, min_score) orelse continue;
-        if (!present(i)) continue;
+        const m = search.scoreNamed(q, p.name, p.keywords, search.min_loose) orelse continue;
+        if (!present.has(io, i)) continue;
         top.offer(.{ .index = @intCast(i), .match = m });
     }
     return top.n;
 }
 
 test "panes are found by name and by the words people use (#12)" {
-    if (!mac) return error.SkipZigTest;
+    if (!platform.panes) return error.SkipZigTest;
     const t = std.testing;
     var out: [3]search.Ranked = undefined;
+    var here: Present = .{};
     const name = struct {
         fn of(r: search.Ranked) []const u8 {
             return all[r.index].name;
         }
     }.of;
-    try t.expect(rank("login items", &out) > 0);
+    try t.expect(rank("login items", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Login Items & Extensions", name(out[0]));
-    try t.expect(rank("login settings", &out) > 0);
+    try t.expect(rank("login settings", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Login Items & Extensions", name(out[0]));
-    try t.expect(rank("wifi", &out) > 0);
+    try t.expect(rank("wifi", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Wi-Fi", name(out[0]));
-    try t.expect(rank("dark mode", &out) > 0);
+    try t.expect(rank("dark mode", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Appearance", name(out[0]));
-    try t.expect(rank("bluetooth", &out) > 0);
+    try t.expect(rank("bluetooth", &here, t.io, &out) > 0);
     try t.expectEqualStrings("Bluetooth", name(out[0]));
     // Its name's letters light up; a keyword's light nothing.
-    try t.expect(rank("blue", &out) > 0 and out[0].match.n == 4);
-    _ = rank("wifi", &out);
+    try t.expect(rank("blue", &here, t.io, &out) > 0 and out[0].match.n == 4);
+    _ = rank("wifi", &here, t.io, &out);
     try t.expectEqual(@as(u8, 0), out[0].match.n);
     // Not for loose letters, nor one letter.
-    try t.expectEqual(@as(usize, 0), rank("saf", &out));
-    try t.expectEqual(@as(usize, 0), rank("w", &out));
-    try t.expectEqualStrings(url_prefix ++ "com.apple.LoginItems-Settings.extension", urls[13]);
+    try t.expectEqual(@as(usize, 0), rank("saf", &here, t.io, &out));
+    try t.expectEqual(@as(usize, 0), rank("w", &here, t.io, &out));
+    // A pane's address is the one beside it in `urls`.
+    try t.expect(rank("login items", &here, t.io, &out) > 0);
+    try t.expectEqualStrings(
+        url_prefix ++ "com.apple.LoginItems-Settings.extension",
+        urls[out[0].index],
+    );
     // Not Shell.appex, which every macOS has: that is com.apple.Shell, so
     // it would say nothing about whether this pane is here.
-    try std.testing.expectEqualStrings("GeneralSettings", all[8].appex);
+    try std.testing.expectEqualStrings("GeneralSettings", named("General").appex);
 }
 
 test "every pane's extension is on this Mac's macOS, or is known not to be" {
-    if (!mac) return error.SkipZigTest;
+    if (!platform.panes) return error.SkipZigTest;
+    const t = std.testing;
     // The panes every Mac running Nanolight has (macOS 14 or later): a
     // typo in a bundle name here would hide its pane for good.
+    var here: Present = .{};
     for ([_][]const u8{
         "Wi-Fi",
         "Bluetooth",
@@ -411,18 +429,18 @@ test "every pane's extension is on this Mac's macOS, or is known not to be" {
         const i = for (all, 0..) |p, k| {
             if (std.mem.eql(u8, p.name, want)) break k;
         } else return error.NoPane;
-        if (!present(i)) {
+        if (!here.has(t.io, i)) {
             std.debug.print("pane not on this Mac: {s} ({s}.appex)\n", .{ want, all[i].appex });
             listLike(want);
         }
-        try std.testing.expect(present(i));
+        try std.testing.expect(here.has(t.io, i));
     }
 }
 
 /// Prints the extensions whose bundle name holds `want`'s first word, so a
 /// failing run shows what this macOS calls the pane.
 fn listLike(want: []const u8) void {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = std.testing.io;
     const word = want[0 .. std.mem.indexOfAny(u8, want, " -&") orelse want.len];
     var dir = std.Io.Dir.cwd()
         .openDir(io, "/System/Library/ExtensionKit/Extensions", .{ .iterate = true }) catch return;

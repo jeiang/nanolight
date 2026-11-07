@@ -176,7 +176,6 @@ test "an image written reads back pixel for pixel, and says its width" {
 }
 
 test "each of PNG's filters is undone" {
-    // Two rows of one pixel, filtered by Sub, Up, Average and Paeth in turn.
     const row_bytes = channels * 2;
     const want = [_]u8{ 10, 20, 30, 40, 50, 60, 70, 80, 15, 25, 35, 45, 55, 65, 75, 85 };
     var pixels: [want.len]u8 = undefined;

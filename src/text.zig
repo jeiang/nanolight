@@ -1,66 +1,55 @@
-//! UTF-8 helpers for search and completion (no allocation).
+//! Byte-level text helpers: cutting UTF-8, escaping for URLs.
 const std = @import("std");
 
-pub fn hasNonAscii(s: []const u8) bool {
-    for (s) |b| if (b >= 0x80) return true;
-    return false;
+/// `s` cut to at most `max` bytes, on a character boundary.
+pub fn clip(s: []const u8, max: usize) []const u8 {
+    if (s.len <= max) return s;
+    var n = max;
+    while (n > 0 and s[n] & 0xC0 == 0x80) n -= 1;
+    return s[0..n];
 }
 
-pub fn hasCjk(s: []const u8) bool {
-    var i: usize = 0;
-    while (i < s.len) {
-        const d = decodeAt(s, i) orelse break;
-        i += d.len;
-        const cp = d.cp;
-        if (cp >= 0x3400 and cp <= 0x9FFF) return true;
-        if (cp >= 0xF900 and cp <= 0xFAFF) return true;
+/// `s` percent-encoded into `w`: letters, digits, `-_.~` and the bytes in
+/// `how.keep` as they are, a space as `+` when `how.plus` (query values
+/// only; a path needs `%20`), any other byte as `%XX`. Each byte goes in
+/// whole: it stops at the first that does not fit.
+pub fn percentEncode(
+    w: *std.Io.Writer,
+    s: []const u8,
+    how: struct { keep: []const u8 = "", plus: bool = false },
+) std.Io.Writer.Error!void {
+    const hex = "0123456789ABCDEF";
+    for (s) |ch| {
+        const plain = std.ascii.isAlphanumeric(ch) or
+            std.mem.indexOfScalar(u8, "-_.~", ch) != null or
+            std.mem.indexOfScalar(u8, how.keep, ch) != null;
+        var unit: [3]u8 = .{ ch, 0, 0 };
+        var len: usize = 1;
+        if (ch == ' ' and how.plus) {
+            unit[0] = '+';
+        } else if (!plain) {
+            unit = .{ '%', hex[ch >> 4], hex[ch & 0xF] };
+            len = 3;
+        }
+        const dest = try w.writableSliceGreedy(len);
+        @memcpy(dest[0..len], unit[0..len]);
+        w.advance(len);
     }
-    return false;
 }
 
-pub fn fold(cp: u21) u21 {
-    if (cp >= 'A' and cp <= 'Z') return cp + ('a' - 'A');
-    return cp;
-}
-
-/// One codepoint at byte index `i`, or null if bytes are invalid.
-pub fn decodeAt(s: []const u8, i: usize) ?struct { cp: u21, len: usize } {
-    if (i >= s.len) return null;
-    const len = std.unicode.utf8ByteSequenceLength(s[i]) catch return null;
-    if (i + len > s.len) return null;
-    const cp = std.unicode.utf8Decode(s[i..][0..len]) catch return null;
-    return .{ .cp = cp, .len = len };
-}
-
-/// Case-insensitive prefix on whole codepoints (ASCII letters folded).
-pub fn utf8StartsWithFold(hay: []const u8, needle: []const u8) bool {
-    if (!hasNonAscii(hay) and !hasNonAscii(needle)) {
-        if (needle.len > hay.len) return false;
-        for (needle, 0..) |ch, j| if (fold(ch) != fold(hay[j])) return false;
-        return true;
-    }
-    var hi: usize = 0;
-    var ni: usize = 0;
-    while (ni < needle.len) {
-        const h = decodeAt(hay, hi) orelse return false;
-        const n = decodeAt(needle, ni) orelse return false;
-        if (fold(h.cp) != fold(n.cp)) return false;
-        hi += h.len;
-        ni += n.len;
-    }
-    return true;
-}
-
-/// Byte offset of codepoint index `want` in `s`, or null.
-pub fn utf8ByteAtCp(s: []const u8, want: usize) ?usize {
-    var i: usize = 0;
-    var cp: usize = 0;
-    while (i < s.len) {
-        if (cp == want) return i;
-        const d = decodeAt(s, i) orelse return null;
-        i += d.len;
-        cp += 1;
-    }
-    if (cp == want) return i;
-    return null;
+test "a cut keeps whole characters; an escape keeps whole bytes" {
+    const t = std.testing;
+    try t.expectEqualStrings("é", clip("éé", 3));
+    var buf: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try percentEncode(&w, "a b&c", .{});
+    try t.expectEqualStrings("a%20b%26c", w.buffered());
+    w = .fixed(&buf);
+    try percentEncode(&w, "/a b/", .{ .keep = "/", .plus = true });
+    try t.expectEqualStrings("/a+b/", w.buffered());
+    // No room for all of "%26": none of it goes in.
+    var small: [3]u8 = undefined;
+    w = .fixed(&small);
+    try t.expectError(error.WriteFailed, percentEncode(&w, "ab&", .{}));
+    try t.expectEqualStrings("ab", w.buffered());
 }

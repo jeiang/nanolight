@@ -1,8 +1,9 @@
 //! Math typed into the bar, answered as it's typed: + - * / % ^, × and ÷,
 //! parentheses, pi and e, and sqrt, sin, cos, tan, ln, log, abs. A query
 //! counts as math only with an operator or a function in it, so "42" or
-//! "e" alone stay searches. Conversions (convert.zig) work out the math
-//! around them here too: `lead` before the units, `carry` after them.
+//! "e" alone stay searches. Math around other text is read here too: `lead`
+//! the math a text starts with, `carry` the operators after a value, both
+//! with numbers grouped by commas ("1,500"), as amounts are written.
 const std = @import("std");
 const assert = std.debug.assert;
 
@@ -29,6 +30,60 @@ const Op = enum {
     }
 };
 
+/// How an operator is written: in ASCII, and in UTF-8 if it has another form.
+const Spelling = struct { op: Op, ascii: u8, utf8: []const u8 = "" };
+
+/// Every operator as written, the one place they are listed: the parser,
+/// `opLen` and `trimOps` all read it.
+const spellings = [_]Spelling{
+    .{ .op = .pow, .ascii = '^' },
+    .{ .op = .mul, .ascii = '*', .utf8 = "×" },
+    .{ .op = .div, .ascii = '/', .utf8 = "÷" },
+    .{ .op = .rem, .ascii = '%' },
+    .{ .op = .add, .ascii = '+' },
+    .{ .op = .sub, .ascii = '-', .utf8 = "−" },
+};
+
+fn spelling(comptime o: Op) Spelling {
+    inline for (spellings) |w| if (w.op == o) return w;
+    unreachable;
+}
+
+/// The length of the operator `s` starts with, or 0.
+pub fn opLen(s: []const u8) usize {
+    for (spellings) |w| {
+        if (s.len > 0 and s[0] == w.ascii) return 1;
+        if (w.utf8.len > 0 and std.mem.startsWith(u8, s, w.utf8)) return w.utf8.len;
+    }
+    return 0;
+}
+
+/// `s` without the operators and spaces it ends with: "2 + 3 *" is "2 + 3".
+pub fn trimOps(s: []const u8) []const u8 {
+    var end = s.len;
+    trim: while (end > 0) {
+        if (s[end - 1] == ' ') {
+            end -= 1;
+            continue;
+        }
+        for (spellings) |w| {
+            if (s[end - 1] == w.ascii) {
+                end -= 1;
+                continue :trim;
+            }
+            if (w.utf8.len > 0 and std.mem.endsWith(u8, s[0..end], w.utf8)) {
+                end -= w.utf8.len;
+                continue :trim;
+            }
+        }
+        break;
+    }
+    return s[0..end];
+}
+
+/// How numbers are written: plain math reads "1500", an amount "1,500" too.
+const Numbers = enum { plain, grouped };
+
 const Func = enum { sqrt, sin, cos, tan, ln, log, abs };
 
 /// An opening parenthesis, plain or a function's, and its operand's sign.
@@ -44,14 +99,10 @@ const Word = union(enum) { value: f64, func: Func };
 /// then a number, a constant, or a parenthesis, plain or a function's.
 const Parser = struct {
     s: []const u8,
+    numbers: Numbers,
     i: usize = 0,
     /// An operator or a function was seen: this is math, not a name.
     math: bool = false,
-    /// Numbers may group thousands with commas ("1,500"), as amounts are
-    /// written in a conversion.
-    commas: bool = false,
-    /// The first operand, already worked out: `carry` goes on from it.
-    seed: ?f64 = null,
     values: [stack_max]f64 = undefined,
     values_len: usize = 0,
     entries: [stack_max]Entry = undefined,
@@ -68,7 +119,7 @@ const Parser = struct {
         return if (p.i < p.s.len) p.s[p.i] else 0;
     }
 
-    /// × and ÷ (UTF-8) read as * and /.
+    /// `ascii`, or its UTF-8 form (× and ÷ read as * and /).
     fn op(p: *Parser, comptime ascii: u8, comptime utf8: []const u8) bool {
         p.skip();
         if (p.i < p.s.len and p.s[p.i] == ascii) {
@@ -83,13 +134,10 @@ const Parser = struct {
     }
 
     /// The whole expression from `i`, ending before the first thing that
-    /// can't continue it.
-    fn expr(p: *Parser) Error!f64 {
+    /// can't continue it; `first`, when given, is its first operand.
+    fn expr(p: *Parser, first: ?f64) Error!f64 {
         assert(p.values_len == 0 and p.entries_len == 0);
-        if (p.seed) |v| {
-            p.seed = null;
-            try p.pushValue(v);
-        } else try p.operand();
+        if (first) |v| try p.pushValue(v) else try p.operand();
         while (try p.operator()) try p.operand();
         assert(p.opens == 0);
         while (p.entries_len > 0) {
@@ -104,10 +152,12 @@ const Parser = struct {
     fn operand(p: *Parser) Error!void {
         while (true) {
             var negate = false;
+            const minus = comptime spelling(.sub);
+            const plus = comptime spelling(.add);
             while (true) {
-                if (p.op('-', "−")) {
+                if (p.op(minus.ascii, minus.utf8)) {
                     negate = !negate;
-                } else if (!p.op('+', "")) break;
+                } else if (!p.op(plus.ascii, plus.utf8)) break;
             }
             const ch = p.peek();
             if (ch == '(') {
@@ -156,12 +206,7 @@ const Parser = struct {
     }
 
     fn binary(p: *Parser) ?Op {
-        if (p.op('^', "")) return .pow;
-        if (p.op('*', "×")) return .mul;
-        if (p.op('/', "÷")) return .div;
-        if (p.op('%', "")) return .rem;
-        if (p.op('+', "")) return .add;
-        if (p.op('-', "−")) return .sub;
+        inline for (spellings) |w| if (p.op(w.ascii, w.utf8)) return w.op;
         return null;
     }
 
@@ -219,7 +264,7 @@ const Parser = struct {
 
     fn number(p: *Parser) Error!f64 {
         const start = p.i;
-        while (p.i < p.s.len and numeric(p.s[p.i], p.commas)) p.i += 1;
+        while (p.i < p.s.len and numeric(p.s[p.i], p.numbers)) p.i += 1;
         // 1e3, 2.5E-4
         const exponent = p.exponentMark();
         if (exponent > 0) {
@@ -270,8 +315,9 @@ const Parser = struct {
     }
 };
 
-fn numeric(ch: u8, commas: bool) bool {
-    return std.ascii.isDigit(ch) or ch == '.' or ch == '_' or (commas and ch == ',');
+fn numeric(ch: u8, numbers: Numbers) bool {
+    return std.ascii.isDigit(ch) or ch == '.' or ch == '_' or
+        (numbers == .grouped and ch == ',');
 }
 
 /// `x` through a parenthesis' function, if it has one.
@@ -293,8 +339,8 @@ fn call(func: ?Func, x: f64) Error!f64 {
 pub fn eval(query: []const u8) ?f64 {
     const s = std.mem.trim(u8, query, " =");
     if (s.len == 0) return null;
-    var p: Parser = .{ .s = s };
-    const v = p.expr() catch return null;
+    var p: Parser = .{ .s = s, .numbers = .plain };
+    const v = p.expr(null) catch return null;
     if (p.peek() != 0 or !p.math) return null;
     if (std.math.isNan(v) or std.math.isInf(v)) return null;
     return v;
@@ -306,8 +352,8 @@ pub const Lead = struct { value: f64, rest: []const u8 };
 /// then "ttd". A plain number counts, and numbers may group thousands with
 /// commas ("1,500"). Null when `s` doesn't start with math that computes.
 pub fn lead(s: []const u8) ?Lead {
-    var p: Parser = .{ .s = s, .commas = true };
-    const v = p.expr() catch return null;
+    var p: Parser = .{ .s = s, .numbers = .grouped };
+    const v = p.expr(null) catch return null;
     if (!std.math.isFinite(v)) return null;
     return .{ .value = v, .rest = s[p.i..] };
 }
@@ -316,43 +362,78 @@ pub fn lead(s: []const u8) ?Lead {
 /// "* 12 + 1" is v * 12 + 1, by the usual precedence; nothing is `v`
 /// itself. Null when `ops` isn't that, or the value can't be computed.
 pub fn carry(v: f64, ops: []const u8) ?f64 {
-    var p: Parser = .{ .s = ops, .commas = true, .seed = v };
-    const x = p.expr() catch return null;
+    var p: Parser = .{ .s = ops, .numbers = .grouped };
+    const x = p.expr(v) catch return null;
     if (p.peek() != 0 or !std.math.isFinite(x)) return null;
     return x;
 }
 
+/// The room `scientific` needs at most: "-1.23456e-308".
+pub const scientific_len = "-1.23456e-308".len;
+
 /// The value as the row shows it and the clipboard takes it: whole numbers
 /// with thousands separators ("1,048,576"), others to 10 significant digits.
+/// When the grouped form doesn't fit `buf`, both forms are `scientific`, so
+/// the row and what it copies agree.
+/// Above this a whole number is written in scientific notation: it is
+/// longer than its plain form (results.zig draws the same bound).
+pub const whole_below = 1e15;
+
 pub fn format(buf: []u8, v: f64, grouped: bool) []const u8 {
-    if (@abs(v) < 1e15 and v == @round(v)) {
+    assert(buf.len >= scientific_len);
+    if (@abs(v) < whole_below and v == @round(v)) {
         const n: i64 = @intFromFloat(v);
-        if (!grouped) return std.fmt.bufPrint(buf, "{d}", .{n}) catch "";
         var digits: [24]u8 = undefined;
-        const d = std.fmt.bufPrint(&digits, "{d}", .{@abs(n)}) catch return "";
-        var o: usize = 0;
-        if (n < 0) {
-            buf[o] = '-';
-            o += 1;
-        }
-        for (d, 0..) |ch, i| {
-            if (i > 0 and (d.len - i) % 3 == 0) {
-                buf[o] = ',';
-                o += 1;
-            }
-            buf[o] = ch;
-            o += 1;
-        }
-        return buf[0..o];
+        // Below `whole_below` a whole number is at most 16 characters.
+        const d = std.fmt.bufPrint(&digits, "{d}", .{n}) catch unreachable;
+        const g = group(buf, d) orelse return scientific(buf, v);
+        if (grouped) return g;
+        @memcpy(buf[0..d.len], d);
+        return buf[0..d.len];
     }
-    const s = std.fmt.bufPrint(buf, "{d:.10}", .{v}) catch return "";
-    // Trailing zeros of the fraction, then a bare point.
+    const s = std.fmt.bufPrint(buf, "{d:.10}", .{v}) catch return scientific(buf, v);
     var end = s.len;
     if (std.mem.indexOfScalar(u8, s, '.') != null) {
         while (end > 0 and s[end - 1] == '0') end -= 1;
         if (end > 0 and s[end - 1] == '.') end -= 1;
     }
     return s[0..end];
+}
+
+/// Six significant digits, "9.09091e-13", for a value too large or too
+/// small to write out.
+pub fn scientific(buf: []u8, v: f64) []const u8 {
+    assert(buf.len >= scientific_len);
+    var tmp: [scientific_len]u8 = undefined;
+    const s = std.fmt.bufPrint(&tmp, "{e:.5}", .{v}) catch unreachable;
+    const at = std.mem.indexOfScalar(u8, s, 'e') orelse s.len;
+    const m = std.mem.trimEnd(u8, std.mem.trimEnd(u8, s[0..at], "0"), ".");
+    return std.fmt.bufPrint(buf, "{s}{s}", .{ m, s[at..] }) catch unreachable;
+}
+
+/// The number `text` ("-1234567.50") in `buf` with its whole part's
+/// thousands separated ("-1,234,567.50"); null if it doesn't fit.
+pub fn group(buf: []u8, text: []const u8) ?[]const u8 {
+    const neg = text.len > 0 and text[0] == '-';
+    const body = text[@intFromBool(neg)..];
+    const int_end = std.mem.indexOfScalar(u8, body, '.') orelse body.len;
+    var o: usize = 0;
+    if (neg) {
+        if (buf.len == 0) return null;
+        buf[o] = '-';
+        o += 1;
+    }
+    for (body, 0..) |ch, i| {
+        const comma = i < int_end and i > 0 and (int_end - i) % 3 == 0;
+        if (o + 1 + @intFromBool(comma) > buf.len) return null;
+        if (comma) {
+            buf[o] = ',';
+            o += 1;
+        }
+        buf[o] = ch;
+        o += 1;
+    }
+    return buf[0..o];
 }
 
 test "math is answered, names are not" {
@@ -402,7 +483,6 @@ test "math before a conversion's units, and after them" {
     try t.expectEqual(@as(?f64, null), carry(12, "* (2"));
     try t.expectEqual(@as(?f64, null), carry(12, "* 2 in cm"));
     try t.expectEqual(@as(?f64, null), carry(std.math.inf(f64), ""));
-    // Plain math still reads no commas.
     try t.expectEqual(@as(?f64, null), eval("1,000 * 2"));
 }
 
@@ -414,6 +494,36 @@ test "values read as people write them" {
     try t.expectEqualStrings("-1,000", format(&buf, -1000, true));
     try t.expectEqualStrings("2.5", format(&buf, 2.5, true));
     try t.expectEqualStrings("0.3333333333", format(&buf, 1.0 / 3.0, true));
+}
+
+test "a value too long to write out is scientific, never empty" {
+    const t = std.testing;
+    var buf: [64]u8 = undefined;
+    const big = eval("10^70").?;
+    try t.expectEqualStrings("1e70", format(&buf, big, true));
+    try t.expectEqualStrings("1e70", format(&buf, big, false));
+    try t.expectEqualStrings("-1.23457e-308", scientific(&buf, -1.234567e-308));
+    // Where the grouped form doesn't fit, the plain one isn't used either.
+    var small: [scientific_len]u8 = undefined;
+    try t.expectEqualStrings("1.23457e14", format(&small, 123456789012345, false));
+}
+
+test "one operator set: the parser's, at a start and an end" {
+    const t = std.testing;
+    inline for (.{ "^", "*", "×", "/", "÷", "%", "+", "-", "−" }) |o| {
+        try t.expectEqual(@as(usize, o.len), opLen(o ++ " 2"));
+        try t.expectEqualStrings("2", trimOps("2 " ++ o));
+        try t.expect(carry(2, o ++ " 2") != null);
+    }
+    try t.expectEqual(@as(usize, 0), opLen("2"));
+    try t.expectEqual(@as(usize, 0), opLen(""));
+    try t.expectEqualStrings("2 + 3", trimOps("2 + 3 * "));
+    try t.expectEqualStrings("10 km to mi", trimOps("10 km to mi × −"));
+    try t.expectEqualStrings("", trimOps(" + "));
+    try t.expectEqualStrings("café", trimOps("café"));
+    var buf: [9]u8 = undefined;
+    try t.expectEqualStrings("-1,234.50", group(&buf, "-1234.50").?);
+    try t.expectEqual(null, group(buf[0..8], "-1234.50"));
 }
 
 test "long or deeply nested input fails cleanly, without deep recursion" {

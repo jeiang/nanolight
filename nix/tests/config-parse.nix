@@ -21,7 +21,7 @@ in
     pname = "nanolight-config-parse";
     inherit (source) version src;
 
-    nativeBuildInputs = [pkgs.zig_0_17.hook];
+    nativeBuildInputs = [source.zig.hook];
 
     dontUseZigBuild = true;
     dontUseZigInstall = true;

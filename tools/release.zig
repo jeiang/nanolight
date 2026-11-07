@@ -1,7 +1,8 @@
-//! A release's files and its update feed, spelled once for build.zig,
-//! tools/package.zig and tools/verify_release.zig. The feed is
-//! `manifest.json`, which the app's updater reads (nanoui's update.zig and
-//! update_portable.zig):
+//! A release, spelled once for build.zig, the app (through build.zig's
+//! build_options), tools/package.zig and the verifiers: where it is
+//! published, the Mac's bundle, each build's files, its update feed and its
+//! notes. The feed is `manifest.json`, which the app's updater reads
+//! (nanoui's update.zig and update_portable.zig):
 //!
 //!     {"version":"0.2.7","files":{"nanolight-macos-arm64.zip":{"sha256":"…"}}}
 //!
@@ -21,11 +22,60 @@ pub const manifest_bytes_max = 64 * 1024;
 pub const sha256_hex_len = sha256.digest_length * 2;
 pub const Sha256Hex = [sha256_hex_len]u8;
 
+/// The GitHub repository whose releases the updater and the verifiers read.
+pub const repo = "jeiang/nanolight";
+pub const releases_url = "https://github.com/" ++ repo ++ "/releases/download";
+
+/// The Mac's app: its bundle, the program in it, and the oldest macOS it runs on.
+pub const app_name = "Nanolight";
+pub const bundle_id = "dev.nanoui.nanolight";
+pub const bundle_name = app_name ++ ".app";
+pub const program_name = "nanolight";
+pub const bundle_program = "Contents/MacOS/" ++ program_name;
+pub const bundle_plist = "Contents/Info.plist";
+pub const macos_min: std.SemanticVersion = .{ .major = 14, .minor = 0, .patch = 0 };
+/// As Info.plist's LSMinimumSystemVersion and vtool's `minos` say it.
+pub const macos_min_text = std.fmt.comptimePrint("{d}.{d}", .{
+    macos_min.major,
+    macos_min.minor,
+});
+
+/// Each release file's name starts so; a build's debug symbols add `symbols_suffix`.
+const file_prefix = program_name ++ "-";
+const symbols_suffix = "-symbols";
+const macos_stem = file_prefix ++ "macos-arm64";
 /// The Mac's disk image, the update its updater fetches, and its debug symbols.
-pub const macos_disk_image = "nanolight-macos-arm64.dmg";
-pub const macos_update = "nanolight-macos-arm64.zip";
-pub const macos_symbols = "nanolight-macos-arm64-symbols.zip";
+pub const macos_disk_image = macos_stem ++ ".dmg";
+pub const macos_update = macos_stem ++ ".zip";
+pub const macos_symbols = macos_stem ++ symbols_suffix ++ ".zip";
 pub const manifest_name = "manifest.json";
+/// Beside each file, its sum: `<file>.sha256`.
+pub const sum_suffix = ".sha256";
+/// What the release's page says (`writeNotes`); not attached.
+pub const notes_name = "notes.md";
+
+/// The version a tag names: `v0.2.7` is 0.2.7.
+pub fn versionOfTag(tag: []const u8) []const u8 {
+    return if (std.mem.startsWith(u8, tag, "v")) tag[1..] else tag;
+}
+
+/// The file a build for `os` and `arch` updates itself from: that of the
+/// shipped build it runs. A build no release carries asks for a file no
+/// manifest names, and finds nothing.
+pub fn updateAsset(
+    os: std.Target.Os.Tag,
+    arch: std.Target.Cpu.Arch,
+    buffer: *[name_bytes_max]u8,
+) []const u8 {
+    const platform: Platform = switch (os) {
+        // The one Apple silicon app.
+        .macos => return macos_update,
+        // Windows on ARM runs the x86_64 build (emulated).
+        .windows => .{ .os = .windows, .arch = .x86_64 },
+        else => .{ .os = os, .arch = arch },
+    };
+    return platform.archiveName(buffer);
+}
 
 /// A Windows or Linux build that each release carries.
 pub const Platform = struct {
@@ -51,14 +101,14 @@ pub const Platform = struct {
 
     /// Its update: `nanolight-windows-x86_64.zip`, `nanolight-linux-x86_64.tar.gz`.
     pub fn archiveName(platform: Platform, buffer: *[name_bytes_max]u8) []const u8 {
-        return std.fmt.bufPrint(buffer, "nanolight-{t}-{t}.{s}", .{
+        return std.fmt.bufPrint(buffer, file_prefix ++ "{t}-{t}.{s}", .{
             platform.os, platform.arch, platform.extension(),
         }) catch unreachable; // Fits, as above.
     }
 
     /// Its debug symbols: `nanolight-linux-x86_64-symbols.tar.gz`.
     pub fn symbolsArchiveName(platform: Platform, buffer: *[name_bytes_max]u8) []const u8 {
-        return std.fmt.bufPrint(buffer, "nanolight-{t}-{t}-symbols.{s}", .{
+        return std.fmt.bufPrint(buffer, file_prefix ++ "{t}-{t}" ++ symbols_suffix ++ ".{s}", .{
             platform.os, platform.arch, platform.extension(),
         }) catch unreachable; // Fits, as above.
     }
@@ -70,19 +120,19 @@ pub const Platform = struct {
         buffer: []u8,
         version: []const u8,
     ) error{NoSpaceLeft}![]u8 {
-        return std.fmt.bufPrint(buffer, "nanolight-{s}-{t}-{t}", .{
+        return std.fmt.bufPrint(buffer, file_prefix ++ "{s}-{t}-{t}", .{
             version, platform.os, platform.arch,
         });
     }
 
     pub fn programName(platform: Platform) []const u8 {
-        return if (platform.os == .windows) "nanolight.exe" else "nanolight";
+        return if (platform.os == .windows) program_name ++ ".exe" else program_name;
     }
 
     /// What a debugger reads beside the program: Windows' PDB, or the same
     /// ELF build left unstripped (`gdb -e nanolight -s nanolight.debug`).
     pub fn symbolsFileName(platform: Platform) []const u8 {
-        return if (platform.os == .windows) "nanolight.pdb" else "nanolight.debug";
+        return if (platform.os == .windows) program_name ++ ".pdb" else program_name ++ ".debug";
     }
 
     /// The platform `key` names, among `pc_platforms`.
@@ -104,8 +154,55 @@ pub const pc_platforms = [_]Platform{
 };
 
 comptime {
-    // The Mac's three files and each other build's two fit one release.
     assert(3 + pc_platforms.len * 2 <= files_max);
+}
+
+/// What a Windows or Linux build runs on, what it needs, and how it starts.
+const System = struct { name: []const u8, needs: ?[]const u8 = null, start: []const u8 };
+
+fn system(os: std.Target.Os.Tag) System {
+    return switch (os) {
+        .windows => .{ .name = "Windows 10 and later", .start = "unzip and run" },
+        .linux => .{ .name = "Linux", .needs = "X11, GTK 3", .start = "unpack and run" },
+        else => unreachable, // pc_platforms are Windows' and Linux's.
+    };
+}
+
+/// The systems of `pc_platforms`, each once, in their order.
+const pc_systems = systems: {
+    var out: [pc_platforms.len]std.Target.Os.Tag = undefined;
+    var count: usize = 0;
+    for (pc_platforms) |platform| {
+        if (std.mem.indexOfScalar(std.Target.Os.Tag, out[0..count], platform.os) != null) continue;
+        out[count] = platform.os;
+        count += 1;
+    }
+    const found = out[0..count].*;
+    break :systems found;
+};
+
+/// The release's notes, for its page: each build, what it runs on, and how
+/// it starts.
+pub fn writeNotes(writer: *std.Io.Writer, version: []const u8) !void {
+    assert(version.len > 0 and version.len <= version_bytes_max);
+    try writer.print("{s} {s} for macOS {s} and later (Apple silicon: open the disk image " ++
+        "and drag {s} to Applications)", .{ app_name, version, macos_min_text, app_name });
+    for (pc_systems, 1..) |os, index| {
+        const about = system(os);
+        const joint = if (index == pc_systems.len) " and " else ", ";
+        try writer.print("{s}{s} (", .{ joint, about.name });
+        var program: []const u8 = "";
+        for (pc_platforms) |platform| {
+            if (platform.os != os) continue;
+            const comma = if (program.len == 0) "" else ", ";
+            try writer.print("{s}{t}", .{ comma, platform.arch });
+            program = platform.programName();
+        }
+        if (about.needs) |needs| try writer.print("; {s}", .{needs});
+        try writer.print(": {s} {s})", .{ about.start, program });
+    }
+    try writer.writeAll(". The " ++ symbols_suffix ++
+        " files hold each build's debug symbols, for reading a crash.\n");
 }
 
 pub fn sha256Hex(bytes: []const u8) Sha256Hex {
@@ -114,13 +211,23 @@ pub fn sha256Hex(bytes: []const u8) Sha256Hex {
     return std.fmt.bytesToHex(digest, .lower);
 }
 
-/// The sha256 of a file, read in pieces (a debug file is tens of megabytes).
 pub fn sha256File(io: std.Io, dir: std.Io.Dir, path: []const u8) !Sha256Hex {
+    return hashFile(sha256, io, dir, path);
+}
+
+/// A file's digest by `Hash`, in hex, read in pieces (a debug file is tens
+/// of megabytes; a verifier hashes dozens of screen captures).
+pub fn hashFile(
+    comptime Hash: type,
+    io: std.Io,
+    dir: std.Io.Dir,
+    path: []const u8,
+) ![Hash.digest_length * 2]u8 {
     const file = try dir.openFile(io, path, .{});
     defer file.close(io);
     var buffer: [64 * 1024]u8 = undefined;
     var reader = file.reader(io, &buffer);
-    var hasher: sha256 = .init(.{});
+    var hasher: Hash = .init(.{});
     while (true) {
         const chunk = reader.interface.peekGreedy(1) catch |err| switch (err) {
             error.EndOfStream => break,
@@ -129,7 +236,7 @@ pub fn sha256File(io: std.Io, dir: std.Io.Dir, path: []const u8) !Sha256Hex {
         hasher.update(chunk);
         reader.interface.toss(chunk.len);
     }
-    var digest: [sha256.digest_length]u8 = undefined;
+    var digest: [Hash.digest_length]u8 = undefined;
     hasher.final(&digest);
     return std.fmt.bytesToHex(digest, .lower);
 }
@@ -224,6 +331,17 @@ test "each build's files are named as the updater and the release expect" {
     try testing.expectEqual(null, Platform.parse("linux-riscv64"));
 }
 
+test "each build updates from its own release file, and a tag names its version" {
+    var buffer: [name_bytes_max]u8 = undefined;
+    try testing.expectEqualStrings(macos_update, updateAsset(.macos, .x86_64, &buffer));
+    const linux = updateAsset(.linux, .aarch64, &buffer);
+    try testing.expectEqualStrings("nanolight-linux-aarch64.tar.gz", linux);
+    const windows = updateAsset(.windows, .aarch64, &buffer);
+    try testing.expectEqualStrings("nanolight-windows-x86_64.zip", windows);
+    try testing.expectEqualStrings("0.2.7", versionOfTag("v0.2.7"));
+    try testing.expectEqualStrings("0.2.7", versionOfTag("0.2.7"));
+}
+
 test "the manifest names every update given, and reads back" {
     const entries = [_]FeedEntry{
         .{ .name = macos_update, .sha256 = sha256Hex("mac") },
@@ -262,4 +380,15 @@ test "a sum line reads back as shasum writes it" {
     try writeSumLine(&out.writer, sum, macos_disk_image);
     try testing.expectEqualStrings(&sum, parseSumLine(out.written()).?);
     try testing.expectEqual(null, parseSumLine(""));
+}
+
+test "the notes name each build's system, its machines, and how it starts" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeNotes(&out.writer, "0.2.7");
+    try testing.expectEqualStrings("Nanolight 0.2.7 for macOS 14.0 and later (Apple silicon: " ++
+        "open the disk image and drag Nanolight to Applications), Windows 10 and later " ++
+        "(x86_64: unzip and run nanolight.exe) and Linux (x86_64, aarch64; X11, GTK 3: " ++
+        "unpack and run nanolight). The -symbols files hold each build's debug symbols, " ++
+        "for reading a crash.\n", out.written());
 }
