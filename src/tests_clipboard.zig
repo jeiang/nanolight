@@ -9,7 +9,7 @@ const chrome = @import("chrome.zig");
 const clipboard = @import("clipboard.zig");
 const clipboard_view = @import("clipboard_view.zig");
 const settings_view = @import("settings_view.zig");
-const account = @import("account.zig");
+const clock = @import("clock.zig");
 const support = @import("test_support.zig");
 const Rig = support.Rig;
 const testing = std.testing;
@@ -63,7 +63,7 @@ const Fake = struct {
     }
 
     fn fill(f: *Fake) void {
-        const now = account.now();
+        const now = clock.now();
         _ = f.store.add(
             .{ .kind = .text, .text = "old note", .source = "com.apple.Notes" },
             now - 7200,
@@ -356,7 +356,7 @@ test "an entry added while the screen is open appears at once" {
     const image = f.store.at(1).hash;
     _ = f.store.add(
         .{ .kind = .text, .text = "fresh copy", .source = "org.mozilla.firefox" },
-        account.now(),
+        clock.now(),
     );
     t.settle(1);
     try testing.expect(t.hasText("fresh copy"));

@@ -15,6 +15,7 @@ const platform = @import("platform.zig");
 const panel = platform.panel;
 const single = @import("single.zig");
 const account = @import("account.zig");
+const clock = @import("clock.zig");
 const apps = @import("apps.zig");
 const Target = @import("results.zig").Target;
 const prefs = @import("prefs.zig");
@@ -145,7 +146,7 @@ pub const App = struct {
 
     pub fn hide(ctx: *anyopaque) void {
         const a = from(ctx);
-        a.s.hid(account.now());
+        a.s.hid(clock.now());
         if (a.window) |w| w.hide();
     }
 
@@ -166,7 +167,7 @@ pub const App = struct {
         const welcome_up = a.s.screen == .welcome;
         if (welcome_up) a.o.pressed(showing);
         if (showing) {
-            a.s.hid(account.now());
+            a.s.hid(clock.now());
             return w.hide();
         }
         Hook.run(a.hooks.showing);
@@ -174,7 +175,7 @@ pub const App = struct {
         if (welcome_up) a.o.refresh();
         panel.place(w);
         Hook.run(a.hooks.rescan);
-        if (a.s.show(account.now())) Hook.run(a.hooks.popped);
+        if (a.s.show(clock.now())) Hook.run(a.hooks.popped);
         w.show();
         panel.shown(w);
         a.through.start();
@@ -215,7 +216,7 @@ pub const App = struct {
         if (w.isFocused()) return;
         // Recording ends through Settings, which shows it: the key is back.
         if (a.recorder.active()) a.s.settings_ui.record(a.s, false);
-        a.s.hid(account.now());
+        a.s.hid(clock.now());
         a.through.stop();
         a.s.note = "";
         panel.lostKeys(w);
@@ -239,7 +240,7 @@ pub const App = struct {
     pub fn touched(a: *App, comptime choice: settings.Field) void {
         comptime std.debug.assert(settings.isChoice(choice));
         // A failure is logged; this change then syncs as an older one.
-        _ = prefs.setInt(a.kv, .sync_at, account.now());
+        _ = prefs.setInt(a.kv, .sync_at, clock.now());
         if (a.acct) |x| x.changed();
     }
 

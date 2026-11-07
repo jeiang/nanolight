@@ -24,6 +24,7 @@ const Anchor = @import("anchor.zig").Anchor;
 const rates = @import("rates.zig");
 const rates_table = @import("rates_table.zig");
 const search = @import("search.zig");
+const clip = @import("text.zig").clip;
 const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const key_choice = @import("keys.zig");
@@ -514,7 +515,7 @@ pub const Nanolight = struct {
     fn capQuery(s: *Nanolight) void {
         const q = s.query.text();
         if (q.len <= max_query_bytes) return;
-        s.query.set(search.clip(q, max_query_bytes));
+        s.query.set(clip(q, max_query_bytes));
         std.debug.assert(s.query.text().len <= max_query_bytes);
     }
 

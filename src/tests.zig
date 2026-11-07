@@ -16,6 +16,8 @@ const retype = support.retype;
 
 test {
     _ = @import("search.zig");
+    _ = @import("text.zig");
+    _ = @import("clock.zig");
     _ = @import("calc.zig");
     _ = @import("convert.zig");
     _ = @import("rates.zig");

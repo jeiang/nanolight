@@ -7,6 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
 const win_msg = @import("win_msg.zig");
+const log = @import("log.zig");
 
 const HANDLE = ?*anyopaque;
 const INPUT = extern struct {
@@ -400,8 +401,7 @@ const Win = struct {
         if (owner.len == 0) owner = processName(GetForegroundWindow(), &name_buf);
         // Before the clipboard is opened at all.
         if (sink.excluded(sink.ctx, owner)) return;
-        if (!open(null)) return clipboard.log(
-            .warn,
+        if (!open(null)) return log.warn(
             "nanolight: clipboard: the clipboard stayed busy; a copy was not read",
             .{},
         );
@@ -434,7 +434,7 @@ const Win = struct {
     }
 
     fn notRead(kind: clipboard.Kind, e: anyerror) void {
-        clipboard.log(.info, "nanolight: clipboard: a copied {t} was not kept: {t}", .{ kind, e });
+        log.info("nanolight: clipboard: a copied {t} was not kept: {t}", .{ kind, e });
     }
 
     /// The window in front now, unless it is ours: where a paste goes.

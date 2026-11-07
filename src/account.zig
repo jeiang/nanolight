@@ -12,6 +12,7 @@ const prefs = @import("prefs.zig");
 const protocol = @import("sync_protocol.zig");
 const settings = @import("settings.zig");
 const after = @import("after.zig");
+const clock = @import("clock.zig");
 const Settings = settings.Settings;
 
 const pull_every_s = 5 * 60;
@@ -125,7 +126,7 @@ pub const Account = struct {
             .pending => std.fmt.bufPrint(buf, "Sync: {s}, syncing…", .{host}) catch null,
             .synced => |at| blk: {
                 var ago_buf: [32]u8 = undefined;
-                const when = ago(&ago_buf, now() - at);
+                const when = clock.ago(&ago_buf, clock.now() - at);
                 const line = std.fmt.bufPrint(buf, "Sync: {s}, last synced {s}", .{ host, when });
                 break :blk line catch null;
             },
@@ -138,7 +139,7 @@ pub const Account = struct {
 
     /// When the panel opens: sync, if the last one is old.
     pub fn maybePull(a: *Account) void {
-        if (a.token != null and now() - a.last_pull > pull_every_s) a.sync();
+        if (a.token != null and clock.now() - a.last_pull > pull_every_s) a.sync();
     }
 
     /// This machine's settings changed: sent once changes pause.
@@ -161,7 +162,7 @@ pub const Account = struct {
             a.dirty = true;
             return;
         }
-        a.last_pull = now();
+        a.last_pull = clock.now();
         var arena: std.heap.ArenaAllocator = .init(a.gpa);
         defer arena.deinit();
         const al = arena.allocator();
@@ -219,7 +220,7 @@ pub const Account = struct {
         a.hooks.apply(a.hooks.ctx, merged);
         // A failure is logged; the next sync is sent as a first one again.
         _ = prefs.setText(a.kv, .account_synced, a.cfg.url);
-        a.state = .{ .synced = now() };
+        a.state = .{ .synced = clock.now() };
         a.hooks.changed(a.hooks.ctx);
         if (!settings.same(merged, theirs)) a.changed();
         if (a.dirty) {
@@ -254,25 +255,6 @@ fn tokenOf(text: []const u8) ?[]const u8 {
     return t;
 }
 
-fn ago(buf: []u8, secs: i64) []const u8 {
-    const s = @max(secs, 0);
-    return (if (s < 60)
-        std.fmt.bufPrint(buf, "just now", .{})
-    else if (s < 3600)
-        std.fmt.bufPrint(buf, "{d} min ago", .{@divFloor(s, 60)})
-    else if (s < 86400)
-        std.fmt.bufPrint(buf, "{d} h ago", .{@divFloor(s, 3600)})
-    else
-        std.fmt.bufPrint(buf, "{d} d ago", .{@divFloor(s, 86400)})) catch "";
-}
-
-extern "c" fn time(t: ?*i64) i64;
-
-/// Unix seconds.
-pub fn now() i64 {
-    return time(null);
-}
-
 test "the server's address and the token file's token" {
     try std.testing.expectEqualStrings(
         "http://100.64.0.3:8890",
@@ -288,11 +270,6 @@ test "the server's address and the token file's token" {
 }
 
 test "the status line says when it last synced" {
-    var buf: [32]u8 = undefined;
-    try std.testing.expectEqualStrings("just now", ago(&buf, 5));
-    try std.testing.expectEqualStrings("3 min ago", ago(&buf, 190));
-    try std.testing.expectEqualStrings("2 h ago", ago(&buf, 7300));
-    try std.testing.expectEqualStrings("2 d ago", ago(&buf, 2 * 86400 + 5));
     const off: Account = .{
         .gpa = std.testing.allocator,
         .io = std.testing.io,
@@ -311,7 +288,7 @@ test "the status line says when it last synced" {
     const said = "Sync: error the server rejected the token";
     try std.testing.expectEqualStrings(said, bad.status(&line).?);
     var good = bad;
-    good.state = .{ .synced = now() - 400 };
+    good.state = .{ .synced = clock.now() - 400 };
     try std.testing.expectEqualStrings("Sync: h:1, last synced 6 min ago", good.status(&line).?);
 }
 
