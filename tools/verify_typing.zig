@@ -85,8 +85,12 @@ pub fn check(arena: std.mem.Allocator, io: Io, options: Options) !bool {
     const macos_version = try mac_verify.macosVersion(arena, io);
 
     var tally: Tally = .{};
+    const watched: Watch = .{ .arena = arena, .io = io, .rect = rect, .work = work };
+    // A word and its delete that don't count: the first key after a launch
+    // can hold the main thread for over a second (1.2 s in 2 of 71 first
+    // launches on CI's macOS 26), so the word is late rather than back.
+    _ = try watched.cycle(0);
     for (1..options.cycles + 1) |cycle| {
-        const watched: Watch = .{ .arena = arena, .io = io, .rect = rect, .work = work };
         const seen = try watched.cycle(cycle);
         tally.frames += seen.frames;
         if (seen.distinct < 2) tally.blind += 1;

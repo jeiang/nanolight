@@ -44,6 +44,8 @@ concurrency:
 jobs:
   macos:
     runs-on: macos-15
+    # Notarization waits on Apple; a stuck run should not hold "release".
+    timeout-minutes: 60
     env:
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
       MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -126,6 +128,7 @@ jobs:
   publish:
     needs: verify
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       # A tag older than the latest release (a late dispatch, or a slow run)
       # would take "latest" back to it: it stays a prerelease, and says so.
