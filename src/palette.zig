@@ -109,7 +109,9 @@ pub const Theme = enum {
 
 pub fn palette(dark: bool, theme: Theme) Palette {
     const base = grey(dark);
-    const h = theme.hue(dark) orelse return base;
+    // With the system theme, a Linux desktop's theme.json colors, if it has one.
+    const h = theme.hue(dark) orelse
+        return @import("linux_theme.zig").palette() orelse base;
     return if (dark) .{
         .text = base.text,
         .sub = base.sub.mix(h, 0.25),
@@ -135,7 +137,7 @@ pub fn palette(dark: bool, theme: Theme) Palette {
     };
 }
 
-fn grey(dark: bool) Palette {
+pub fn grey(dark: bool) Palette {
     return if (dark) .{
         .text = .hex(0xeeeeee),
         .sub = .hex(0xb5b5b5),

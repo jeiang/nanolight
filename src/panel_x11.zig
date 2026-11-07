@@ -27,6 +27,8 @@ pub fn prepare() void {
 
 /// The window, from the panel's size.
 pub fn adjust(o: *nanoui.WindowOptions) void {
+    // A theme.json's colors and font, or dark on a dark desktop.
+    o.theme = @import("linux_theme.zig").windowTheme();
     o.decorations = false;
     o.skip_taskbar = true;
     o.always_on_top = true;

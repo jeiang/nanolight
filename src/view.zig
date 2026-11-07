@@ -62,7 +62,8 @@ pub fn window(s: *Nanolight, c: *ui.Context) void {
 
 fn panel(s: *Nanolight, c: *ui.Context) void {
     const p = palette(c.theme.dark, s.theme);
-    const shell = ui.div(c).column().w(chrome.width).rounded(18).border(p.hair).clip();
+    const shell = ui.div(c).column().w(chrome.width)
+        .rounded(@import("linux_theme.zig").radius()).border(p.hair).clip();
     // The system's shadow is off (its outline drew a black ring round
     // the panel): this one is soft, and outside the panel only, so the
     // glass under it stays clear.

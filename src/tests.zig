@@ -40,6 +40,7 @@ test {
     _ = @import("prefs.zig");
     _ = @import("toggles.zig");
     _ = @import("palette.zig");
+    _ = @import("linux_theme.zig");
     _ = @import("apps.zig");
     _ = @import("app_scan.zig");
     _ = @import("launch_counts.zig");
