@@ -262,7 +262,7 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/server.zig`, `src/server_protocol.zig`, `src/server_transport.zig`, `src/settings.zig` | `nanolight-server`: its command line; the protocol as a pure function, tokens, atomic records; the socket and its deadline; and the record both sides merge |
 | `src/raycast_model.zig`, `src/raycast_view.zig` | The panel's command screen (a script's output, arguments) |
 | `src/script_commands.zig`, `src/script_run.zig` | Raycast script commands, run in Zig |
-| `src/clipboard.zig` | Clipboard history: the model, the store on disk, retention, search, and the `Watcher` contract every OS keeps |
+| `src/clipboard_types.zig`, `src/clipboard.zig`, `src/clipboard_watcher.zig` | Clipboard history: what its parts share (kinds and their caps, a copied item, a paste's result); the store on disk, retention, search; and this OS's watcher, picked at compile time, with the contract every OS keeps |
 | `src/clipboard_mac.zig`, `src/clipboard_win.zig`, `src/clipboard_poll.zig` | The Mac's NSPasteboard and Windows' clipboard sequence (DIB-to-PNG), each read by the one change-count poll and paste (⌘V, Ctrl+V) in `clipboard_poll.zig` |
 | `src/clipboard_linux.zig`, `src/clipboard_x11.zig`, `src/clipboard_wl.zig`, `src/clipboard_offer.zig` | Linux's choice of transport, its X11 (XFixes, XTest) and Wayland (data-control, virtual keyboard) sides, and what both share: the read plan, the served formats, timeouts; `zig build clip-probe` runs them without the panel |
 | `src/clipboard_view.zig`, `src/clipboard_live.zig` | The Clipboard History screen, and the app's side of it (the store, the watcher, Return and ⌘↩) |

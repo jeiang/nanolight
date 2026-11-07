@@ -7,6 +7,7 @@ const ui = nanoui.ui;
 const view = @import("view.zig");
 const chrome = @import("chrome.zig");
 const clipboard = @import("clipboard.zig");
+const PasteResult = @import("clipboard_types.zig").PasteResult;
 const clipboard_view = @import("clipboard_view.zig");
 const settings_view = @import("settings_view.zig");
 const clock = @import("clock.zig");
@@ -20,7 +21,7 @@ const S = ui.Shortcut;
 const Fake = struct {
     store: clipboard.Store = undefined,
     why: ?[]const u8 = null,
-    result: clipboard.PasteResult = .pasted,
+    result: PasteResult = .pasted,
     pasted: ?u64 = null,
     copied: ?u64 = null,
     hidden: bool = false,
@@ -28,7 +29,14 @@ const Fake = struct {
 
     fn init(f: *Fake) void {
         f.store = .init(testing.allocator, testing.io, null, .{});
-        f.ch = .{ .ctx = f, .store = &f.store, .status = status, .paste = paste, .copy = copy };
+        f.ch = .{
+            .ctx = f,
+            .store = &f.store,
+            .copy_only = false,
+            .status = status,
+            .paste = paste,
+            .copy = copy,
+        };
     }
 
     fn deinit(f: *Fake) void {
@@ -50,14 +58,14 @@ const Fake = struct {
     }
 
     /// Like the Mac's: a paste hides the panel first, a copy-only result leaves it.
-    fn paste(ctx: *anyopaque, hash: u64) clipboard.PasteResult {
+    fn paste(ctx: *anyopaque, hash: u64) PasteResult {
         const f: *Fake = @ptrCast(@alignCast(ctx));
         f.pasted = hash;
         if (f.result == .pasted) f.hidden = true;
         return f.result;
     }
 
-    fn copy(ctx: *anyopaque, hash: u64) clipboard.PasteResult {
+    fn copy(ctx: *anyopaque, hash: u64) PasteResult {
         @as(*Fake, @ptrCast(@alignCast(ctx))).copied = hash;
         return .copied;
     }
@@ -264,7 +272,7 @@ test "a paste that could only copy says why in the footer, and the panel stays" 
     const t = &rig.t;
     try rig.mount(.{ .host = f.host() });
     opened(t, s);
-    for ([_]struct { clipboard.PasteResult, []const u8 }{
+    for ([_]struct { PasteResult, []const u8 }{
         .{
             .copied_no_permission,
             "Copied. Allow Nanolight in Privacy & Security > Accessibility to paste.",
@@ -278,8 +286,8 @@ test "a paste that could only copy says why in the footer, and the panel stays" 
         try testing.expect(!f.hidden and s.screen == .clipboard);
         try testing.expect(showsNote(t, case[1]));
     }
-    // With paste_plain_text off, Return is a copy.
-    f.store.cfg.paste_plain_text = false;
+    // Copy-only (`paste_plain_text` off): Return is a copy.
+    f.ch.copy_only = true;
     f.copied = null;
     f.pasted = null;
     support.press(t, &.{.{ .command = .insert_newline }});

@@ -5,7 +5,7 @@
 //! CF_DIBV5 (kept as PNG), files CF_HDROP.
 const std = @import("std");
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
 const win_msg = @import("win_msg.zig");
 const log = @import("log.zig");
 

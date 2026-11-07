@@ -1,9 +1,7 @@
-//! Clipboard history: what was copied (text, images, files), kept on disk
-//! for a while, searchable. This file is the model, the store and the
-//! watcher contract, with no window and no OS in it; each OS's watcher and
-//! paste are their own file (clipboard_mac.zig, clipboard_win.zig,
-//! clipboard_linux.zig), picked at compile time as `Watcher`. How an entry
-//! reads on screen is clipboard_view.zig's.
+//! Clipboard history's store: what was copied (text, images, files), kept on
+//! disk for a while, searchable. No window and no OS in it: what the parts
+//! share is clipboard_types.zig's, the OS's watcher is clipboard_watcher.zig's,
+//! and how an entry reads on screen is clipboard_view.zig's.
 //!
 //! On disk, in one directory: `index.json` (the entries, newest first) and
 //! `blobs/<hash>.png` (an image) or `blobs/<hash>.txt` (a text too long for
@@ -12,44 +10,28 @@
 //! transient (password managers), are never stored, and nothing is stored
 //! while `Store.on` is false.
 const std = @import("std");
-const builtin = @import("builtin");
 const Io = std.Io;
 const search = @import("search.zig");
 const clip = @import("text.zig").clip;
 const log = @import("log.zig");
+const types = @import("clipboard_types.zig");
+const Kind = types.Kind;
+const Item = types.Item;
+const Content = types.Content;
 
-/// The feature's name, as its row and its screen say it.
-pub const title = "Clipboard History";
-
-pub const Kind = enum {
-    text,
-    image,
-    file,
-
-    /// What a kind's content is and where it is kept.
-    pub const Info = struct {
-        /// The most of it kept; a watcher reads (and converts) nothing larger.
-        cap: usize,
-        /// Its content is the PNG (`Item.png`), not text.
-        png: bool,
-        /// Its blob's extension, and when the content goes there.
-        ext: *const [blob_ext_len]u8,
-        blob: enum { always, when_long, never },
-    };
-
-    pub fn info(k: Kind) Info {
-        return switch (k) {
-            .text => .{ .cap = 10 << 20, .png = false, .ext = "txt", .blob = .when_long },
-            .image => .{ .cap = 20 << 20, .png = true, .ext = "png", .blob = .always },
-            // A copied list of files, as paths one a line.
-            .file => .{ .cap = 256 << 10, .png = false, .ext = "txt", .blob = .never },
-        };
-    }
-
-    pub fn cap(k: Kind) usize {
-        return k.info().cap;
-    }
+/// Where a kind's content is kept: its blob's extension, and when the content goes there.
+const Blob = struct {
+    ext: *const [blob_ext_len]u8,
+    when: enum { always, when_long, never },
 };
+
+fn blobOf(k: Kind) Blob {
+    return switch (k) {
+        .text => .{ .ext = "txt", .when = .when_long },
+        .image => .{ .ext = "png", .when = .always },
+        .file => .{ .ext = "txt", .when = .never },
+    };
+}
 
 /// User-only (0600 / 0700); Windows has no mode and keeps its profile's ACL.
 const Perm = Io.File.Permissions;
@@ -94,21 +76,6 @@ pub const Entry = struct {
     count: u32 = 1,
 };
 
-/// What a watcher saw on the clipboard. Slices are the watcher's own: the
-/// store copies what it keeps.
-pub const Item = struct {
-    /// Any kind when `concealed`: nothing of it was read.
-    kind: Kind,
-    /// A text, or a file list's paths one a line.
-    text: []const u8 = "",
-    png: []const u8 = "",
-    width: u32 = 0,
-    height: u32 = 0,
-    source: []const u8 = "",
-    /// Marked concealed or transient by the app that copied it.
-    concealed: bool = false,
-};
-
 /// config.toml's `[clipboard]` table.
 pub const Config = struct {
     /// Seeds the app's own switch (prefs.zig's `.clipboard`); null leaves it be.
@@ -140,13 +107,13 @@ const blob_name_len = blob_dir.len + "/".len + 16 + ".".len + blob_ext_len;
 
 /// The file that holds `e`'s content, in `buf`; null when the index holds it all.
 fn blobName(e: Entry, buf: *[blob_name_len]u8) ?[]const u8 {
-    const i = e.kind.info();
-    switch (i.blob) {
+    const b = blobOf(e.kind);
+    switch (b.when) {
         .always => {},
         .when_long => if (e.text.len >= e.size) return null,
         .never => return null,
     }
-    return std.fmt.bufPrint(buf, blob_dir ++ "/{x:0>16}.{s}", .{ e.hash, i.ext }) catch unreachable;
+    return std.fmt.bufPrint(buf, blob_dir ++ "/{x:0>16}.{s}", .{ e.hash, b.ext }) catch unreachable;
 }
 
 const DiskEntry = struct {
@@ -289,7 +256,7 @@ pub const Store = struct {
     }
 
     fn make(s: *Store, item: Item, h: u64, content: []const u8, now: i64) ?Entry {
-        const spill = item.kind.info().blob == .when_long and s.dir != null and
+        const spill = blobOf(item.kind).when == .when_long and s.dir != null and
             content.len > inline_max;
         const shown = if (item.kind.info().png)
             ""
@@ -647,101 +614,6 @@ fn writeAtomic(io: Io, dir: Io.Dir, name: []const u8, bytes: []const u8) !void {
     try f.writeStreamingAll(io, bytes);
     try f.sync(io);
     try dir.rename(tmp, dir, name, io);
-}
-
-/// The width and height a PNG's header gives, or null if it is not one.
-pub fn pngSize(bytes: []const u8) ?[2]u32 {
-    if (bytes.len < 24 or !std.mem.eql(u8, bytes[0..8], "\x89PNG\r\n\x1a\n") or
-        !std.mem.eql(u8, bytes[12..16], "IHDR")) return null;
-    return .{
-        std.mem.readInt(u32, bytes[16..20], .big),
-        std.mem.readInt(u32, bytes[20..24], .big),
-    };
-}
-
-// ----- the OS's side -----
-
-/// What a paste or a copy writes to the clipboard: the full text (a file
-/// list's paths one a line) or the PNG.
-pub const Content = struct {
-    kind: Kind,
-    text: []const u8 = "",
-    png: []const u8 = "",
-};
-
-/// How a paste or a copy of an entry went.
-pub const PasteResult = enum {
-    /// Written, and the keystroke sent to the app that had the keys.
-    pasted,
-    /// Written, as asked: no paste.
-    copied,
-    /// Written only: the OS has not allowed this app to send keys.
-    copied_no_permission,
-    /// Written only: pasting is not done on this system (yet).
-    copied_unsupported,
-    /// The clipboard could not be written.
-    failed,
-    /// The entry's content could not be read (its blob is gone or damaged).
-    unreadable,
-};
-
-/// What a watcher tells the app.
-pub const Sink = struct {
-    ctx: *anyopaque,
-    observe: *const fn (ctx: *anyopaque, item: Item) void,
-    /// Whether this source is excluded: asked before the content is read.
-    excluded: *const fn (ctx: *anyopaque, source: []const u8) bool,
-};
-
-/// Called to hide the panel, before the app that had the keys is woken.
-pub const Hide = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque) void };
-
-pub const StartError = error{Unavailable};
-
-/// This OS's watcher. Every one has, all on the main thread:
-///
-///   `start(w, sink) StartError!void` and `stop(w)`: watching
-///   `status(w) ?[]const u8`: why it is not watching, once a start failed
-///   `noteFrontmost(w)`: called as the panel opens, to remember where to paste
-///   `paste(w, content, hide) PasteResult` (never `.copied` or `.unreadable`)
-///   `copy(w, content) bool`: writes it, no paste
-///
-/// and keeps to these rules:
-///
-///   - Nothing over its kind's `cap` is read or converted: it is logged and dropped.
-///   - An item its source marked concealed or transient is observed with
-///     `concealed` set and nothing of it read.
-///   - What its own `copy` and `paste` write is not observed: a poll watcher
-///     (clipboard_poll.zig) keeps the change count it wrote; a Linux one offers
-///     `own_mime` and skips an offer that has it (clipboard_offer.zig).
-///   - `Item.source` is what the OS names: the frontmost app's bundle ID when the
-///     change is seen (Mac), the owner's exe (Windows), the owner window's
-///     WM_CLASS (X11). Wayland names no source, so `exclude_apps` cannot apply there.
-pub const Watcher = switch (builtin.os.tag) {
-    .macos => @import("clipboard_mac.zig").Watcher,
-    .windows => @import("clipboard_win.zig").Watcher,
-    else => @import("clipboard_linux.zig").Watcher,
-};
-
-comptime {
-    conforms(Watcher);
-}
-
-/// Fails the build unless `W` has the surface `Watcher` documents.
-pub fn conforms(comptime W: type) void {
-    const surface = .{
-        .{ "start", fn (*W, Sink) StartError!void },
-        .{ "stop", fn (*W) void },
-        .{ "status", fn (*const W) ?[]const u8 },
-        .{ "noteFrontmost", fn (*W) void },
-        .{ "paste", fn (*W, Content, Hide) PasteResult },
-        .{ "copy", fn (*W, Content) bool },
-    };
-    inline for (surface) |d| {
-        if (!@hasDecl(W, d[0])) @compileError(@typeName(W) ++ " has no " ++ d[0]);
-        if (@TypeOf(@field(W, d[0])) != d[1])
-            @compileError(@typeName(W) ++ "." ++ d[0] ++ " is not " ++ @typeName(d[1]));
-    }
 }
 
 // ----- tests -----
@@ -1167,18 +1039,4 @@ test "store files are user-only" {
     const f = (try walk.next(testing.io)).?;
     const st = try it.statFile(testing.io, f.name, .{});
     try testing.expectEqual(@as(u32, 0), @as(u32, @intCast(st.permissions.toMode())) & 0o077);
-}
-
-test "a PNG's header gives its size" {
-    const hdr = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x03\x20\x00\x00\x02\x58";
-    try testing.expectEqual([2]u32{ 800, 600 }, pngSize(hdr).?);
-    try testing.expect(pngSize("not a png at all, really not") == null);
-}
-
-test "every OS's watcher has the same surface" {
-    comptime {
-        conforms(@import("clipboard_mac.zig").Watcher);
-        conforms(@import("clipboard_win.zig").Watcher);
-        conforms(@import("clipboard_linux.zig").Watcher);
-    }
 }

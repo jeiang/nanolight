@@ -45,7 +45,9 @@ test {
     _ = @import("settings_panes.zig");
     _ = @import("commands.zig");
     _ = @import("proc.zig");
+    _ = @import("clipboard_types.zig");
     _ = @import("clipboard.zig");
+    _ = @import("clipboard_watcher.zig");
     _ = @import("clipboard_win.zig");
     _ = @import("clipboard_poll.zig");
     _ = @import("clipboard_view.zig");

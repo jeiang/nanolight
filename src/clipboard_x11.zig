@@ -8,7 +8,7 @@
 //! the panel has gone.
 const std = @import("std");
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
 const offer = @import("clipboard_offer.zig");
 const dl = @import("dl.zig");
 const x11 = @import("x11.zig");

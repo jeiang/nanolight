@@ -17,7 +17,6 @@ const Palette = @import("palette.zig").Palette;
 const Theme = @import("palette.zig").Theme;
 const mac = @import("builtin").os.tag == .macos;
 const platform = @import("platform.zig");
-const clipboard_title = @import("clipboard.zig").title;
 /// A Nix build: the Nix modules own startup and updates.
 const nix = @import("build_options").nix_managed;
 
@@ -266,11 +265,11 @@ pub const Settings = struct {
         if (present(.login, clip)) s.switchRow(c, n, p, rows, .login, "Open at Login");
         if (present(.menu_bar, clip)) s.switchRow(c, n, p, rows, .menu_bar, "Show in Menu Bar");
         if (present(.clipboard, clip)) {
-            label(c, p, clipboard_title);
+            label(c, p, chrome.clipboard_title);
             s.switchRow(c, n, p, rows, .clipboard, "Record Copied Items");
             s.button(c, n, p, rows, .clear_clipboard, switch (s.cleared) {
                 .idle => "Clear History",
-                .done => clipboard_title ++ " Cleared",
+                .done => chrome.clipboard_title ++ " Cleared",
                 .failed => "Could Not Clear History",
             });
         }

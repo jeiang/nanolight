@@ -5,7 +5,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
 const percentEncode = @import("text.zig").percentEncode;
 
 /// Calls `f(owner, id)` on the main thread after `ms`.
