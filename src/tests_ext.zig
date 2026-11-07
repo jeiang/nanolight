@@ -209,7 +209,8 @@ const Rig = struct {
         r.scripts.add(r.panel.ix.apps.items, "Greet", "scripts", "/scripts/greet.sh");
         r.scripts.finish();
         r.s.scripts = &r.scripts;
-        r.s.host = .{ .ctx = r, .open = open, .hide = hide, .settings = &r.prefs.box };
+        r.s.host = support.quietHost(r, open, hide);
+        r.s.host.settings = &r.prefs.box;
         _ = r.s.show(0);
         if (!opts.rows) r.script();
         try r.panel.mount(.{ .screen = .none });

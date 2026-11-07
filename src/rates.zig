@@ -94,8 +94,8 @@ pub const Feed = struct {
 /// The rates the panel converts with, and their reading, keeping and fetching.
 pub const Live = struct {
     feed: Feed = .{},
-    /// What they are read, kept and fetched with: without it (tests) none are.
-    env: ?Env = null,
+    /// What they are read, kept and fetched with.
+    env: Env,
 
     pub const Env = struct {
         gpa: std.mem.Allocator,
@@ -125,7 +125,7 @@ pub const Live = struct {
     /// fetch when none is in hand or it is a day old (`Feed.due`). True when
     /// the cache brought a table, to build with now.
     fn need(l: *Live) bool {
-        const env = l.env orelse return false;
+        const env = l.env;
         var read = false;
         if (!l.feed.cache_read) {
             l.readCached(env);
@@ -174,12 +174,8 @@ pub const Live = struct {
 /// they list a currency conversion, which asks for the rates
 /// (`Live.need`); when that read them from the cache, the rows are built
 /// again with them.
-pub fn fill(live: ?*Live, ctx: anytype, comptime build: fn (@TypeOf(ctx), Status) bool) void {
-    const l = live orelse {
-        _ = build(ctx, .{});
-        return;
-    };
-    if (build(ctx, l.status()) and l.need()) _ = build(ctx, l.status());
+pub fn fill(live: *Live, ctx: anytype, comptime build: fn (@TypeOf(ctx), Status) bool) void {
+    if (build(ctx, live.status()) and live.need()) _ = build(ctx, live.status());
 }
 
 /// A fetch of the rates on its way: which of `urls` it asked.
@@ -189,7 +185,7 @@ const Fetch = struct {
 
     fn done(a: *Fetch, r: nanoui.http.Response) void {
         const live = a.live;
-        const env = live.env.?;
+        const env = live.env;
         defer env.gpa.destroy(a);
         const table = if (r.status == 200) Rates.parse(env.gpa, r.body) else null;
         if (table) |t| {
@@ -258,7 +254,7 @@ test "the cache's table and day count as fetched" {
     try testing.expect(!none.failed());
 }
 
-test "rows are built once with the rates in hand, none read without an env" {
+test "rows are built once with the rates in hand, none fetched before the retry" {
     const Rows = struct {
         builds: usize = 0,
         seen: Status = .{},
@@ -267,16 +263,29 @@ test "rows are built once with the rates in hand, none read without an env" {
             r.seen = st;
             return true;
         }
+        fn now() i64 {
+            return 1;
+        }
+        fn landed(_: *anyopaque) void {}
     };
     var rows: Rows = .{};
-    fill(null, &rows, Rows.build);
-    try testing.expectEqual(@as(usize, 1), rows.builds);
-    var live: Live = .{};
+    var kv: nanoui.kv.Memory = .{ .gpa = testing.allocator };
+    defer kv.deinit();
+    var live: Live = .{
+        .feed = .{ .cache_read = true },
+        .env = .{
+            .gpa = testing.allocator,
+            .io = testing.io,
+            .kv = kv.store(),
+            .now = Rows.now,
+            .landed = .{ .ctx = &rows, .func = Rows.landed },
+        },
+    };
     defer live.deinit();
-    live.feed.begin(1);
+    live.feed.begin(Rows.now());
     live.feed.fail();
     fill(&live, &rows, Rows.build);
-    try testing.expectEqual(@as(usize, 2), rows.builds);
+    try testing.expectEqual(@as(usize, 1), rows.builds);
     try testing.expect(rows.seen.failed and rows.seen.table == null);
-    try testing.expect(!live.feed.cache_read);
+    try testing.expect(live.feed.state == .missed);
 }

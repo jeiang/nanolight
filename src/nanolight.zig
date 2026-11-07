@@ -65,7 +65,9 @@ pub const Nanolight = struct {
     query: Query = .{},
     res: results.Results = .{},
     sel: usize = 0,
-    host: ?Host = null,
+    host: Host,
+    /// Listed for no words, by name, after the most opened (`apps.starters`).
+    starters: []const []const u8,
     /// How the window holds the panel (`shell.panel.setup`).
     fit: chrome.Fit = .{},
     /// Return sends a Google search to the browser and ⌘↩ shows it in
@@ -95,8 +97,8 @@ pub const Nanolight = struct {
     quicklinks: []const web.Quicklink = &web.default_quicklinks,
     web: suggest.List = .{},
     cache: suggest.Cache = .{},
-    /// Currency rates and their fetching (rates.zig); without them none are fetched.
-    rates: ?*rates.Live = null,
+    /// Currency rates and their fetching (rates.zig).
+    rates: *rates.Live,
     /// A quicklink's address with the longest query, each byte escaped (3
     /// bytes), and room for the address round it; a longer one is not opened.
     preview_buf: [4 * max_query_bytes]u8 = undefined,
@@ -149,8 +151,7 @@ pub const Nanolight = struct {
     }
 
     pub fn clipboardHost(s: *const Nanolight) ?*const Host.Clipboard {
-        const h = s.host orelse return null;
-        return h.clipboard;
+        return s.host.clipboard;
     }
 
     pub fn hid(s: *Nanolight, now: i64) void {
@@ -185,7 +186,7 @@ pub const Nanolight = struct {
         s.screen = next;
         switch (next) {
             .rows, .welcome => {},
-            .preview => |page| if (s.host) |h| if (h.preview) |f| f(h.ctx, page.url),
+            .preview => |page| if (s.host.preview) |f| f(s.host.ctx, page.url),
             .settings => s.settings_ui.show(),
             .clipboard => s.clip_ui.show(&s.query),
             .script => s.query.clear(),
@@ -202,7 +203,7 @@ pub const Nanolight = struct {
         s.screen = .rows;
         switch (was) {
             .rows => unreachable,
-            .preview => if (s.host) |h| if (h.preview) |f| f(h.ctx, null),
+            .preview => if (s.host.preview) |f| f(s.host.ctx, null),
             .settings => {
                 s.settings_ui.leave();
                 s.query.focus();
@@ -225,7 +226,7 @@ pub const Nanolight = struct {
     /// Escape, on any screen: the screen goes, and the panel with it.
     pub fn escape(s: *Nanolight) void {
         s.leave(.closed);
-        if (s.host) |h| h.hide(h.ctx);
+        s.host.hide(s.host.ctx);
     }
 
     /// The field the rows' again, empty: a screen that searched in it went.
@@ -259,17 +260,7 @@ pub const Nanolight = struct {
         }
     }
 
-    /// The rows listed, top first.
-    pub fn rows(s: *const Nanolight) []const Row {
-        return s.res.slice();
-    }
-
-    /// The head over row `i`, where a section starts.
-    pub fn section(s: *const Nanolight, i: usize) ?[]const u8 {
-        return s.res.section(i);
-    }
-
-    /// Where the selection is among `rows`; null when none are listed.
+    /// Where the selection is among the rows listed; null when none are.
     pub fn selection(s: *const Nanolight) ?usize {
         return if (s.sel < s.res.n) s.sel else null;
     }
@@ -285,6 +276,6 @@ pub const Nanolight = struct {
     }
 
     pub fn ratesTable(s: *const Nanolight) ?*const rates_table.Rates {
-        return if (s.rates) |r| r.feed.table() else null;
+        return s.rates.feed.table();
     }
 };

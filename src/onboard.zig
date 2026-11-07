@@ -25,9 +25,12 @@ const Palette = @import("palette.zig").Palette;
 
 pub const Step = enum { key, try_it, done };
 
-/// What the steps ask of the app: none of it is done from a test.
+/// What the steps ask of the app and the system.
 pub const Hooks = struct {
     ctx: *anyopaque,
+    /// Who holds the keys, the system's into `system_buf`
+    /// (`shortcut_clash.look`). The system keeps it, so no context.
+    look: *const fn (system_buf: []shortcut_clash.SystemKey) shortcut_clash.Holders,
     /// Uses `choice` from now on (registers it, keeps it).
     apply: *const fn (ctx: *anyopaque, choice: Choice) void,
     /// Frees the shortcut: Keyboard Shortcuts opened, a launcher quit.
@@ -58,7 +61,7 @@ pub const Onboard = struct {
     /// The key in use: the one at `start`, then the one applied. Only a
     /// different choice is applied (applying syncs it, over another Mac's).
     kept: Choice = .cmd_space,
-    hooks: ?Hooks = null,
+    hooks: Hooks,
     system_buf: [96]shortcut_clash.SystemKey = undefined,
     holders: shortcut_clash.Holders = .{},
     /// Step 2: the shortcut closed the panel, then opened it again.
@@ -81,10 +84,8 @@ pub const Onboard = struct {
 
     /// Looks again at who holds the keys (after a fix, on each showing).
     pub fn refresh(o: *Onboard) void {
-        // Without hooks (tests) what the caller set is kept.
-        const h = o.hooks orelse return;
-        o.holders = shortcut_clash.look(&o.system_buf);
-        if (h.login) |f| o.login = f(null);
+        o.holders = o.hooks.look(&o.system_buf);
+        if (o.hooks.login) |f| o.login = f(null);
     }
 
     pub fn clash(o: *const Onboard) shortcut_clash.Clash {
@@ -114,7 +115,7 @@ pub const Onboard = struct {
 
     pub fn height(o: *const Onboard) f32 {
         const c = o.clash();
-        const asks_login = o.hooks != null and o.hooks.?.login != null;
+        const asks_login = o.hooks.login != null;
         return switch (o.step) {
             .key => key_h + @as(f32, if (c.clear()) 0 else clash_h),
             .try_it => try_h,
@@ -250,7 +251,7 @@ pub const Onboard = struct {
             c.print("Quit {s}", .{cl.launchers.slice()[0]});
         const b = ui.div(c).row().h(26).px(12).itemsCenter().rounded(7).bg(p.sel).border(p.rim)
             .control();
-        if (b.clicked()) if (o.hooks) |h| h.fix(h.ctx, cl);
+        if (b.clicked()) o.hooks.fix(o.hooks.ctx, cl);
         ui.text(c, label, .{ .size = 12, .weight = .semibold, .color = p.text });
         b.end();
         ui.text(c, "or pick another key above", p.detail());
@@ -425,8 +426,7 @@ pub const Onboard = struct {
                 .{ .size = 12.5, .color = p.sub },
             );
         }
-        const h = o.hooks orelse return;
-        const f = h.login orelse return;
+        const f = o.hooks.login orelse return;
         if (ui.toggle(c, "Open Nanolight when you log in", &o.login)) o.login = f(o.login);
     }
 
@@ -469,7 +469,7 @@ pub const Onboard = struct {
     fn useChoice(o: *Onboard) void {
         if (o.choice.eql(o.kept)) return;
         o.kept = o.choice;
-        if (o.hooks) |h| h.apply(h.ctx, o.choice);
+        o.hooks.apply(o.hooks.ctx, o.choice);
     }
 
     /// How the welcome ends: with the key shown on the key step, or
@@ -480,7 +480,7 @@ pub const Onboard = struct {
     /// it once, as its screen goes (view.zig `Nanolight.leave`).
     pub fn end(o: *Onboard, exit: Exit) void {
         if (exit == .take_choice and o.step == .key) o.useChoice();
-        if (o.hooks) |h| h.done(h.ctx);
+        o.hooks.done(o.hooks.ctx);
     }
 
     /// Over: into the launcher, with `query` typed (a first search) or not.
@@ -495,7 +495,11 @@ const TestHooks = struct {
     ended: u8 = 0,
 
     fn hooks(t: *TestHooks) Hooks {
-        return .{ .ctx = t, .apply = apply, .fix = fix, .done = done };
+        return .{ .ctx = t, .look = nobody, .apply = apply, .fix = fix, .done = done };
+    }
+    /// The system's shortcuts are not read in tests: nobody holds a key.
+    fn nobody(_: []shortcut_clash.SystemKey) shortcut_clash.Holders {
+        return .{};
     }
     fn apply(ctx: *anyopaque, c: Choice) void {
         @as(*TestHooks, @ptrCast(@alignCast(ctx))).applied = c;
@@ -507,11 +511,9 @@ const TestHooks = struct {
 };
 
 test "a welcome skipped applies no key" {
-    var o: Onboard = .{};
-    // Hooks only once started: the system's shortcuts are not read in tests.
-    o.start(.cmd_space);
     var th: TestHooks = .{};
-    o.hooks = th.hooks();
+    var o: Onboard = .{ .hooks = th.hooks() };
+    o.start(.cmd_space);
     o.choice = .opt_space;
     o.end(.drop_choice);
     try std.testing.expectEqual(@as(u8, 1), th.ended);
@@ -519,16 +521,13 @@ test "a welcome skipped applies no key" {
 }
 
 test "the welcome applies its key only when it changed" {
-    var o: Onboard = .{};
-    o.start(.ctrl_space);
     var th: TestHooks = .{};
-    o.hooks = th.hooks();
+    var o: Onboard = .{ .hooks = th.hooks() };
+    o.start(.ctrl_space);
     o.end(.take_choice);
     try std.testing.expect(th.applied == null);
     try std.testing.expectEqual(@as(u8, 1), th.ended);
-    o.hooks = null;
     o.start(.ctrl_space);
-    o.hooks = th.hooks();
     o.choice = .opt_space;
     o.end(.take_choice);
     try std.testing.expectEqual(Choice.opt_space, th.applied.?);

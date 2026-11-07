@@ -311,12 +311,6 @@ pub fn math(words: []const u8, table: ?*const rates_table.Rates) ?Math {
     return .{ .text = text, .answer = .{ .conversion = a } };
 }
 
-/// Whether the query's `words` show the answer card: then they are not
-/// searched for.
-pub fn isMath(words: []const u8, table: ?*const rates_table.Rates) bool {
-    return math(words, table) != null;
-}
-
 /// A whole answer is shown in hexadecimal too below this, and its room.
 const hex_below = 1e15;
 const hex_len = std.fmt.comptimePrint("0x{X}", .{@as(u64, hex_below)}).len;
@@ -335,6 +329,8 @@ pub const Input = struct {
     /// The apps and script commands, and how often each was opened: the
     /// most opened are listed for no words.
     from: Launchers,
+    /// Listed by name after the most opened, for no words (`apps.starters`).
+    starters: []const []const u8,
     /// The quicklinks, the first a search for exactly the words.
     quicklinks: []const Quicklink,
     completions: []const []const u8 = &.{},
@@ -405,7 +401,7 @@ pub const Results = struct {
         r.suggested = words.len == 0;
         if (words.len == 0) {
             var opened: [max_apps]launchers.Item = undefined;
-            const n = in.from.suggestions(&opened);
+            const n = in.from.suggestions(in.starters, &opened);
             for (opened[0..n]) |x| r.push(launcherRow(x, .{ .score = 0 }));
             return;
         }
@@ -586,6 +582,7 @@ pub const Results = struct {
 const mac = @import("os.zig").mac;
 const apps = @import("apps.zig");
 const launch_counts = @import("launch_counts.zig");
+const test_apps = @import("test_apps.zig");
 const defaults = &web.default_quicklinks;
 const no_counts: launch_counts.Counts = .{};
 
@@ -593,7 +590,8 @@ fn testIndex(a: std.mem.Allocator, names: []const []const u8) !apps.Index {
     var ix: apps.Index = .init(a);
     for (names) |n| {
         var buf: [128]u8 = undefined;
-        try ix.add(n, try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n}));
+        const path = try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n});
+        try test_apps.add(ix.sink(), n, path);
     }
     return ix;
 }
@@ -609,10 +607,14 @@ fn input(ix: *const apps.Index, words: []const u8, completions: []const []const 
     return .{
         .words = words,
         .from = only(ix),
+        .starters = starters,
         .quicklinks = defaults,
         .completions = completions,
     };
 }
+
+/// What the tests list for no words, of the apps there are.
+const starters: []const []const u8 = &.{ "Safari", "System Settings" };
 
 test "math first, then apps; quicklinks only without an answer" {
     const t = std.testing;
@@ -703,14 +705,17 @@ test "Google's completions go with the quicklink that is Google, wherever it is"
         .{ .name = "Web", .url = "https://WWW.Google.com/search?q={argument}" },
     };
     const words: []const []const u8 = &.{ "pizza near me", "pizza hut" };
-    r.build(.{ .words = "pizza", .from = only(&ix), .quicklinks = ql, .completions = words });
+    var in = input(&ix, "pizza", words);
+    in.quicklinks = ql;
+    r.build(in);
     try t.expectEqual(@as(?u16, 2), r.google);
     try t.expectEqual(Kind.suggest, r.rows[3].kind);
     try t.expectEqual(@as(usize, 5), r.n);
     // The completions sit under Google's head, with none of their own.
     try t.expect(r.section(0) != null);
     try t.expect(r.section(3) == null and r.section(4) == null);
-    r.build(.{ .words = "pizza", .from = only(&ix), .quicklinks = ql[0..2], .completions = words });
+    in.quicklinks = ql[0..2];
+    r.build(in);
     try t.expect(r.google == null);
     try t.expectEqual(@as(usize, 2), r.n);
 }
@@ -981,7 +986,8 @@ test "system commands compete by match without taking a quicklink's row" {
     try t.expect(r.n <= max_rows);
     var few = try testIndex(t.allocator, &.{"Safari"});
     defer few.deinit();
-    in = .{ .words = "sleep", .from = only(&few), .quicklinks = defaults, .commands = &every };
+    in = input(&few, "sleep", &.{});
+    in.commands = &every;
     r.build(in);
     const at = for (r.slice(), 0..) |row, i| {
         if (row.kind == .command) break i;
@@ -1027,7 +1033,7 @@ test "Clipboard History competes with apps by its name's match" {
     try t.expectEqual(Kind.app, r.rows[1].kind);
     try t.expect(r.section(1) == null);
     // Explicit shortcuts win even over a frequently opened app.
-    try ix.add("Clip", "/Clip.app");
+    try test_apps.add(ix.sink(), "Clip", "/Clip.app");
     var counts: launch_counts.Counts = .{};
     defer counts.deinit(t.allocator);
     counts.raise(t.allocator, "/Clip.app", 100);
@@ -1045,17 +1051,17 @@ test "Clipboard History competes with apps by its name's match" {
 test "math is what the card takes: trailing operators, conversions, money by the table" {
     const t = std.testing;
     for ([_][]const u8{ "2 + 3", "2 + 3 *", " 2 * 3 − ", "10 km to mi", "10 km to mi *" }) |q|
-        try t.expect(isMath(q, null));
+        try t.expect(math(q, null) != null);
     // "2 +" is "2" so far: no operator, no card.
     for ([_][]const u8{ "", "42", "2 +", "safari", "10 km report", "10 m to min" }) |q|
-        try t.expect(!isMath(q, null));
+        try t.expect(math(q, null) == null);
     // Money waits for a table; with one, only the codes it has convert.
-    try t.expect(isMath("100 usd to xyz", null));
+    try t.expect(math("100 usd to xyz", null) != null);
     var table = rates_table.Rates.parse(
         t.allocator,
         "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1}}",
     ).?;
     defer table.deinit();
-    try t.expect(isMath("100 usd to usd", &table));
-    try t.expect(!isMath("100 usd to xyz", &table));
+    try t.expect(math("100 usd to usd", &table) != null);
+    try t.expect(math("100 usd to xyz", &table) == null);
 }

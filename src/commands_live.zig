@@ -10,8 +10,8 @@ pub const Commands = struct {
     runner: commands.Runner,
 
     /// The commands this machine can run (on `PATH`), and their runner.
-    pub fn init(cm: *Commands, core: *App, env: *const std.process.Environ.Map) void {
-        cm.* = .{
+    pub fn init(core: *App, env: *const std.process.Environ.Map) Commands {
+        return .{
             .core = core,
             .runner = .{
                 .io = core.app.io,

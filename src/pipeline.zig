@@ -35,15 +35,15 @@ pub fn rebuild(s: *Nanolight) void {
     // no keyword (`res.google`), and no conversion waiting on rates.
     const listed = s.res.google != null and !s.res.pending;
     const asks = listed and s.suggest_on and suggest.eligible(words);
-    if (asks) if (s.host) |host| if (host.suggest) |ask| {
+    if (asks) {
         // The answer, or one to fewer letters, stands in meanwhile.
         const cached = s.cache.lookup(words, &s.web);
         if (s.web.n > 0) fill(s);
         if (!cached) {
             s.held_h = held;
-            ask.func(ask.ctx, words);
+            s.host.suggest.func(s.host.suggest.ctx, words);
         }
-    };
+    }
     // The first row: an app, the answer, or the search for what was
     // typed; never a completion nobody picked (they come after it).
     s.sel = s.res.actionable(0);
@@ -54,10 +54,10 @@ pub fn rebuild(s: *Nanolight) void {
 fn findFiles(s: *Nanolight) void {
     const q = s.query.words();
     if (platform.files and s.files_on and
-        (paths.isPath(q) or (spotlight.eligible(q) and !results.isMath(q, s.ratesTable()))))
+        (paths.isPath(q) or (spotlight.eligible(q) and results.math(q, s.ratesTable()) == null)))
     {
         s.found.filter(q);
-        if (s.host) |host| if (host.files) |ask| ask.func(ask.ctx, q);
+        if (s.host.files) |ask| ask.func(ask.ctx, q);
     } else s.found.deinit();
 }
 
@@ -97,12 +97,13 @@ fn buildRows(s: *Nanolight, status: rates_table.Status) bool {
     s.res.build(.{
         .words = s.query.words(),
         .from = s.launchable(),
+        .starters = s.starters,
         .quicklinks = s.quicklinks,
         .completions = s.web.slices(&said),
         .rates = status,
         .clip_on = s.hasClipboard(),
         .found = &s.found,
-        .commands = if (s.host) |h| if (h.command) |run| run.installed else null else null,
+        .commands = if (s.host.command) |run| run.installed else null,
     });
     return s.res.need_rates;
 }

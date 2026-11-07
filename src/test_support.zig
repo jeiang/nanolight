@@ -1,11 +1,14 @@
 //! What the panel's tests share: a `Rig` (an index, the panel over it, and
 //! the Tester that draws it), the hosts that record what the panel asked
-//! of them, and the keys the tests press. Nothing is opened; no window shows.
+//! of them, and the keys the tests press. Nothing is opened, read or
+//! fetched; no window shows.
 const std = @import("std");
 const assert = std.debug.assert;
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const Index = @import("apps.zig").Index;
+const rates = @import("rates.zig");
+const test_apps = @import("test_apps.zig");
 const view = @import("view.zig");
 const Nanolight = @import("nanolight.zig").Nanolight;
 const Host = @import("host.zig").Host;
@@ -19,6 +22,12 @@ const Target = @import("host.zig").Target;
 /// down in the one order that frees everything the panel owns.
 pub const Rig = struct {
     ix: Index,
+    /// The panel's host until a test sets its own.
+    probe: Probe,
+    /// Rates that are never read nor fetched: the clock stopped at the
+    /// last try (`Feed.due`), the cache read. Tests land their own.
+    money: rates.Live,
+    kv: nanoui.kv.Memory,
     s: Nanolight,
     t: ui.Tester,
     mounted: bool,
@@ -48,16 +57,40 @@ pub const Rig = struct {
     /// An empty index and a panel over it; nothing drawn until `mount`.
     pub fn init(r: *Rig, gpa: std.mem.Allocator) void {
         r.ix = .init(gpa);
-        r.s = .{ .index = &r.ix };
+        r.probe = .{};
+        r.kv = .{ .gpa = gpa };
+        r.money = .{
+            .feed = .{ .cache_read = true, .tried_s = stopped },
+            .env = .{
+                .gpa = gpa,
+                .io = std.testing.io,
+                .kv = r.kv.store(),
+                .now = stoppedClock,
+                .landed = .{ .ctx = r, .func = ignore },
+            },
+        };
+        r.s = .{
+            .index = &r.ix,
+            .host = r.probe.host(),
+            .starters = @import("apps_mac.zig").starters,
+            .rates = &r.money,
+        };
         r.t = undefined;
         r.mounted = false;
     }
+
+    const stopped = 1;
+    fn stoppedClock() i64 {
+        return stopped;
+    }
+    fn ignore(_: *anyopaque) void {}
 
     /// Adds each of `names` as an app at /Applications/<name>.app.
     pub fn apps(r: *Rig, names: []const []const u8) !void {
         for (names) |name| {
             var path: [64]u8 = undefined;
-            try r.ix.add(name, try std.fmt.bufPrint(&path, "/Applications/{s}.app", .{name}));
+            const at = try std.fmt.bufPrint(&path, "/Applications/{s}.app", .{name});
+            try test_apps.add(r.ix.sink(), name, at);
         }
     }
 
@@ -90,10 +123,34 @@ pub const Rig = struct {
     pub fn deinit(r: *Rig) void {
         r.unmount();
         r.s.deinit();
+        r.money.deinit();
+        r.kv.deinit();
         r.ix.deinit();
         r.* = undefined;
     }
 };
+
+/// A host that opens and hides its own way and does nothing else: the
+/// panel's room is the window's, Google is asked nothing, and Settings'
+/// answers are a `Prefs` no test reads.
+pub fn quietHost(
+    ctx: *anyopaque,
+    open: *const fn (ctx: *anyopaque, target: Target) void,
+    hide: *const fn (ctx: *anyopaque) void,
+) Host {
+    return .{
+        .ctx = ctx,
+        .open = open,
+        .hide = hide,
+        .resize = keepRoom,
+        .suggest = .{ .ctx = ctx, .func = askNobody },
+        .settings = &unread_answers,
+    };
+}
+fn keepRoom(_: *anyopaque, _: f32) void {}
+fn askNobody(_: *anyopaque, _: []const u8) void {}
+var unread: Prefs = .{};
+const unread_answers: SettingsHost = Prefs.answers(&unread);
 
 /// What a host was asked to open, and whether it hid the panel.
 pub const Probe = struct {
@@ -102,7 +159,7 @@ pub const Probe = struct {
     hidden: bool = false,
 
     pub fn host(p: *Probe) Host {
-        return .{ .ctx = p, .open = open, .hide = hide };
+        return quietHost(p, open, hide);
     }
     fn open(ctx: *anyopaque, target: Target) void {
         const p: *Probe = @ptrCast(@alignCast(ctx));
@@ -165,13 +222,10 @@ pub const Web = struct {
     page_len: ?usize = null,
 
     pub fn host(w: *Web) Host {
-        return .{
-            .ctx = w,
-            .open = open,
-            .hide = hide,
-            .suggest = .{ .ctx = w, .func = ask },
-            .preview = show,
-        };
+        var h = quietHost(w, open, hide);
+        h.suggest = .{ .ctx = w, .func = ask };
+        h.preview = show;
+        return h;
     }
     fn open(ctx: *anyopaque, target: Target) void {
         const w: *Web = @ptrCast(@alignCast(ctx));
@@ -226,7 +280,10 @@ pub const Prefs = struct {
 
     pub fn init(p: *Prefs) void {
         login_on = false;
-        p.box = .{
+        p.box = answers(p);
+    }
+    fn answers(p: *Prefs) SettingsHost {
+        return .{
             .ctx = p,
             .choice = choice,
             .apply = apply,
@@ -249,7 +306,9 @@ pub const Prefs = struct {
         };
     }
     pub fn host(p: *Prefs) Host {
-        return .{ .ctx = p, .open = open, .hide = hide, .settings = &p.box };
+        var h = quietHost(p, open, hide);
+        h.settings = &p.box;
+        return h;
     }
     fn open(ctx: *anyopaque, target: Target) void {
         Probe.open(&@as(*Prefs, @ptrCast(@alignCast(ctx))).probe, target);

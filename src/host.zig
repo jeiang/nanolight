@@ -39,19 +39,19 @@ pub const Host = struct {
     ctx: *anyopaque,
     open: *const fn (ctx: *anyopaque, target: Target) void,
     hide: *const fn (ctx: *anyopaque) void,
-    resize: ?*const fn (ctx: *anyopaque, h: f32) void = null,
+    resize: *const fn (ctx: *anyopaque, h: f32) void,
     /// Shows a search's page in the panel, over `chrome.webArea`; null takes it
     /// away. Without it, searches open in the browser.
     preview: ?*const fn (ctx: *anyopaque, url: ?[]const u8) void = null,
     /// Asks Google about the query's words. The last ask is answered once
     /// through `pipeline.answered`, with completions or with none; the
     /// panel keeps its room until it is.
-    suggest: ?Ask = null,
+    suggest: Ask,
     /// Looks for files for the query's words; what is found comes back
     /// through `pipeline.filesAnswered`, if anything does.
     files: ?Ask = null,
-    /// Settings' answers: Settings is drawn only with them.
-    settings: ?*const SettingsHost = null,
+    /// Settings' answers.
+    settings: *const SettingsHost,
     /// Runs system command `i` (commands.zig). Without it, nothing runs.
     command: ?Run = null,
     /// Clipboard history (clipboard_view.zig). Without it the "Clipboard

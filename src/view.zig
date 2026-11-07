@@ -138,10 +138,10 @@ fn launcher(s: *Nanolight, c: *ui.Context, p: Palette) void {
 /// at once (easing to it only made each key wait); a window follows it.
 fn follow(s: *Nanolight, target: f32) f32 {
     const h = @min(target, chrome.max_height);
-    if (s.host) |host| if (host.resize) |f| if (@abs(h - s.last_h) > 0.25) {
+    if (@abs(h - s.last_h) > 0.25) {
         s.last_h = h;
-        f(host.ctx, h);
-    };
+        s.host.resize(s.host.ctx, h);
+    }
     return h;
 }
 
@@ -374,7 +374,7 @@ fn activateOut(s: *Nanolight, c: *ui.Context) void {
 /// Quicklink `ql`'s page for `words`: in the panel when `in_panel` and
 /// the host can show it there, else in the browser.
 fn searchWith(s: *Nanolight, ql: u16, words: []const u8, in_panel: bool) void {
-    const h = s.host orelse return;
+    const h = s.host;
     if (ql >= s.quicklinks.len) return;
     const link = s.quicklinks[ql];
     const u = web.url(&s.preview_buf, link.url, words) orelse {
@@ -386,7 +386,7 @@ fn searchWith(s: *Nanolight, ql: u16, words: []const u8, in_panel: bool) void {
 }
 
 fn go(s: *Nanolight, target: Target) void {
-    const h = s.host orelse return;
+    const h = s.host;
     h.open(h.ctx, target);
     if (!target.opensScreen()) h.hide(h.ctx);
 }
@@ -584,8 +584,7 @@ fn openPane(s: *Nanolight, _: *ui.Context, r: Row) void {
 }
 
 fn runCommand(s: *Nanolight, _: *ui.Context, r: Row) void {
-    const h = s.host orelse return;
-    const run = h.command orelse return;
+    const run = s.host.command orelse return;
     run.func(run.ctx, r.item);
 }
 
