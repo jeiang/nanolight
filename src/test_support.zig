@@ -16,6 +16,8 @@ const chrome = @import("chrome.zig");
 const Choice = @import("keys.zig").Choice;
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Target = @import("host.zig").Target;
+const Toggle = @import("toggles.zig").Toggle;
+const Theme = @import("palette.zig").Theme;
 
 /// A panel over its own index, drawn by a Tester once mounted. Pinned: the
 /// panel points at the index, so a Rig is initialized in place, and torn
@@ -262,24 +264,28 @@ pub const Prefs = struct {
     recording: bool = false,
     /// Whether the recorder can start (an event monitor the system refused).
     can_record: bool = true,
-    suggest_sets: u8 = 0,
-    searches_out: ?bool = null,
-    files: ?bool = null,
-    theme: ?@import("palette.zig").Theme = null,
-    menu_bar_on: bool = true,
-    clip_on: bool = false,
+    /// Each switch, as its owner keeps it; the panel's own (suggestions,
+    /// files, searches out) are read from `nl` when there is one.
+    on: std.EnumArray(Toggle, bool) = .init(.{
+        .suggest = true,
+        .files = false,
+        .browser = false,
+        .login = false,
+        .menu_bar = true,
+        .clipboard = false,
+    }),
+    /// How many times Settings set each switch.
+    sets: std.EnumArray(Toggle, u8) = .initFill(0),
+    /// The theme set, without `nl`.
+    tint: Theme = .system,
     clip_cleared: u8 = 0,
     /// What Clear History answers.
     clip_clear_ok: bool = true,
     box: SettingsHost = undefined,
     /// The panel whose suggestions and searches the app's host would set.
     nl: ?*Nanolight = null,
-    /// Opening at login, as the system keeps it: one for the process,
-    /// as `Login.enabled` has. `init` turns it off.
-    pub var login_on: bool = false;
 
     pub fn init(p: *Prefs) void {
-        login_on = false;
         p.box = answers(p);
     }
     fn answers(p: *Prefs) SettingsHost {
@@ -288,13 +294,8 @@ pub const Prefs = struct {
             .choice = choice,
             .apply = apply,
             .record = record,
-            .login = login,
-            .suggest = suggestSet,
-            .files = filesSet,
-            .searches_out = searchesOut,
-            .theme = themeSet,
-            .menu_bar = menuBar,
-            .clipboard_enabled = clipboardEnabled,
+            .toggle = toggle,
+            .theme = theme,
             .clipboard_clear = clipboardClear,
             .sync_status = syncStatus,
             .version = ver,
@@ -329,37 +330,33 @@ pub const Prefs = struct {
         p.recording = on and p.can_record;
         return p.recording;
     }
-    fn login(set: ?bool) bool {
-        if (set) |on| login_on = on;
-        return login_on;
-    }
-    fn suggestSet(ctx: *anyopaque, on: bool) void {
+    fn toggle(ctx: *anyopaque, t: Toggle, set: ?bool) bool {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
-        p.suggest_sets += 1;
-        if (p.nl) |s| s.setSuggest(on);
+        if (set) |on| {
+            p.sets.getPtr(t).* += 1;
+            p.on.set(t, on);
+            if (p.nl) |s| switch (t) {
+                .suggest => s.setSuggest(on),
+                .files => s.setFiles(on),
+                .browser => s.searches_out = on,
+                .login, .menu_bar, .clipboard => {},
+            };
+        }
+        const s = p.nl orelse return p.on.get(t);
+        return switch (t) {
+            .suggest => s.suggest_on,
+            .files => s.files_on,
+            .browser => s.searches_out,
+            .login, .menu_bar, .clipboard => p.on.get(t),
+        };
     }
-    fn filesSet(ctx: *anyopaque, on: bool) void {
+    fn theme(ctx: *anyopaque, set: ?Theme) Theme {
         const p: *Prefs = @ptrCast(@alignCast(ctx));
-        p.files = on;
-        if (p.nl) |s| s.setFiles(on);
-    }
-    fn searchesOut(ctx: *anyopaque, on: bool) void {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        p.searches_out = on;
-        if (p.nl) |s| s.searches_out = on;
-    }
-    fn themeSet(ctx: *anyopaque, t: @import("palette.zig").Theme) void {
-        @as(*Prefs, @ptrCast(@alignCast(ctx))).theme = t;
-    }
-    fn menuBar(ctx: *anyopaque, set: ?bool) bool {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        if (set) |on| p.menu_bar_on = on;
-        return p.menu_bar_on;
-    }
-    fn clipboardEnabled(ctx: *anyopaque, set: ?bool) bool {
-        const p: *Prefs = @ptrCast(@alignCast(ctx));
-        if (set) |on| p.clip_on = on;
-        return p.clip_on;
+        if (set) |t| {
+            p.tint = t;
+            if (p.nl) |s| s.theme = t;
+        }
+        return if (p.nl) |s| s.theme else p.tint;
     }
     fn clipboardClear(ctx: *anyopaque) bool {
         const p: *Prefs = @ptrCast(@alignCast(ctx));

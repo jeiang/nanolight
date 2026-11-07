@@ -2,9 +2,7 @@
 //! and Linux yet): Settings, the panel, the welcome, Google's suggestions,
 //! the sync status, and the update waiting, if one is.
 const nanoui = @import("nanoui");
-const prefs = @import("prefs.zig");
 const platform = @import("platform.zig");
-const suggest_live = @import("suggest_live.zig");
 const update_live = @import("update_live.zig");
 const account_live = @import("account_live.zig");
 const App = @import("app.zig").App;
@@ -16,31 +14,39 @@ pub const Menu = struct {
     update: *update_live.Update,
     sync: *account_live.Sync,
     tray: ?*nanoui.Tray = null,
+    /// Whether the icon is to show, until the tray is made (its switch is
+    /// loaded first: settings_bind.zig `Bind.load`).
+    wanted: bool = true,
 
     /// The icon, unless Settings took it away.
     pub fn start(m: *Menu) !void {
         if (comptime !platform.tray) return;
         m.tray = try m.core.app.newTray(.{ .symbol = "magnifyingglass", .tooltip = "Nanolight" });
-        if (!prefs.flag(m.core.kv, m.core.app.gpa, .menu_bar)) _ = m.bar(false);
+        if (!m.wanted) m.showIcon(false);
     }
 
     pub fn menuHook(m: *Menu) Hook {
         return .{ .ctx = m, .func = rebuild };
     }
 
-    /// Whether the menu bar icon shows; `set` shows or hides it. Hidden,
-    /// Nanolight is its key alone: Settings stays in the panel (⌘,), and
-    /// opening the app again shows the panel. The status item stays, only
-    /// unseen (nanoui's App keeps its trays until it quits).
-    pub fn bar(m: *Menu, set: ?bool) bool {
+    /// Whether the menu bar icon shows.
+    pub fn iconShown(m: *const Menu) bool {
         if (comptime !platform.tray) return false;
         const objc = nanoui.objc;
         const t = m.tray orelse return false;
-        if (set) |on| {
-            prefs.keepFlag(m.core.kv, .menu_bar, on);
-            objc.msg(void, t.item, "setVisible:", .{if (on) objc.YES else objc.NO});
-        }
         return objc.msg(objc.BOOL, t.item, "isVisible", .{});
+    }
+
+    /// Shows or hides the menu bar icon. Hidden, Nanolight is its key
+    /// alone: Settings stays in the panel (⌘,), and opening the app again
+    /// shows the panel. The status item stays, only unseen (nanoui's App
+    /// keeps its trays until it quits).
+    pub fn showIcon(m: *Menu, on: bool) void {
+        if (comptime !platform.tray) return;
+        m.wanted = on;
+        const objc = nanoui.objc;
+        const t = m.tray orelse return;
+        objc.msg(void, t.item, "setVisible:", .{if (on) objc.YES else objc.NO});
     }
 
     fn settings(m: *Menu, _: *nanoui.menu.Item) void {
@@ -56,7 +62,7 @@ pub const Menu = struct {
     }
 
     fn suggestions(m: *Menu, item: *nanoui.menu.Item) void {
-        suggest_live.set(m.core, item.checked, .here);
+        m.core.toggles.set(.suggest, item.checked, .here);
     }
 };
 

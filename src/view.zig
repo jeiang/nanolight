@@ -79,7 +79,7 @@ pub fn height(s: *const Nanolight) f32 {
     return switch (s.screen) {
         .rows => @max(pipeline.rowsHeight(s), s.held_h),
         .preview => chrome.max_height,
-        .settings => settings_view.tall(s.hasClipboard()),
+        .settings => settings_view.height(s.hasClipboard()),
         .clipboard => clipboard_view.height,
         .script => s.script_ui.height(),
         .welcome => |o| o.height(),
@@ -94,13 +94,15 @@ fn draw(s: *Nanolight, c: *ui.Context, p: Palette) void {
     defer body.end();
     switch (s.screen) {
         .rows, .preview => unreachable,
-        .settings => s.settings_ui.draw(c, s, p),
+        .settings => s.settings_ui.draw(c, s.host.settings, s.hasClipboard(), p),
         .clipboard => switch (s.clip_ui.draw(c, &s.query, s.clipboardHost(), p)) {
             .stays => {},
             .back => s.leave(.closed),
         },
         .script => s.script_ui.draw(c, p),
-        .welcome => |o| o.draw(c, s, p),
+        .welcome => |o| if (o.draw(c, p)) |out| switch (out) {
+            .finish => |q| s.finishWelcome(q),
+        },
     }
 }
 

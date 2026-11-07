@@ -132,15 +132,3 @@ fn icons(l: *files.List) void {
         e.png = png;
     }
 }
-
-/// File search is local to this Mac and off unless explicitly enabled.
-pub fn load(core: *App) void {
-    if (platform.files) core.s.files_on = prefs.flag(core.kv, core.app.gpa, .files);
-}
-
-/// Settings' switch: file search on or off, kept for the next launch.
-pub fn set(core: *App, on: bool) void {
-    core.s.setFiles(on);
-    // Unkept, file search follows the switch this run either way.
-    prefs.keepFlag(core.kv, .files, on);
-}

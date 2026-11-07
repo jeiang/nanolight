@@ -95,19 +95,19 @@ test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" 
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try t.clickText("Show in Menu Bar");
     t.settle(1);
-    try std.testing.expect(!prefs.menu_bar_on);
+    try std.testing.expect(!prefs.on.get(.menu_bar));
     try t.clickText("Open Searches in Browser");
     t.settle(1);
-    try std.testing.expect(s.searches_out and prefs.searches_out.?);
+    try std.testing.expect(s.searches_out and prefs.on.get(.browser));
     // Twice more each: back as they were.
     try t.clickText("Show in Menu Bar");
     try t.clickText("Open Searches in Browser");
     t.settle(1);
-    try std.testing.expect(prefs.menu_bar_on and !s.searches_out and !prefs.searches_out.?);
+    try std.testing.expect(prefs.on.get(.menu_bar) and !s.searches_out and !prefs.on.get(.browser));
     // The rows fit: the last one is inside Settings, Settings in the window.
     const quit = t.findText("Quit Nanolight").?;
-    try std.testing.expect(quit.y + quit.h <= settings_view.height);
-    try std.testing.expect(settings_view.height <= chrome.max_height);
+    try std.testing.expect(quit.y + quit.h <= settings_view.height(s.hasClipboard()));
+    try std.testing.expect(view.height(s) <= chrome.max_height);
 }
 
 test "Settings' Open at Login flips what the system says, not a copy" {
@@ -122,14 +122,14 @@ test "Settings' Open at Login flips what the system says, not a copy" {
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try t.clickText("Open at Login");
     t.settle(1);
-    try std.testing.expect(support.Prefs.login_on);
+    try std.testing.expect(prefs.on.get(.login));
     // Turned off elsewhere (System Settings) while Settings is open: the
     // next click turns it on again, from what the system says.
-    support.Prefs.login_on = false;
+    prefs.on.set(.login, false);
     t.settle(1);
     try t.clickText("Open at Login");
     t.settle(1);
-    try std.testing.expect(support.Prefs.login_on);
+    try std.testing.expect(prefs.on.get(.login));
 }
 
 test "recording a key: idle, recording, refused, and never without a recorder" {
@@ -186,6 +186,7 @@ test "Settings' header picks the panel's theme, and keeps it" {
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
+    prefs.nl = s;
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try std.testing.expect(t.findText("System") != null);
     // ↑ from the first row: round to the header's swatches; → twice.
@@ -194,14 +195,14 @@ test "Settings' header picks the panel's theme, and keeps it" {
     _ = t.shortcut(.{ .key = ui.Shortcut.right });
     t.settle(1);
     try std.testing.expectEqual(Theme.forest, s.theme);
-    try std.testing.expectEqual(Theme.forest, prefs.theme.?);
+    try std.testing.expectEqual(Theme.forest, prefs.tint);
     try std.testing.expect(t.findText("Forest") != null);
     // ← past the first: round to the last.
     _ = t.shortcut(.{ .key = ui.Shortcut.left });
     _ = t.shortcut(.{ .key = ui.Shortcut.left });
     _ = t.shortcut(.{ .key = ui.Shortcut.left });
     t.settle(1);
-    try std.testing.expectEqual(Theme.violet, prefs.theme.?);
+    try std.testing.expectEqual(Theme.violet, prefs.tint);
     // In the header, which the rows can't push out of sight.
     const name = t.findText("Violet").?;
     try std.testing.expect(name.y + name.h <= chrome.header_h);
