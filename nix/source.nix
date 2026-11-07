@@ -33,7 +33,7 @@
       # Zig fetches a package without its submodules; nanoui has several.
       fetchSubmodules = false;
       # Nix's own hash of the checkout: a new nanoui pin needs a new one.
-      hash = "sha256-+lyZnQXwswPApJzkV1aZPJK+4MLbqK7ieD9cMvPITIw=";
+      hash = "sha256-9Jop6SHCb+BGX31XQOlFBGulPzk0l/8VQmB4I/MxUsY=";
     };
     # nanoui's dependency, pinned in nanoui's build.zig.zon (not this one's).
     "http_zig-0.1.0-2CB7E00SAwAnwnBkJDgCDm3zLwrCmZZkHNSw5t7X9Vbf" = fetchgit {
