@@ -10,6 +10,7 @@ const assert = std.debug.assert;
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
 const offer = @import("clipboard_offer.zig");
+const dl = @import("dl.zig");
 
 const Proxy = opaque {};
 const Display = opaque {};
@@ -337,7 +338,11 @@ pub const Wl = struct {
     const gpa = std.heap.c_allocator;
 
     pub fn open(w: *Wl) error{ NoLibrary, NoConnection, NoDataControl }!void {
-        w.lib = offer.dlLoad(Lib, "libwayland-client.so.0") orelse return error.NoLibrary;
+        w.lib = dl.table(
+            Lib,
+            &.{.{ .name = "libwayland-client.so.0" }},
+            "no Wayland clipboard history",
+        ) orelse return error.NoLibrary;
         const lib = w.lib;
         const d = lib.wl_display_connect(null) orelse return error.NoConnection;
         w.d = d;

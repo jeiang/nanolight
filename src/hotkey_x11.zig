@@ -1,35 +1,18 @@
 //! Linux: the panel's key, from any app, on X11: a passive grab of Space
 //! with the choice's modifiers on the root window, over an Xlib connection
-//! of Nanolight's own (libX11, opened with dlopen), whose socket nanoui's
-//! loop watches. Wayland has no such grab for apps: there the desktop's
-//! keyboard settings run `nanolight --toggle`.
+//! of Nanolight's own (x11.zig), whose socket nanoui's loop watches.
+//! Wayland has no such grab for apps: there the desktop's keyboard settings
+//! run `nanolight --toggle` (display.zig says which session this is).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const keys = @import("keys.zig");
+const display = @import("display.zig");
+const x11 = @import("x11.zig");
 const Choice = keys.Choice;
 
-const Display = opaque {};
-const Window = c_ulong;
-/// XEvent: a union 24 longs long; `type` first.
-const XEvent = extern struct { type: c_int, pad: [188]u8 = undefined };
 /// XKeyEvent's `time`, after type, serial, send_event, display, window,
 /// root and subwindow.
 const time_offset = 7 * @sizeOf(c_long);
-const ErrorHandler = *const fn (*Display, *anyopaque) callconv(.c) c_int;
-
-const X = struct {
-    XOpenDisplay: *const fn (?[*:0]const u8) callconv(.c) ?*Display,
-    XCloseDisplay: *const fn (*Display) callconv(.c) c_int,
-    XDefaultRootWindow: *const fn (*Display) callconv(.c) Window,
-    XKeysymToKeycode: *const fn (*Display, c_ulong) callconv(.c) u8,
-    XGrabKey: *const fn (*Display, c_int, c_uint, Window, c_int, c_int, c_int) callconv(.c) c_int,
-    XUngrabKey: *const fn (*Display, c_int, c_uint, Window) callconv(.c) c_int,
-    XConnectionNumber: *const fn (*Display) callconv(.c) c_int,
-    XPending: *const fn (*Display) callconv(.c) c_int,
-    XNextEvent: *const fn (*Display, *XEvent) callconv(.c) c_int,
-    XSync: *const fn (*Display, c_int) callconv(.c) c_int,
-    XSetErrorHandler: *const fn (?ErrorHandler) callconv(.c) ?ErrorHandler,
-};
 
 const shift_mask: c_uint = 1;
 const lock_mask: c_uint = 2;
@@ -39,57 +22,26 @@ const mod2_mask: c_uint = 16; // Num Lock
 const key_press: c_int = 2;
 const xk_space: c_ulong = 0x20;
 
-var x: ?X = null;
-var dpy: ?*Display = null;
+var dpy: ?*x11.Display = null;
 var watch: ?nanoui.fdwatch.Watch = null;
 var pressed: ?keys.Pressed = null;
 var grabbed: ?c_uint = null;
 var failed = false;
-/// The X server's time of the last press (`lastPress`).
-var last_time: u32 = 0;
 
-fn env(name: [*:0]const u8) ?[]const u8 {
-    const v = std.c.getenv(name) orelse return null;
-    return std.mem.span(v);
-}
-
-pub fn onX11() bool {
-    return !std.mem.eql(u8, env("XDG_SESSION_TYPE") orelse "", "wayland") and
-        env("DISPLAY") != null;
-}
-
-/// The X server's time of the last press of the key, 0 before one: window
-/// managers refuse focus to a window shown without a recent one.
-pub fn lastPress() u32 {
-    return last_time;
-}
-
-fn load() ?X {
-    if (x) |v| return v;
-    const lib = std.c.dlopen("libX11.so.6", .{ .NOW = true }) orelse return null;
-    var v: X = undefined;
-    inline for (@typeInfo(X).@"struct".field_names) |name| {
-        const sym = std.c.dlsym(lib, name) orelse return null;
-        @field(v, name) = @ptrCast(@alignCast(sym));
-    }
-    x = v;
-    return v;
-}
-
-fn onError(_: *Display, _: *anyopaque) callconv(.c) c_int {
+fn onError(_: *x11.Display, _: *anyopaque) callconv(.c) c_int {
     failed = true;
     return 0;
 }
 
 fn readable(_: ?*anyopaque) callconv(.c) void {
-    const xl = x orelse return;
+    const xl = x11.load() orelse return;
     const d = dpy orelse return;
     while (xl.XPending(d) > 0) {
-        var ev: XEvent = .{ .type = 0 };
+        var ev: x11.Event = .{ .pad = @splat(0) };
         _ = xl.XNextEvent(d, &ev);
         if (ev.type != key_press) continue;
         const bytes = std.mem.asBytes(&ev);
-        last_time = @truncate(
+        x11.last_press = @truncate(
             std.mem.readInt(c_ulong, bytes[time_offset..][0..@sizeOf(c_ulong)], .little),
         );
         if (pressed) |p| p.func(p.ctx);
@@ -98,7 +50,7 @@ fn readable(_: ?*anyopaque) callconv(.c) void {
 
 /// Nanolight's own connection, opened once, its socket watched: a key
 /// grabbed on a connection nobody reads would never fire.
-fn open(xl: X) !*Display {
+fn open(xl: x11.Lib) !*x11.Display {
     if (dpy) |d| return d;
     const d = xl.XOpenDisplay(null) orelse return error.NoDisplay;
     watch = nanoui.fdwatch.readable(xl.XConnectionNumber(d), null, readable) catch |e| {
@@ -122,8 +74,12 @@ fn modifiers(choice: Choice) c_uint {
 
 pub fn register(choice: Choice, on: keys.Pressed) !void {
     pressed = on;
-    if (!onX11()) return error.Wayland;
-    const xl = load() orelse return error.NoX11;
+    switch (display.session()) {
+        .x11 => {},
+        .wayland => return error.Wayland,
+        .none => return error.NoDisplay,
+    }
+    const xl = x11.load() orelse return error.NoX11;
     const d = try open(xl);
     const root = xl.XDefaultRootWindow(d);
     const code: c_int = xl.XKeysymToKeycode(d, xk_space);
@@ -152,10 +108,10 @@ pub fn register(choice: Choice, on: keys.Pressed) !void {
 /// Whether another client (the window manager: Alt Space is its window
 /// menu on many desktops) holds `choice`: grabbed and let go again.
 pub fn taken(choice: Choice) bool {
-    if (!onX11()) return false;
+    if (display.session() != .x11) return false;
     const m = modifiers(choice);
     if (grabbed == m) return false;
-    const xl = load() orelse return false;
+    const xl = x11.load() orelse return false;
     // No connection, no grab to test: `register` says why.
     const d = open(xl) catch return false;
     const root = xl.XDefaultRootWindow(d);

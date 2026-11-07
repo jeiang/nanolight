@@ -3,7 +3,6 @@
 const std = @import("std");
 const single = @import("single.zig");
 const msg = @import("win_msg.zig");
-const hotkey_win = @import("hotkey_win.zig");
 
 var listener: ?single.Listener = null;
 
@@ -12,12 +11,12 @@ fn heard(cmd: single.Command) void {
     l.func(l.ctx, cmd);
 }
 
-/// An older copy left running keeps its window; this one makes its own
-/// beside it all the same: the hot key needs it.
+/// An older copy left running keeps its window; this one has its own
+/// beside it all the same (the hot key may have made it already).
 pub fn claim(io: std.Io, on: single.Listener) single.Older {
     const older = single.quitOlder(io, @This());
     listener = on;
-    if (msg.create(.{ .hotkey = hotkey_win.pressed, .command = heard }) == null)
+    if (msg.ensure(.{ .command = heard }) == null)
         std.log.warn("nanolight: no message window; `--toggle` can't reach this copy", .{});
     return older;
 }

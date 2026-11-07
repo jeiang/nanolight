@@ -1,28 +1,12 @@
 //! What both Linux transports (clipboard_wl.zig, clipboard_x11.zig) share:
 //! which of an offer's types to read and in what order, how the bytes read
-//! become an item, how a copied entry is served back, and the C and timer
-//! glue they both need.
+//! become an item, how a copied entry is served back, and the timer glue
+//! they both need.
 const std = @import("std");
 const assert = std.debug.assert;
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
 const percentEncode = @import("text.zig").percentEncode;
-
-pub fn env(name: [*:0]const u8) ?[]const u8 {
-    const v = std.c.getenv(name) orelse return null;
-    return std.mem.span(v);
-}
-
-/// A table of C functions from one shared library, by the field names.
-pub fn dlLoad(comptime T: type, name: [*:0]const u8) ?T {
-    const lib = std.c.dlopen(name, .{ .NOW = true }) orelse return null;
-    var v: T = undefined;
-    inline for (@typeInfo(T).@"struct".field_names) |f| {
-        const sym = std.c.dlsym(lib, f) orelse return null;
-        @field(v, f) = @ptrCast(@alignCast(sym));
-    }
-    return v;
-}
 
 /// Calls `f(owner, id)` on the main thread after `ms`.
 pub fn after(comptime T: type, owner: *T, id: u32, ms: u64, comptime f: fn (*T, u32) void) void {
