@@ -5,8 +5,14 @@ const prefs = @import("prefs.zig");
 const suggest = @import("suggest.zig");
 const view = @import("view.zig");
 const platform = @import("platform.zig");
+const paths = @import("paths.zig");
 const after = @import("after.zig");
 const App = @import("app.zig").App;
+
+/// File search is the Mac's alone (`platform.files`): main.zig hands the
+/// panel `entry` only there, so no other build reaches these.
+const spotlight = if (platform.files) @import("spotlight.zig") else @compileError("no file search");
+const icon_mac = if (platform.files) @import("icon_mac.zig") else @compileError("no file search");
 
 pub const Files = struct {
     core: *App,
@@ -76,10 +82,10 @@ const FileAsk = struct {
     fn run(a: *FileAsk) void {
         const q = a.text[0..a.len];
         const io = a.owner.core.app.io;
-        if (@import("paths.zig").isPath(q)) {
+        if (paths.isPath(q)) {
             files.complete(io, q, &a.found);
             a.ok = true;
-        } else a.ok = @import("spotlight.zig").find(
+        } else a.ok = spotlight.find(
             io,
             q,
             a.locations orelse "",
@@ -93,7 +99,7 @@ const FileAsk = struct {
                 break :oom false;
             },
         };
-        if (a.ok) a.found.icons();
+        if (a.ok) icons(&a.found);
         after.oneShot(0, a, done);
     }
 
@@ -116,6 +122,15 @@ const FileAsk = struct {
         gpa.destroy(a);
     }
 };
+
+/// Finder icons, prepared off the UI thread along with the answer.
+fn icons(l: *files.List) void {
+    for (l.entries[0..l.n]) |*e| {
+        const png = icon_mac.png(l.allocator, e.path()) orelse continue;
+        l.allocator.free(e.png);
+        e.png = png;
+    }
+}
 
 /// File search is local to this Mac and off unless explicitly enabled.
 pub fn load(core: *App) void {

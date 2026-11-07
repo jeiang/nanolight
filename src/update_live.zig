@@ -34,7 +34,7 @@ pub const Update = struct {
 
     /// The updater, unless this build never updates itself.
     pub fn start(u: *Update, init: std.process.Init) void {
-        if (build.nix_managed) return;
+        if (!platform.updater) return;
         const updater = nanoui.Updater.start(init, .{
             .repo = build.repo,
             .asset = build.asset,

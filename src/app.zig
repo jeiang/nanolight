@@ -11,8 +11,8 @@ const shortcut = @import("shortcut.zig");
 const shortcut_clash = @import("shortcut_clash.zig");
 const settings_panes = @import("settings_panes.zig");
 const hotkey = @import("hotkey.zig");
-const platform = @import("platform.zig");
-const panel = platform.panel;
+const shell = @import("shell.zig");
+const panel = shell.panel;
 const single = @import("single.zig");
 const account = @import("account.zig");
 const clock = @import("clock.zig");
@@ -79,11 +79,11 @@ pub const App = struct {
     /// The key that shows the panel.
     choice: keys.Choice,
     window: ?*nanoui.Window = null,
-    preview: platform.Preview = .{},
+    preview: shell.Preview = .{},
     /// Clicks outside the panel go to what is under it (clickthrough.zig).
-    through: platform.ClickThrough = .{},
+    through: shell.ClickThrough = .{},
     /// A key of one's own, being recorded in Settings (recorder.zig).
-    recorder: platform.Recorder = .{},
+    recorder: shell.Recorder = .{},
     /// The account settings sync through (account_live.zig); null without one.
     acct: ?*account.Account = null,
     hooks: Hooks = .{},
@@ -116,7 +116,7 @@ pub const App = struct {
             .ctx = a,
             .apply = apply,
             .fix = fix,
-            .login = if (a.o.skip_key) null else platform.Login.enabled,
+            .login = if (a.o.skip_key) null else shell.Login.enabled,
             .done = done,
         };
     }
@@ -130,7 +130,7 @@ pub const App = struct {
             .pane => |i| _ = nanoui.shell.openUrl(settings_panes.urls[i]),
             .script, .folder => if (a.hooks.opens) |h| h.func(h.ctx, target),
             .app => |path| {
-                if (platform.Single.isSelf(path)) {
+                if (shell.Single.isSelf(path)) {
                     // Nanolight is already open: the panel comes back, empty,
                     // rather than macOS starting a second copy.
                     a.s.query.clear();

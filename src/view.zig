@@ -129,7 +129,7 @@ pub const Nanolight = struct {
     res: results.Results = .{},
     sel: usize = 0,
     host: ?Host = null,
-    /// How the window holds the panel (`platform.panel.setup`).
+    /// How the window holds the panel (`shell.panel.setup`).
     fit: chrome.Fit = .{},
     /// Return sends a Google search to the browser and ⌘↩ shows it in
     /// the panel, the other way round from the default (issue #10).

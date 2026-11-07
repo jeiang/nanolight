@@ -4,12 +4,11 @@
 //! the launchers that are running. A PC keeps no such table: each of the four
 //! is tried (`hotkey.taken`).
 const std = @import("std");
-const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const keys = @import("keys.zig");
 const hotkey = @import("hotkey.zig");
 const Choice = keys.Choice;
-const mac = builtin.os.tag == .macos;
+const mac = @import("os.zig").mac;
 const objc = nanoui.objc;
 
 /// The system's shortcuts, by their id in `com.apple.symbolichotkeys`: those

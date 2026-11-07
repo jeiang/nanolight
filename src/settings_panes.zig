@@ -5,7 +5,7 @@
 //! never listed.
 const std = @import("std");
 const search = @import("search.zig");
-const mac = @import("builtin").os.tag == .macos;
+const mac = @import("os.zig").mac;
 
 pub const Pane = struct {
     name: []const u8,

@@ -60,6 +60,8 @@ test {
     _ = @import("tests_prefs.zig");
     _ = @import("tests_files.zig");
     _ = @import("platform.zig");
+    _ = @import("shell.zig");
+    _ = @import("hotkey.zig");
     _ = @import("web.zig");
     _ = @import("launchers.zig");
     _ = @import("single.zig");
@@ -371,7 +373,7 @@ test "Google's completions land below, and a search shows in the panel" {
 const onboard = @import("onboard.zig");
 const keys = @import("keys.zig");
 const shortcut_clash = @import("shortcut_clash.zig");
-const nix = @import("build_options").nix_managed;
+const platform = @import("platform.zig");
 
 const Steps = struct {
     applied: ?keys.Choice = null,
@@ -643,18 +645,18 @@ fn settingsRig(rig: *Rig, prefs: *Prefs) !void {
 }
 
 test "Settings has login and updates rows, under this machine's name" {
-    if (nix) return error.SkipZigTest;
+    if (!platform.login_ui) return error.SkipZigTest;
     var prefs: Prefs = .{};
     var rig: Rig = undefined;
     try settingsRig(&rig, &prefs);
     defer rig.deinit();
-    try std.testing.expect(rig.t.hasText("This " ++ @import("platform.zig").machine));
+    try std.testing.expect(rig.t.hasText("This " ++ platform.machine));
     try std.testing.expect(rig.t.hasText("Open at Login"));
     try std.testing.expect(rig.t.hasText("Check for Updates"));
 }
 
 test "a Nix build's Settings has no login or updates row" {
-    if (!nix) return error.SkipZigTest;
+    if (platform.login_ui) return error.SkipZigTest;
     var prefs: Prefs = .{};
     var rig: Rig = undefined;
     try settingsRig(&rig, &prefs);

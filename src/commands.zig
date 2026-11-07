@@ -11,7 +11,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const proc = @import("proc.zig");
 const search = @import("search.zig");
-const windows = builtin.os.tag == .windows;
+const windows = @import("os.zig").windows;
 
 pub const Command = struct {
     name: []const u8,

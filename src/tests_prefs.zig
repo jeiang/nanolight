@@ -108,7 +108,7 @@ test "Settings hides the menu bar icon and sends searches out (issues #8, #10)" 
 }
 
 test "Settings' Open at Login flips what the system says, not a copy" {
-    if (@import("build_options").nix_managed) return error.SkipZigTest;
+    if (!platform.login_ui) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var prefs: support.Prefs = .{};
     prefs.init();

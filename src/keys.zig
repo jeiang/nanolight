@@ -3,7 +3,6 @@
 //! the layout), and Carbon's modifier bits, on every OS. A Mac takes any key;
 //! a PC grabs Space with one of four sets of modifiers (`any_key`).
 const std = @import("std");
-const builtin = @import("builtin");
 
 /// Carbon's modifier bits.
 pub const cmd: u32 = 1 << 8;
@@ -40,7 +39,7 @@ pub fn functionKey(code: u32) ?u8 {
 /// A Mac's Carbon hot key is any key; a PC grabs Space with an offered key's
 /// modifiers (hotkey_win.zig, hotkey_x11.zig), so there only the four are
 /// offered and kept.
-pub const any_key = builtin.os.tag == .macos;
+pub const any_key = @import("os.zig").mac;
 
 /// What the hot key calls, on the main thread (hotkey.zig).
 pub const Pressed = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque) void };

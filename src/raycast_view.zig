@@ -12,11 +12,11 @@ const model = @import("raycast_model.zig");
 const platform = @import("platform.zig");
 
 /// ⌘K on the Mac; Ctrl+K moves up on a PC, so the actions are on Ctrl+O.
-pub const actions_key: ui.Shortcut = if (@import("builtin").os.tag == .macos)
+pub const actions_key: ui.Shortcut = if (@import("os.zig").mac)
     .{ .key = 'k', .cmd = true }
 else
     .{ .key = 'o', .ctrl = true };
-const actions_hint = if (@import("builtin").os.tag == .macos) "⌘K" else "Ctrl+O";
+const actions_hint = if (@import("os.zig").mac) "⌘K" else "Ctrl+O";
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;
 /// A dropdown's choices shown, as buttons in its row.

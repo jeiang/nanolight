@@ -10,13 +10,12 @@
 //! Xlib connection of the panel's own whose socket nanoui's loop watches;
 //! when another window becomes it, the panel goes, as the Mac's popover does.
 const std = @import("std");
-const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const chrome = @import("chrome.zig");
 const dl = @import("dl.zig");
 const display = @import("display.zig");
 const x11 = @import("x11.zig");
-const windows = builtin.os.tag == .windows;
+const windows = @import("os.zig").windows;
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 

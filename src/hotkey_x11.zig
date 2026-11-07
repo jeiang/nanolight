@@ -21,6 +21,8 @@ const mod1_mask: c_uint = 8; // Alt
 const mod2_mask: c_uint = 16; // Num Lock
 const key_press: c_int = 2;
 const xk_space: c_ulong = 0x20;
+/// Caps Lock and Num Lock are modifiers too: the key is grabbed with each.
+const locks = [_]c_uint{ 0, lock_mask, mod2_mask, lock_mask | mod2_mask };
 
 var dpy: ?*x11.Display = null;
 var watch: ?nanoui.fdwatch.Watch = null;
@@ -83,26 +85,33 @@ pub fn register(choice: Choice, on: keys.Pressed) !void {
     const d = try open(xl);
     const root = xl.XDefaultRootWindow(d);
     const code: c_int = xl.XKeysymToKeycode(d, xk_space);
-    // Caps Lock and Num Lock are modifiers too: grab with each.
-    const extra = [_]c_uint{ 0, lock_mask, mod2_mask, lock_mask | mod2_mask };
-    if (grabbed) |m| for (extra) |e| {
-        _ = xl.XUngrabKey(d, code, m | e, root);
-    };
-    grabbed = null;
+    unregister();
     const m = modifiers(choice);
     // Another client holding the key answers BadAccess, asynchronously:
     // caught here, with GDK's handler put back after.
     failed = false;
     const before = xl.XSetErrorHandler(&onError);
-    for (extra) |e| _ = xl.XGrabKey(d, code, m | e, root, 0, 1, 1);
+    for (locks) |e| _ = xl.XGrabKey(d, code, m | e, root, 0, 1, 1);
     _ = xl.XSync(d, 0);
     _ = xl.XSetErrorHandler(before);
     if (failed) {
-        for (extra) |e| _ = xl.XUngrabKey(d, code, m | e, root);
+        for (locks) |e| _ = xl.XUngrabKey(d, code, m | e, root);
         _ = xl.XSync(d, 0);
         return error.HotKeyTaken;
     }
     grabbed = m;
+}
+
+/// Gives the key back (while another is recorded); `register` takes one again.
+pub fn unregister() void {
+    const m = grabbed orelse return;
+    grabbed = null;
+    const xl = x11.load() orelse return;
+    const d = dpy orelse return;
+    const root = xl.XDefaultRootWindow(d);
+    const code: c_int = xl.XKeysymToKeycode(d, xk_space);
+    for (locks) |e| _ = xl.XUngrabKey(d, code, m | e, root);
+    _ = xl.XSync(d, 0);
 }
 
 /// Whether another client (the window manager: Alt Space is its window

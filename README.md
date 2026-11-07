@@ -251,7 +251,8 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/rates_table.zig`, `src/rates.zig` | Currency rates: the table and its JSON; when to refetch it, its fetch and its copy on disk |
 | `src/suggest.zig` | Google's completions: the privacy guard, decoding, the cache (after [browse](https://github.com/justrach/browse)) |
 | `src/preview.zig` | The results page in the panel (WKWebView, the Mac) |
-| `src/platform.zig` | Each OS's parts, picked once, and what it can do; `src/pc_stubs.zig` stands in for the Mac's, checked against them |
+| `src/os.zig`, `src/platform.zig` | Which OS this build is for; what it can do (file search, a page in the panel, the tray, a Nix build's updater and login item) and the words that differ |
+| `src/shell.zig` | Each OS's parts, picked once, for the app alone; `src/pc_stubs.zig` stands in for the Mac's, checked against them |
 | `src/panel_mac.zig`, `src/panel_pc.zig` | The panel's window on the Mac, and on Windows and Linux (with X11's focus) |
 | `src/hotkey*.zig`, `src/apps_*.zig`, `src/single*.zig`, `src/login.zig` | Each platform's key, apps, single copy and login item; `src/single.zig` holds the command wire and the wait for an older copy to quit, `src/win_msg.zig` the Windows message window |
 | `src/display.zig`, `src/x11.zig`, `src/dl.zig` | Linux's display session, the one rule the clipboard, key and panel follow; libX11's types and functions; C libraries opened at run time, a missing function logged |

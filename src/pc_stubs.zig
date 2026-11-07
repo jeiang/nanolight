@@ -3,7 +3,7 @@
 //! clicks passing through the window round the panel (clickthrough.zig;
 //! there the window is the panel's size, so there is nothing to pass),
 //! and recording a key of one's own (recorder.zig; there the four offered
-//! are the choice). platform.zig checks each against the Mac's type.
+//! are the choice). shell.zig checks each against the Mac's type.
 const nanoui = @import("nanoui");
 const preview = @import("preview.zig");
 const recorder = @import("recorder.zig");

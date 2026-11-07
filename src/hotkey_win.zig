@@ -51,6 +51,14 @@ pub fn register(choice: Choice, on: keys.Pressed) !void {
     current = modifiers(choice);
 }
 
+/// Gives the key back (while another is recorded); `register` takes one again.
+pub fn unregister() void {
+    if (!registered) return;
+    registered = false;
+    const h = msg.ensure(.{ .hotkey = pressed }) orelse return;
+    _ = UnregisterHotKey(h, id);
+}
+
 /// Whether another app holds `choice`: registered and let go again.
 pub fn taken(choice: Choice) bool {
     const m = modifiers(choice);

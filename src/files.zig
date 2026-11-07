@@ -99,16 +99,6 @@ pub const List = struct {
             }
         }.before);
     }
-
-    /// Finder icons are prepared off the UI thread along with the answer
-    /// (file search is the Mac's alone, platform.zig's `files`).
-    pub fn icons(l: *List) void {
-        for (l.entries[0..l.n]) |*e| {
-            const png = @import("icon_mac.zig").png(l.allocator, e.path()) orelse continue;
-            l.allocator.free(e.png);
-            e.png = png;
-        }
-    }
 };
 
 /// Existing paths lead; partial paths list a handful of matching siblings.

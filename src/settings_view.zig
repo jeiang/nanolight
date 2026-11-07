@@ -15,10 +15,8 @@ const Choice = key_choice.Choice;
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;
 const Theme = @import("palette.zig").Theme;
-const mac = @import("builtin").os.tag == .macos;
+const mac = @import("os.zig").mac;
 const platform = @import("platform.zig");
-/// A Nix build: the Nix modules own startup and updates.
-const nix = @import("build_options").nix_managed;
 
 const RowKind = enum {
     choice,
@@ -91,7 +89,8 @@ fn present(kind: RowKind, clip: bool) bool {
         .files => platform.files,
         .browser => platform.preview,
         .menu_bar => platform.tray,
-        .login, .updates => !nix,
+        .login => platform.login_ui,
+        .updates => platform.updater,
         .clipboard, .clear_clipboard => clip,
         .choice, .suggest, .welcome, .quit, .theme => true,
     };

@@ -5,7 +5,7 @@
 //! where the desktop's shortcut settings must run it. `isSelf` says
 //! whether an app is Nanolight.
 //!
-//! Each OS's (platform.zig's `Single`): Mac: NSRunningApplication
+//! Each OS's (shell.zig's `Single`): Mac: NSRunningApplication
 //! (single_mac.zig). Windows: a message window (single_win.zig). Linux: a
 //! socket in $XDG_RUNTIME_DIR (single_unix.zig).
 const std = @import("std");
