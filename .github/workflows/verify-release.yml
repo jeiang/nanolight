@@ -75,7 +75,15 @@ jobs:
             exit 1
           fi
           echo "to=$to" >> "$GITHUB_OUTPUT"
-          from="${FROM:-$(echo "$releases" | awk -v to="$to" 'after && $2 == "false" { print $1; exit } $1 == to { after = 1 }')}"
+          # The releases older than "to", newest first: the ones it may update from.
+          older=$(echo "$releases" | awk -v to="$to" 'after { print } $1 == to { after = 1 }')
+          from="${FROM:-$(echo "$older" | awk '$2 == "false" { print $1; exit }')}"
+          # A repository's first release has nothing before it: the files are
+          # checked, the update is not (there is no older app to update from).
+          if [ -z "$from" ] && [ -z "$older" ]; then
+            echo "::notice::$to is the first release: there is nothing to update from"
+            exit 0
+          fi
           if [ -z "$from" ] && [ "$PULL_REQUEST" = true ]; then
             echo "::notice::no published release before $to: the update isn't checked"
             exit 0

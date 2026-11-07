@@ -1,17 +1,25 @@
 # Tests Nanolight and builds its app on every push and pull request.
+# The Mac's job is the expensive one: a newer push to the same branch
+# cancels the run it superseded.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   macos:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # Zig: build.zig.zon's minimum_zig_version.
@@ -31,6 +39,7 @@ jobs:
   # The tests on Linux, where they draw with nanoui's own text and renderer.
   linux:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -40,7 +49,8 @@ jobs:
   # Needs a committed flake.lock (`nix flake lock`).
   nix:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/nix-installer-action@v23
       - run: nix flake check -L
