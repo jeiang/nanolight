@@ -4,6 +4,8 @@
 //! here (settings_view.zig), config.zig's seeds take their sync from it,
 //! and the app keeps and loads them all one way (settings_bind.zig, which
 //! has each one's owner). A new one: a prefs key, a row and its owner.
+const std = @import("std");
+const nanoui = @import("nanoui");
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 const platform = @import("platform.zig");
@@ -54,6 +56,18 @@ pub const Toggle = enum {
             .clipboard => clip,
         };
     }
+
+    /// As kept, or when nothing is: `owned`, its owner's say where it has
+    /// one (the config's `[clipboard] enabled`), else prefs.zig's default.
+    pub fn kept(
+        comptime t: Toggle,
+        kv: nanoui.kv.Store,
+        gpa: std.mem.Allocator,
+        owned: ?bool,
+    ) bool {
+        const k = comptime t.row().pref.?;
+        return if (owned) |unset| prefs.flagOr(kv, gpa, k, unset) else prefs.flag(kv, gpa, k);
+    }
 };
 
 pub const Row = struct {
@@ -83,3 +97,15 @@ pub const Setter = struct {
         s.func(s.ctx, t, on, origin);
     }
 };
+
+test "history kept nowhere is as the config says: off stays off" {
+    const t = std.testing;
+    var m: nanoui.kv.Memory = .{ .gpa = t.allocator };
+    defer m.deinit();
+    const kv = m.store();
+    try t.expect(!Toggle.clipboard.kept(kv, t.allocator, false));
+    try t.expect(Toggle.clipboard.kept(kv, t.allocator, null));
+    // Kept, the switch is what was kept, whatever the config says.
+    try t.expect(prefs.setFlag(kv, .clipboard, true));
+    try t.expect(Toggle.clipboard.kept(kv, t.allocator, false));
+}

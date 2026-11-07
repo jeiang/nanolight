@@ -35,6 +35,7 @@ test {
     _ = @import("toml.zig");
     _ = @import("config.zig");
     _ = @import("prefs.zig");
+    _ = @import("toggles.zig");
     _ = @import("palette.zig");
     _ = @import("apps.zig");
     _ = @import("app_scan.zig");

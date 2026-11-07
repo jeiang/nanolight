@@ -72,6 +72,13 @@ pub const Clip = struct {
         if (c.store != null) c.watcher.noteFrontmost();
     }
 
+    /// The config's `[clipboard] enabled`: history's switch while none is
+    /// kept. Null when the config does not say, or there is no history.
+    pub fn configured(c: *const Clip) ?bool {
+        const store = if (c.store) |*s| s else return null;
+        return store.cfg.enabled;
+    }
+
     /// Settings' switch: whether history records. Off on a system with no
     /// history.
     pub fn recording(c: *const Clip) bool {

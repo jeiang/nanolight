@@ -47,15 +47,16 @@ pub const Bind = struct {
         return .{ .ctx = b, .func = setFrom };
     }
 
-    /// Every switch this build shows, as kept (or its default), into its
-    /// owner: once its owners are there (the clipboard's store opened; the
-    /// menu bar icon, made after, follows what this says).
+    /// Every switch this build shows, as kept (or its owner's or prefs'
+    /// default), into its owner: once its owners are there (the clipboard's
+    /// store opened; the menu bar icon, made after, follows what this says).
     pub fn load(b: *Bind) void {
         const gpa = b.core.app.gpa;
         const clip = b.core.s.hasClipboard();
         inline for (comptime std.enums.values(Toggle)) |t| {
-            const row = comptime t.row();
-            if (row.pref) |k| if (t.present(clip)) b.own(t, prefs.flag(b.core.kv, gpa, k), true);
+            if (comptime t.row().pref != null) {
+                if (t.present(clip)) b.own(t, t.kept(b.core.kv, gpa, b.unset(t)), true);
+            }
         }
     }
 
@@ -87,6 +88,15 @@ pub const Bind = struct {
             .login => shell.Login.enabled(null),
             .menu_bar => b.menu.iconShown(),
             .clipboard => b.clip.recording(),
+        };
+    }
+
+    /// What the switch's owner says it is when nothing is kept; null for
+    /// prefs.zig's default.
+    fn unset(b: *const Bind, t: Toggle) ?bool {
+        return switch (t) {
+            .clipboard => b.clip.configured(),
+            .suggest, .files, .browser, .login, .menu_bar => null,
         };
     }
 
