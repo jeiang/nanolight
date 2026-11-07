@@ -159,7 +159,12 @@ pub const App = struct {
     pub fn hide(ctx: *anyopaque) void {
         const a = from(ctx);
         a.s.hid(clock.now());
-        if (a.window) |w| w.hide();
+        // The hot key's press time goes with the panel (panel_x11.zig): a
+        // later show without a press is not the hot key's.
+        if (a.window) |w| {
+            shell.panel.lostKeys(w);
+            w.hide();
+        }
     }
 
     /// The window (or the Mac's glass under the panel) to its height.
