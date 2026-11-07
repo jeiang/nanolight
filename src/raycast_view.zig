@@ -37,8 +37,8 @@ const field_gap = 12;
 /// A detail's padding, and the gap between its parts.
 const detail_py = 18;
 const detail_gap = 10;
-/// An output line (12.5-point monospace) as the font draws it, measured,
-/// and the gap after it.
+/// An output line (12.5-point monospace) as the Mac's font draws it,
+/// measured (tests_ext.zig checks it), and the gap after it.
 pub const output_line_h = 15;
 const output_gap = 4;
 /// A Markdown line and its gap, as estimated: how its words wrap is not.

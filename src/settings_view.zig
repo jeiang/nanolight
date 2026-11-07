@@ -102,8 +102,8 @@ fn present(kind: RowKind, clip: bool) bool {
 const gap: f32 = if (mac) 8 else 10;
 /// A switch's or a button's row.
 const row_h: f32 = 36;
-/// A heading's line (`Palette.heading`, 11.5 points) as the font draws it:
-/// measured (tests_clipboard.zig checks it).
+/// A heading's line (`Palette.heading`, 11.5 points) as the Mac's system
+/// font draws it: measured (tests_clipboard.zig checks it).
 pub const heading_h: f32 = 14;
 /// Without the clipboard's section: measured, not added up. The Mac has
 /// three rows more (file search, where searches open, and the menu bar
