@@ -359,8 +359,8 @@ fn fresh(store: nanoui.kv.Store, gpa: std.mem.Allocator, key: []const u8, value:
 /// failed write is tried again at the next start rather than lost.
 fn record(store: nanoui.kv.Store, key: []const u8, value: []const u8) void {
     var buf: [prefs.applied_key_max]u8 = undefined;
-    // A failure is logged; the next start applies the same value again.
-    _ = prefs.put(store, prefs.appliedKey(&buf, key), value);
+    // Unkept, the next start applies the same value again.
+    prefs.keep(store, prefs.appliedKey(&buf, key), value);
 }
 
 /// A key left out of the file is forgotten, so putting its old value back
@@ -396,14 +396,14 @@ fn field(c: Config, comptime path: []const u8) Field(path) {
 /// before its applied record. A changed key that syncs counts as a local change at
 /// `now`, so it syncs.
 fn seed(store: nanoui.kv.Store, gpa: std.mem.Allocator, c: Config, now: i64) void {
-    // A failure is logged; the next start with no file then uses the defaults.
-    _ = prefs.setText(store, .config_seen, "1");
+    // Unkept, the next start with no file uses the defaults.
+    prefs.keepText(store, .config_seen, "1");
     var synced = false;
     inline for (seeds) |s| {
         if (seedOne(store, gpa, s, field(c, s.key)) and comptime s.syncs()) synced = true;
     }
-    // A failure is logged; the change still syncs at the next one.
-    if (synced) _ = prefs.setInt(store, .sync_at, now);
+    // Unkept, the change still syncs at the next one.
+    if (synced) prefs.keepInt(store, .sync_at, now);
 }
 
 /// Applies the file's `value` for `s` if it is new: whether it was. Left out

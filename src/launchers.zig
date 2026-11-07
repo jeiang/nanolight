@@ -215,7 +215,7 @@ pub const Tally = struct {
         const kv = t.kv orelse return;
         const text = t.counts.encode(gpa) orelse return;
         defer gpa.free(text);
-        _ = prefs.setText(kv, .launches, text);
+        prefs.keepText(kv, .launches, text);
     }
 
     /// Older rows kept an app's count by its name: its key keeps it now.

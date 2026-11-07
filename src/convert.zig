@@ -4,6 +4,7 @@
 //! is pure parsing; calc.zig works out the math. Money is converted by
 //! whatever rates `answer` is handed (a `Lookup`; rates_table.zig's table).
 const std = @import("std");
+const assert = std.debug.assert;
 const calc = @import("calc.zig");
 
 const Family = enum { length, mass, temperature, volume, area, speed, data, time };
@@ -268,12 +269,17 @@ fn first(u: *const Unit) []const u8 {
     return u.names[0 .. std.mem.indexOfScalar(u8, u.names, ',') orelse u.names.len];
 }
 
-/// `v` to `decimals` places, with thousands separators when `grouped`.
+/// `v` to `decimals` places, with thousands separators when `grouped`;
+/// `calc.scientific` when the grouped form doesn't fit `buf`.
 fn fixed(buf: []u8, v: f64, decimals: usize, grouped: bool) []const u8 {
+    assert(buf.len >= calc.scientific_len);
     var tmp: [64]u8 = undefined;
-    const s = std.fmt.bufPrint(&tmp, "{d:.[1]}", .{ v, decimals }) catch return "";
-    if (!grouped) return std.fmt.bufPrint(buf, "{s}", .{s}) catch "";
-    return calc.group(buf, s);
+    const s = std.fmt.bufPrint(&tmp, "{d:.[1]}", .{ v, decimals }) catch
+        return calc.scientific(buf, v);
+    const g = calc.group(buf, s) orelse return calc.scientific(buf, v);
+    if (grouped) return g;
+    @memcpy(buf[0..s.len], s);
+    return buf[0..s.len];
 }
 
 /// A converted amount of money: two places, more for a tiny one.
@@ -284,45 +290,53 @@ pub fn formatMoney(buf: []u8, v: f64, grouped: bool) []const u8 {
     return fixed(buf, v, places, grouped);
 }
 
+/// The room `formatRate` takes.
+const rate_len = 32;
+
 /// An exchange rate to six significant digits, without trailing zeros.
 pub fn formatRate(buf: []u8, v: f64) []const u8 {
     const places: usize = @intFromFloat(std.math.clamp(5 - @floor(@log10(@abs(v))), 0, 12));
     const s = fixed(buf, v, places, false);
-    if (std.mem.indexOfScalar(u8, s, '.') == null) return s;
+    if (std.mem.indexOfScalar(u8, s, '.') == null or std.mem.indexOfScalar(u8, s, 'e') != null)
+        return s;
     return std.mem.trimEnd(u8, std.mem.trimEnd(u8, s, "0"), ".");
 }
 
+/// The room `rateLine` takes.
+pub const rate_line_len = "1 USD =  TTD · 2026-11-03".len + rate_len;
+
 /// "1 USD = 6.785 TTD · 2026-11-03".
 pub fn rateLine(buf: []u8, m: Money) []const u8 {
-    var rb: [40]u8 = undefined;
+    assert(buf.len >= rate_line_len);
+    var rb: [rate_len]u8 = undefined;
     return std.fmt.bufPrint(
         buf,
         "1 {s} = {s} {s} · {s}",
         .{ m.from, formatRate(&rb, m.rate), m.to, m.date },
-    ) catch "";
+    ) catch unreachable;
 }
 
-/// Six significant digits, "9.09091e-13": fixed decimals would print 0.
-fn scientific(buf: []u8, v: f64) []const u8 {
-    var tmp: [40]u8 = undefined;
-    const s = std.fmt.bufPrint(&tmp, "{e:.5}", .{v}) catch return "";
-    const at = std.mem.indexOfScalar(u8, s, 'e') orelse return s;
-    const m = std.mem.trimEnd(u8, std.mem.trimEnd(u8, s[0..at], "0"), ".");
-    return std.fmt.bufPrint(buf, "{s}{s}", .{ m, s[at..] }) catch "";
-}
+/// A number as an answer writes it beside a unit or a currency code. The
+/// row and what it copies take the same room, so they agree on the form.
+pub const number_len = 32;
+
+/// The room `formatUnit` takes.
+pub const unit_len = number_len + " ".len + unit_name_len;
 
 /// The unit answer as the row shows it, and as Return copies it.
 pub fn formatUnit(buf: []u8, a: UnitAnswer, grouped: bool) []const u8 {
-    var nb: [64]u8 = undefined;
+    assert(buf.len >= unit_len);
+    var nb: [number_len]u8 = undefined;
     return std.fmt.bufPrint(
         buf,
         "{s} {s}",
         .{ formatUnitValue(&nb, a.value, grouped), a.to },
-    ) catch "";
+    ) catch unreachable;
 }
 
 pub fn formatUnitValue(buf: []u8, v: f64, grouped: bool) []const u8 {
-    return if (v != 0 and @abs(v) < 1e-4) scientific(buf, v) else calc.format(buf, v, grouped);
+    if (v != 0 and @abs(v) < 1e-4) return calc.scientific(buf, v);
+    return calc.format(buf, v, grouped);
 }
 
 const testing = std.testing;
@@ -610,4 +624,15 @@ test "money and rates read as people write them" {
     const w = answer("2 km to mm", null).?.unit;
     try testing.expectEqualStrings("2,000,000 mm", formatUnit(&buf, w, true));
     try testing.expectEqualStrings("2000000 mm", formatUnit(&buf, w, false));
+}
+
+test "an amount too long to write out is scientific in the row and the copy" {
+    var buf: [number_len]u8 = undefined;
+    try testing.expectEqualStrings("1e25", formatMoney(&buf, 1e25, true));
+    try testing.expectEqualStrings("1e25", formatMoney(&buf, 1e25, false));
+    try testing.expectEqualStrings("1e40", formatRate(&buf, 1e40));
+    var line: [unit_len]u8 = undefined;
+    const u = answer("1e70 km to m", null).?.unit;
+    try testing.expectEqualStrings("1e73 m", formatUnit(&line, u, true));
+    try testing.expectEqualStrings("1e73", formatUnitValue(&buf, u.value, false));
 }

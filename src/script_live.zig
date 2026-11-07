@@ -71,7 +71,7 @@ pub const Scripts = struct {
         const gpa = sx.core.app.gpa;
         switch (target) {
             .folder => {
-                const d = sc.dir(gpa) catch return;
+                const d = sc.dir(gpa, sx.core.app.io) catch return;
                 defer gpa.free(d);
                 _ = nanoui.shell.openPath(d);
             },
@@ -97,9 +97,10 @@ pub const Scripts = struct {
 
     /// The apps first: a script whose title an app has is not listed.
     fn fill(sx: *Scripts, ix: *apps.Index, list: *sc.List) void {
-        apps.scan(ix, sx.core.app.io, sx.env, sx.cfg.apps.extra_dirs);
+        const io = sx.core.app.io;
+        apps.scan(ix, io, sx.env, sx.cfg.apps.extra_dirs);
         ix.finish();
-        sc.scan(list, ix.apps.items, ix.env, sx.cfg.script_commands.dirs);
+        sc.scan(list, io, ix.apps.items, ix.env, sx.cfg.script_commands.dirs);
         list.finish();
     }
 

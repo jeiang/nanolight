@@ -334,7 +334,7 @@ test "commands are ranked like apps, only when listed, and capped by the room gi
 
 test "a program is found on the PATH only when it is there" {
     if (windows) return error.SkipZigTest;
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = std.testing.io;
     try std.testing.expect(onPath(io, "/nonexistent:/bin", "sh"));
     try std.testing.expect(!onPath(io, "/bin:/usr/bin:relative", "no-such-program-nanolight"));
     try std.testing.expect(!onPath(io, "", "sh"));

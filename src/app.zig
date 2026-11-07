@@ -239,8 +239,8 @@ pub const App = struct {
     /// This machine changed `choice` (one of `settings.choices`), just now.
     pub fn touched(a: *App, comptime choice: settings.Field) void {
         comptime std.debug.assert(settings.isChoice(choice));
-        // A failure is logged; this change then syncs as an older one.
-        _ = prefs.setInt(a.kv, .sync_at, clock.now());
+        // Unkept, this change then syncs as an older one.
+        prefs.keepInt(a.kv, .sync_at, clock.now());
         if (a.acct) |x| x.changed();
     }
 
@@ -277,7 +277,7 @@ pub const App = struct {
 
     pub fn apply(ctx: *anyopaque, choice: keys.Choice) void {
         const a = from(ctx);
-        _ = prefs.setHotkey(a.kv, choice);
+        prefs.keepHotkey(a.kv, choice);
         a.useKey(choice);
         a.touched(.hotkey);
     }
@@ -297,8 +297,8 @@ pub const App = struct {
 
     fn done(ctx: *anyopaque) void {
         const a = from(ctx);
-        // A failure is logged; the welcome then shows again at the next start.
-        _ = prefs.setFlag(a.kv, .onboarded, true);
+        // Unkept, the welcome shows again at the next start.
+        prefs.keepFlag(a.kv, .onboarded, true);
     }
 
     /// The welcome, in place of the screen up. At the first run it is the

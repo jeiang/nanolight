@@ -41,7 +41,10 @@ pub const Update = struct {
             .version = build.version,
             .name = app_facts.app_name,
             .changed = .{ .ctx = u, .func = changed },
-        }) catch return;
+        }) catch |e| {
+            std.log.warn("nanolight: automatic updates are off: {t}", .{e});
+            return;
+        };
         u.started = updater;
         if (updater.phase.load(.acquire) == .off) return;
         u.updater = updater;
@@ -62,8 +65,8 @@ pub const Update = struct {
         const v = updater.ready() orelse return;
         const note = !platform.native_autorestart;
         const kv = u.core.kv;
-        // A failure is logged; without the note the new copy only skips "Updated to".
-        if (note) _ = prefs.setText(kv, .updated, v);
+        // Unkept, the new copy only skips "Updated to".
+        if (note) prefs.keepText(kv, .updated, v);
         if (updater.restart()) u.core.app.quit() else if (note) prefs.remove(kv, .updated);
     }
 

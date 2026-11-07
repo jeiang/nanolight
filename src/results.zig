@@ -338,13 +338,12 @@ pub fn isMath(words: []const u8, table: ?*const rates_table.Rates) bool {
 /// A whole answer is shown in hexadecimal too below this, and its room.
 const hex_below = 1e15;
 const hex_len = std.fmt.comptimePrint("0x{X}", .{@as(u64, hex_below)}).len;
-/// A number as the card writes it beside a unit or a currency code.
-const number_len = 32;
 /// Each of the card's lines: the answer, what Return copies, the expression.
 const line_len = 64;
 comptime {
-    // A unit's or a currency's expression, and a money answer, fit.
-    assert(line_len >= number_len + " ".len + @max(convert.unit_name_len, "USD".len));
+    // A unit's or a currency's expression and answer fit.
+    assert(line_len >= convert.unit_len);
+    assert(line_len >= convert.number_len + " ".len + "USD".len);
 }
 
 /// What `Results.build` lists rows from.
@@ -385,7 +384,7 @@ pub const Results = struct {
     copy: []const u8 = "",
     expr_buf: [line_len]u8 = undefined,
     expr: []const u8 = "",
-    note_buf: [96]u8 = undefined,
+    note_buf: [convert.rate_line_len]u8 = undefined,
     note: []const u8 = "",
     /// The words are a currency conversion: rates are needed (or may be stale).
     need_rates: bool = false,
@@ -518,11 +517,14 @@ pub const Results = struct {
     /// expression and a money answer always fit (the comptime check above).
     fn convertRow(r: *Results, a: convert.Answer, failed: bool) void {
         r.hex = "";
-        var nb: [number_len]u8 = undefined;
+        var nb: [convert.number_len]u8 = undefined;
+        // A copied value takes the room the shown one does, so both take
+        // the same form.
+        const copy = r.copy_buf[0..convert.number_len];
         switch (a) {
             .unit => |u| {
                 r.answer = convert.formatUnit(&r.answer_buf, u, true);
-                r.copy = convert.formatUnitValue(&r.copy_buf, u.value, false);
+                r.copy = convert.formatUnitValue(copy, u.value, false);
                 r.expr = std.fmt.bufPrint(
                     &r.expr_buf,
                     "{s} {s}",
@@ -536,7 +538,7 @@ pub const Results = struct {
                     "{s} {s}",
                     .{ convert.formatMoney(&nb, m.value, true), m.to },
                 ) catch unreachable;
-                r.copy = convert.formatMoney(&r.copy_buf, m.value, false);
+                r.copy = convert.formatMoney(copy, m.value, false);
                 r.expr = std.fmt.bufPrint(
                     &r.expr_buf,
                     "{s} {s}",
@@ -649,6 +651,10 @@ test "math first, then apps; quicklinks only without an answer" {
     try t.expectEqualStrings("3,072", r.answer);
     try t.expectEqualStrings("0xC00", r.hex);
     try t.expectEqual(@as(usize, 1), r.n);
+    // Too long to write out: shown and copied in scientific notation.
+    r.build(input(&ix, "10^70", &.{}));
+    try t.expectEqualStrings("1e70", r.answer);
+    try t.expectEqualStrings("1e70", r.copy);
     r.build(input(&ix, "", &.{}));
     try t.expectEqual(@as(usize, 2), r.n);
     try t.expectEqualStrings("Suggestions", r.section(0).?);

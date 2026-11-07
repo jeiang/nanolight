@@ -39,7 +39,7 @@ pub const Menu = struct {
         const objc = nanoui.objc;
         const t = m.tray orelse return false;
         if (set) |on| {
-            _ = prefs.setFlag(m.core.kv, .menu_bar, on);
+            prefs.keepFlag(m.core.kv, .menu_bar, on);
             objc.msg(void, t.item, "setVisible:", .{if (on) objc.YES else objc.NO});
         }
         return objc.msg(objc.BOOL, t.item, "isVisible", .{});

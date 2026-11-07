@@ -109,27 +109,33 @@ test "file tiers merge duplicates and keep exact names against many subsequences
 
 test "Spotlight predicates prioritize literal names before subsequences" {
     const spotlight = @import("spotlight.zig");
-    var buf: [2048]u8 = undefined;
+    var buf: [spotlight.predicate_len]u8 = undefined;
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"readme\"cd",
-        spotlight.predicate(&buf, "readme", .exact).?,
+        spotlight.predicate(&buf, "readme", .exact),
     );
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"readme*\"cd",
-        spotlight.predicate(&buf, "readme", .prefix).?,
+        spotlight.predicate(&buf, "readme", .prefix),
     );
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"* readme*\"cd",
-        spotlight.predicate(&buf, "readme", .word).?,
+        spotlight.predicate(&buf, "readme", .word),
     );
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"*r*e*a*d*m*e*\"cd",
-        spotlight.predicate(&buf, "readme", .subsequence).?,
+        spotlight.predicate(&buf, "readme", .subsequence),
     );
     try std.testing.expectEqualStrings(
         "kMDItemFSName == \"a\\*\\?\\\"\\\\*\"cd",
-        spotlight.predicate(&buf, "a*?\"\\", .prefix).?,
+        spotlight.predicate(&buf, "a*?\"\\", .prefix),
     );
+    // The longest query, every byte escaped, fits; invalid UTF-8 isn't asked.
+    const longest: [256]u8 = @splat('*');
+    try std.testing.expect(spotlight.eligible(&longest));
+    try std.testing.expect(!spotlight.eligible(longest ++ "*"));
+    _ = spotlight.predicate(&buf, &longest, .subsequence);
+    try std.testing.expect(!spotlight.eligible("caf\xc3"));
 }
 
 test "name search excludes the home Library subtree by default" {

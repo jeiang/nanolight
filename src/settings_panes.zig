@@ -440,7 +440,7 @@ test "every pane's extension is on this Mac's macOS, or is known not to be" {
 /// Prints the extensions whose bundle name holds `want`'s first word, so a
 /// failing run shows what this macOS calls the pane.
 fn listLike(want: []const u8) void {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = std.testing.io;
     const word = want[0 .. std.mem.indexOfAny(u8, want, " -&") orelse want.len];
     var dir = std.Io.Dir.cwd()
         .openDir(io, "/System/Library/ExtensionKit/Extensions", .{ .iterate = true }) catch return;

@@ -25,11 +25,14 @@ pub const Clip = struct {
     host: ?clipboard_view.Host = null,
 
     /// Opens the store in `<data dir>/clipboard` and, when history is on,
-    /// starts the watcher. Without a data directory history stays off.
+    /// starts the watcher. Without that folder history stays off (logged).
     pub fn open(c: *Clip, cfg: clipboard.Config, config_ok: bool) void {
         const gpa = c.core.app.gpa;
         const io = c.core.app.io;
-        c.dir = openDir(gpa, io) orelse return;
+        c.dir = openDir(gpa, io) catch |e| {
+            log.warn("nanolight: clipboard history is off: no folder: {t}", .{e});
+            return;
+        };
         c.store = .init(gpa, io, c.dir, cfg);
         const store = &c.store.?;
         store.on = prefs.flagOr(c.core.kv, gpa, .clipboard, store.cfg.enabled orelse true);
@@ -105,16 +108,16 @@ pub const Clip = struct {
     }
 };
 
-/// The store's directory, made if missing; null when there is none.
-fn openDir(gpa: std.mem.Allocator, io: std.Io) ?std.Io.Dir {
-    const data = prefs.dataDir(gpa) catch return null;
+/// The store's directory, made if missing.
+fn openDir(gpa: std.mem.Allocator, io: std.Io) !std.Io.Dir {
+    const data = try prefs.dataDir(gpa);
     defer gpa.free(data);
-    const path = std.fs.path.join(gpa, &.{ data, "clipboard" }) catch return null;
+    const path = try std.fs.path.join(gpa, &.{ data, "clipboard" });
     defer gpa.free(path);
-    _ = std.Io.Dir.cwd().createDirPathStatus(io, path, clipboard.private_dir) catch return null;
+    _ = try std.Io.Dir.cwd().createDirPathStatus(io, path, clipboard.private_dir);
     // best effort: an existing folder keeps its mode; its files are created private anyway.
     std.Io.Dir.cwd().setFilePermissions(io, path, clipboard.private_dir, .{}) catch {};
-    return std.Io.Dir.cwd().openDir(io, path, .{}) catch null;
+    return std.Io.Dir.cwd().openDir(io, path, .{});
 }
 
 fn from(ctx: *anyopaque) *Clip {

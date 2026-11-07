@@ -368,16 +368,26 @@ pub fn carry(v: f64, ops: []const u8) ?f64 {
     return x;
 }
 
+/// The room `scientific` needs at most: "-1.23456e-308".
+pub const scientific_len = "-1.23456e-308".len;
+
 /// The value as the row shows it and the clipboard takes it: whole numbers
 /// with thousands separators ("1,048,576"), others to 10 significant digits.
+/// When the grouped form doesn't fit `buf`, both forms are `scientific`, so
+/// the row and what it copies agree.
 pub fn format(buf: []u8, v: f64, grouped: bool) []const u8 {
+    assert(buf.len >= scientific_len);
     if (@abs(v) < 1e15 and v == @round(v)) {
         const n: i64 = @intFromFloat(v);
-        if (!grouped) return std.fmt.bufPrint(buf, "{d}", .{n}) catch "";
         var digits: [24]u8 = undefined;
-        return group(buf, std.fmt.bufPrint(&digits, "{d}", .{n}) catch return "");
+        // Below 1e15 a whole number is at most 16 characters.
+        const d = std.fmt.bufPrint(&digits, "{d}", .{n}) catch unreachable;
+        const g = group(buf, d) orelse return scientific(buf, v);
+        if (grouped) return g;
+        @memcpy(buf[0..d.len], d);
+        return buf[0..d.len];
     }
-    const s = std.fmt.bufPrint(buf, "{d:.10}", .{v}) catch return "";
+    const s = std.fmt.bufPrint(buf, "{d:.10}", .{v}) catch return scientific(buf, v);
     var end = s.len;
     if (std.mem.indexOfScalar(u8, s, '.') != null) {
         while (end > 0 and s[end - 1] == '0') end -= 1;
@@ -386,21 +396,32 @@ pub fn format(buf: []u8, v: f64, grouped: bool) []const u8 {
     return s[0..end];
 }
 
+/// Six significant digits, "9.09091e-13", for a value too large or too
+/// small to write out.
+pub fn scientific(buf: []u8, v: f64) []const u8 {
+    assert(buf.len >= scientific_len);
+    var tmp: [scientific_len]u8 = undefined;
+    const s = std.fmt.bufPrint(&tmp, "{e:.5}", .{v}) catch unreachable;
+    const at = std.mem.indexOfScalar(u8, s, 'e') orelse s.len;
+    const m = std.mem.trimEnd(u8, std.mem.trimEnd(u8, s[0..at], "0"), ".");
+    return std.fmt.bufPrint(buf, "{s}{s}", .{ m, s[at..] }) catch unreachable;
+}
+
 /// The number `text` ("-1234567.50") in `buf` with its whole part's
-/// thousands separated ("-1,234,567.50"); empty if it doesn't fit.
-pub fn group(buf: []u8, text: []const u8) []const u8 {
+/// thousands separated ("-1,234,567.50"); null if it doesn't fit.
+pub fn group(buf: []u8, text: []const u8) ?[]const u8 {
     const neg = text.len > 0 and text[0] == '-';
     const body = text[@intFromBool(neg)..];
     const int_end = std.mem.indexOfScalar(u8, body, '.') orelse body.len;
     var o: usize = 0;
     if (neg) {
-        if (buf.len == 0) return "";
+        if (buf.len == 0) return null;
         buf[o] = '-';
         o += 1;
     }
     for (body, 0..) |ch, i| {
         const comma = i < int_end and i > 0 and (int_end - i) % 3 == 0;
-        if (o + 1 + @intFromBool(comma) > buf.len) return "";
+        if (o + 1 + @intFromBool(comma) > buf.len) return null;
         if (comma) {
             buf[o] = ',';
             o += 1;
@@ -471,6 +492,18 @@ test "values read as people write them" {
     try t.expectEqualStrings("0.3333333333", format(&buf, 1.0 / 3.0, true));
 }
 
+test "a value too long to write out is scientific, never empty" {
+    const t = std.testing;
+    var buf: [64]u8 = undefined;
+    const big = eval("10^70").?;
+    try t.expectEqualStrings("1e70", format(&buf, big, true));
+    try t.expectEqualStrings("1e70", format(&buf, big, false));
+    try t.expectEqualStrings("-1.23457e-308", scientific(&buf, -1.234567e-308));
+    // Where the grouped form doesn't fit, the plain one isn't used either.
+    var small: [scientific_len]u8 = undefined;
+    try t.expectEqualStrings("1.23457e14", format(&small, 123456789012345, false));
+}
+
 test "one operator set: the parser's, at a start and an end" {
     const t = std.testing;
     inline for (.{ "^", "*", "×", "/", "÷", "%", "+", "-", "−" }) |o| {
@@ -485,8 +518,8 @@ test "one operator set: the parser's, at a start and an end" {
     try t.expectEqualStrings("", trimOps(" + "));
     try t.expectEqualStrings("café", trimOps("café"));
     var buf: [9]u8 = undefined;
-    try t.expectEqualStrings("-1,234.50", group(&buf, "-1234.50"));
-    try t.expectEqualStrings("", group(buf[0..8], "-1234.50"));
+    try t.expectEqualStrings("-1,234.50", group(&buf, "-1234.50").?);
+    try t.expectEqual(null, group(buf[0..8], "-1234.50"));
 }
 
 test "long or deeply nested input fails cleanly, without deep recursion" {

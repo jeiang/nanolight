@@ -91,7 +91,9 @@ pub const Serve = struct {
     deadline_ms: u32 = exchange_deadline_ms,
 };
 
-pub fn serveOne(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, serve: Serve) void {
+/// One exchange on `stream`. An error is a request dropped unanswered, or a
+/// reply the client didn't take.
+pub fn serveOne(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, serve: Serve) !void {
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -99,9 +101,9 @@ pub fn serveOne(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, serve: Se
     var out_buf: [2048]u8 = undefined;
     var timed: Timed = .init(io, stream, .{ .in = &in_buf, .out = &out_buf }, serve.deadline_ms);
     var http: std.http.Server = .init(&timed.reader, &timed.writer);
-    var req = http.receiveHead() catch return;
+    var req = try http.receiveHead();
     const method = @tagName(req.head.method);
-    const target = arena.dupe(u8, req.head.target) catch return;
+    const target = try arena.dupe(u8, req.head.target);
     const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
     const length = req.head.content_length orelse 0;
     var auth: []const u8 = "";
@@ -111,53 +113,43 @@ pub fn serveOne(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, serve: Se
         if (std.ascii.eqlIgnoreCase(
             h.name,
             protocol.authorization_header,
-        )) auth = arena.dupe(u8, h.value) catch return;
+        )) auth = try arena.dupe(u8, h.value);
         if (std.ascii.eqlIgnoreCase(
             h.name,
             protocol.first_header,
         )) first = std.mem.eql(u8, h.value, protocol.first_value);
     }
-    var reply: server.Reply = undefined;
-    if (length > protocol.max_body) {
-        reply = .{ .status = 413 };
-    } else {
-        var body: ?[]const u8 = "";
-        if (req.head.method.requestHasBody() and length > 0) {
-            req.writeExpectContinue() catch return;
-            var chunk: [1024]u8 = undefined;
-            const reader = req.readerExpectNone(&chunk);
-            body = reader.readAlloc(arena, @intCast(length)) catch return;
-        } else if (req.head.method.requestHasBody() and req.head.transfer_encoding == .chunked) {
-            req.writeExpectContinue() catch return;
+    const reply: server.Reply = if (length > protocol.max_body) .{ .status = 413 } else reply: {
+        var body: []const u8 = "";
+        if (req.head.method.requestHasBody() and
+            (length > 0 or req.head.transfer_encoding == .chunked))
+        {
+            try req.writeExpectContinue();
             var chunk: [1024]u8 = undefined;
             const reader = req.readerExpectNone(&chunk);
             body = reader.allocRemaining(arena, .limited(protocol.max_body + 1)) catch |e|
                 switch (e) {
-                    error.StreamTooLong => null,
-                    else => return,
+                    error.StreamTooLong => break :reply .{ .status = 413 },
+                    else => |other| return other,
                 };
         }
-        reply = .{ .status = 413 };
-        if (body) |b| {
-            const parsed: server.Request = .{
-                .method = method,
-                .path = path,
-                .authorization = auth,
-                .first = first,
-                .body = b,
-            };
-            reply = server.handle(arena, io, serve.state, serve.tokens, parsed);
-        }
-    }
+        break :reply server.handle(arena, io, serve.state, serve.tokens, .{
+            .method = method,
+            .path = path,
+            .authorization = auth,
+            .first = first,
+            .body = body,
+        });
+    };
     std.log.info(
         "{s} {s} {d} {s}",
         .{ method, path, reply.status, if (reply.account.len > 0) reply.account else "-" },
     );
-    req.respond(reply.body, .{
+    try req.respond(reply.body, .{
         .status = @fromBackingInt(@intCast(reply.status)),
         .keep_alive = false,
         .extra_headers = &.{.{ .name = "content-type", .value = protocol.content_type }},
-    }) catch {}; // best effort: the client left or passed the deadline; nothing to tell it.
+    });
 }
 
 // ----- tests -----
@@ -208,7 +200,7 @@ test "a whole request over the socket is answered" {
     var w = l.client.writer(io, &out);
     try w.interface.writeAll("GET " ++ protocol.health_path ++ " HTTP/1.1\r\nHost: x\r\n\r\n");
     try w.interface.flush();
-    serveOne(testing.allocator, io, l.peer, .{ .state = tmp.dir, .tokens = &.{} });
+    try serveOne(testing.allocator, io, l.peer, .{ .state = tmp.dir, .tokens = &.{} });
     l.peer.close(io);
     const got = try l.received(io, arena.allocator());
     try testing.expect(std.mem.startsWith(u8, got, "HTTP/1.1 200 OK\r\n"));
@@ -229,7 +221,7 @@ test "a client that stops sending its request is cut off at the deadline, unansw
     try w.interface.flush();
     const start: Io.Clock.Timestamp = .now(io, .awake);
     const serve: Serve = .{ .state = tmp.dir, .tokens = &.{}, .deadline_ms = 100 };
-    serveOne(testing.allocator, io, l.peer, serve);
+    try testing.expectError(error.ReadFailed, serveOne(testing.allocator, io, l.peer, serve));
     // Well under the default deadline; a little early is the clock's rounding.
     const elapsed_ms = elapsedMs(io, start);
     try testing.expect(elapsed_ms >= 50 and elapsed_ms < 5000);

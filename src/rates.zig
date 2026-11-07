@@ -197,8 +197,8 @@ const Fetch = struct {
         const table = if (r.status == 200) Rates.parse(env.gpa, r.body) else null;
         if (table) |t| {
             live.feed.landed(t, env.now());
-            // A failure is logged; the next launch then fetches again.
-            _ = prefs.setInt(env.kv, .rates_at, live.feed.fetched_s);
+            // Unkept, the next launch fetches again.
+            prefs.keepInt(env.kv, .rates_at, live.feed.fetched_s);
             if (Live.path(env)) |file| {
                 defer env.gpa.free(file);
                 std.Io.Dir.cwd()

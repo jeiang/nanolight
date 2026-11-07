@@ -3,6 +3,7 @@
 //! under one deadline, into one ranked list (files.zig). Only paths and
 //! names are read.
 const std = @import("std");
+const assert = std.debug.assert;
 const files = @import("files.zig");
 const paths = @import("paths.zig");
 const search = @import("search.zig");
@@ -10,11 +11,22 @@ const List = files.List;
 const max_path = files.max_path;
 const max_rows = files.max_rows;
 
-/// A query worth asking Spotlight: a name, not a path, no control bytes.
+/// The longest query Spotlight is asked.
+const query_max = 256;
+/// All tiers together, and each tier, answer within these.
+const deadline_ms = 2000;
+const tier_ms = 500;
+/// How long one wait for mdfind's output lasts, so a deadline is noticed.
+const poll_ms = 20;
+/// The most lines, and bytes, read from one tier.
+const lines_max = 256;
+const bytes_max = lines_max * max_path;
+
+/// A query worth asking Spotlight: a name, not a path, UTF-8, no control bytes.
 pub fn eligible(q: []const u8) bool {
-    if (q.len < 2 or q.len > 256 or paths.isPath(q)) return false;
+    if (q.len < 2 or q.len > query_max or paths.isPath(q)) return false;
     for (q) |c| if (c < 0x20 or c == 0x7f) return false;
-    return true;
+    return std.unicode.utf8ValidateSlice(q);
 }
 
 /// Folders left out of every search, wherever they are: dependencies,
@@ -56,45 +68,54 @@ pub fn excluded(path: []const u8, extra: []const u8) bool {
 
 pub const Tier = enum { exact, prefix, word, subsequence };
 
-/// Literal, case/diacritic-insensitive queries, never shell text.
-pub fn predicate(buf: []u8, query: []const u8, tier: Tier) ?[]const u8 {
+/// The room `predicate` takes: the framing, and at most three bytes for
+/// each query byte (an escape, the byte, a subsequence's `*`).
+pub const predicate_len = "kMDItemFSName == \"* ".len + 3 * query_max + "*\"cd".len;
+
+/// Literal, case/diacritic-insensitive queries, never shell text. The
+/// query is `eligible`'s.
+pub fn predicate(buf: *[predicate_len]u8, query: []const u8, tier: Tier) []const u8 {
+    assert(query.len <= query_max);
     var w: std.Io.Writer = .fixed(buf);
-    w.writeAll("kMDItemFSName == \"") catch return null;
+    // `predicate_len` holds the longest, so no write fails.
+    w.writeAll("kMDItemFSName == \"") catch unreachable;
     w.writeAll(switch (tier) {
         .exact, .prefix => "",
         .word => "* ",
         .subsequence => "*",
-    }) catch return null;
+    }) catch unreachable;
     var i: usize = 0;
     while (i < query.len) {
-        const len = std.unicode.utf8ByteSequenceLength(query[i]) catch return null;
-        if (i + len > query.len) return null;
+        const len = std.unicode.utf8ByteSequenceLength(query[i]) catch unreachable;
+        assert(i + len <= query.len);
         if (len == 1 and (query[i] == '"' or query[i] == '*' or query[i] == '\\' or
-            query[i] == '?')) w.writeByte('\\') catch return null;
-        w.writeAll(query[i..][0..len]) catch return null;
-        if (tier == .subsequence) w.writeByte('*') catch return null;
+            query[i] == '?')) w.writeByte('\\') catch unreachable;
+        w.writeAll(query[i..][0..len]) catch unreachable;
+        if (tier == .subsequence) w.writeByte('*') catch unreachable;
         i += len;
     }
-    if (tier == .prefix or tier == .word) w.writeByte('*') catch return null;
-    w.writeAll("\"cd") catch return null;
+    if (tier == .prefix or tier == .word) w.writeByte('*') catch unreachable;
+    w.writeAll("\"cd") catch unreachable;
     return w.buffered();
 }
 
-/// Bounded tiers share one two-second deadline and one ranked, deduplicated list.
+/// Bounded tiers share one deadline and one ranked, deduplicated list.
+/// False when nothing was asked or no tier answered in time; an error when
+/// mdfind failed (the cause is logged) and no tier answered.
 pub fn find(
     io: std.Io,
     query: []const u8,
     locations: []const u8,
     extra: []const u8,
     out: *List,
-) bool {
+) error{ Unavailable, OutOfMemory }!bool {
     out.deinit();
     if (!eligible(query)) return false;
     var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var argv: std.ArrayList([]const u8) = .empty;
-    argv.append(a, "/usr/bin/mdfind") catch return false;
+    try argv.append(a, "/usr/bin/mdfind");
     var lines = std.mem.tokenizeScalar(
         u8,
         if (std.mem.trim(u8, locations, " \r\n\t").len == 0) paths.home() else locations,
@@ -104,20 +125,26 @@ pub fn find(
         var buf: [max_path]u8 = undefined;
         const path = paths.expand(&buf, std.mem.trim(u8, line, " \r\t")) orelse continue;
         if (path.len == 0 or path[0] != '/') continue;
-        const owned = a.dupe(u8, path) catch return false;
-        argv.appendSlice(a, &.{ "-onlyin", owned }) catch return false;
+        try argv.appendSlice(a, &.{ "-onlyin", try a.dupe(u8, path) });
     }
     if (argv.items.len == 1) return false;
-    const deadline = std.Io.Clock.awake.now(io).toMilliseconds() + 2000;
-    argv.append(a, "") catch return false;
+    const deadline = std.Io.Clock.awake.now(io).toMilliseconds() + deadline_ms;
+    try argv.append(a, "");
     var ok = false;
+    var unavailable = false;
     for ([_]Tier{ .exact, .prefix, .word, .subsequence }) |tier| {
         const now = std.Io.Clock.awake.now(io).toMilliseconds();
         if (now >= deadline) break;
-        var pred_buf: [2048]u8 = undefined;
-        argv.items[argv.items.len - 1] = predicate(&pred_buf, query, tier) orelse return false;
-        ok = collect(io, argv.items, query, extra, out, @min(deadline, now + 500)) or ok;
+        var pred_buf: [predicate_len]u8 = undefined;
+        argv.items[argv.items.len - 1] = predicate(&pred_buf, query, tier);
+        const until = @min(deadline, now + tier_ms);
+        const answered = collect(io, argv.items, query, extra, out, until) catch {
+            unavailable = true;
+            continue;
+        };
+        ok = answered or ok;
     }
+    if (!ok and unavailable) return error.Unavailable;
     return ok;
 }
 
@@ -128,11 +155,14 @@ fn collect(
     extra: []const u8,
     out: *List,
     deadline: i64,
-) bool {
+) error{Unavailable}!bool {
     var child = std.process.spawn(
         io,
         .{ .argv = argv, .stdin = .ignore, .stdout = .pipe, .stderr = .ignore },
-    ) catch return false;
+    ) catch |e| {
+        std.log.warn("file search: mdfind didn't start: {t}", .{e});
+        return error.Unavailable;
+    };
     defer child.kill(io);
     var read_buf: [8192]u8 = undefined;
     var path_buf: [max_path]u8 = undefined;
@@ -141,15 +171,22 @@ fn collect(
     var total: usize = 0;
     var oversized = false;
     // A wall-clock deadline also bounds a process that keeps producing output.
-    while (count < 256 and total < 256 * max_path) {
+    while (count < lines_max and total < bytes_max) {
         const remaining = deadline - std.Io.Clock.awake.now(io).toMilliseconds();
         if (remaining <= 0) break;
         var fds = [_]std.posix.pollfd{
             .{ .fd = child.stdout.?.handle, .events = std.posix.POLL.IN, .revents = 0 },
         };
-        if ((std.posix.poll(&fds, @intCast(@min(remaining, 20))) catch return false) == 0) continue;
+        const ready = std.posix.poll(&fds, @intCast(@min(remaining, poll_ms))) catch |e| {
+            std.log.warn("file search: waiting on mdfind failed: {t}", .{e});
+            return error.Unavailable;
+        };
+        if (ready == 0) continue;
         const n = std.c.read(child.stdout.?.handle, &read_buf, read_buf.len);
-        if (n < 0) return false;
+        if (n < 0) {
+            std.log.warn("file search: reading mdfind failed: {t}", .{std.posix.errno(n)});
+            return error.Unavailable;
+        }
         if (n == 0) {
             if (used > 0 and !oversized) candidate(io, out, query, path_buf[0..used], extra);
             return true;
@@ -162,7 +199,7 @@ fn collect(
                 if (!oversized) candidate(io, out, query, path_buf[0..used], extra);
                 used = 0;
                 oversized = false;
-                if (count == 256) return true;
+                if (count == lines_max) return true;
             } else if (used < path_buf.len) {
                 path_buf[used] = c;
                 used += 1;
