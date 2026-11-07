@@ -5,6 +5,9 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const Nanolight = @import("nanolight.zig").Nanolight;
+const Host = @import("host.zig").Host;
+const Target = @import("host.zig").Target;
 const chrome = @import("chrome.zig");
 const clipboard = @import("clipboard.zig");
 const PasteResult = @import("clipboard_types.zig").PasteResult;
@@ -25,7 +28,7 @@ const Fake = struct {
     pasted: ?u64 = null,
     copied: ?u64 = null,
     hidden: bool = false,
-    ch: clipboard_view.Host = undefined,
+    ch: Host.Clipboard = undefined,
 
     fn init(f: *Fake) void {
         f.store = .init(testing.allocator, testing.io, null, .{});
@@ -43,11 +46,11 @@ const Fake = struct {
         f.store.deinit();
     }
 
-    fn host(f: *Fake) view.Host {
+    fn host(f: *Fake) Host {
         return .{ .ctx = f, .open = open, .hide = hide, .clipboard = &f.ch };
     }
 
-    fn open(_: *anyopaque, _: @import("results.zig").Target) void {}
+    fn open(_: *anyopaque, _: Target) void {}
 
     fn hide(ctx: *anyopaque) void {
         @as(*Fake, @ptrCast(@alignCast(ctx))).hidden = true;
@@ -101,7 +104,7 @@ const Fake = struct {
     }
 };
 
-fn opened(t: *ui.Tester, s: *view.Nanolight) void {
+fn opened(t: *ui.Tester, s: *Nanolight) void {
     support.press(t, &.{.{ .insert = "clip" }});
     support.press(t, &.{.{ .command = .insert_newline }});
     std.debug.assert(s.screen == .clipboard);
@@ -194,7 +197,7 @@ test "the screen lists newest first with type, app and time, and the selection's
     try testing.expect(t.shortcut(.{ .key = S.enter, .cmd = true }));
     try testing.expectEqual(f.store.at(1).hash, f.copied.?);
     // The screen fits the panel.
-    try testing.expect(s.height() <= chrome.max_height);
+    try testing.expect(view.height(s) <= chrome.max_height);
 }
 
 test "typing searches text, file names and apps; Esc closes the screen and the panel" {
@@ -425,8 +428,8 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
     try testing.expect(t.hasText("Could Not Clear History"));
     // Everything fits in the window.
     const quit = t.findText("Quit Nanolight").?;
-    try testing.expect(quit.y + quit.h <= s.height());
-    try testing.expect(s.height() <= chrome.max_height);
+    try testing.expect(quit.y + quit.h <= view.height(s));
+    try testing.expect(view.height(s) <= chrome.max_height);
 }
 
 test "Settings: no clipboard rows where the system has no history, and a shorter screen" {
@@ -440,7 +443,7 @@ test "Settings: no clipboard rows where the system has no history, and a shorter
     const t = &rig.t;
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
     try testing.expect(!t.hasText("Record Copied Items") and !t.hasText("Clear History"));
-    try testing.expect(s.height() < settings_view.height);
+    try testing.expect(view.height(s) < settings_view.height);
     const quit = t.findText("Quit Nanolight").?;
-    try testing.expect(quit.y + quit.h <= s.height());
+    try testing.expect(quit.y + quit.h <= view.height(s));
 }

@@ -242,13 +242,13 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/app_facts.zig` | The app's facts its Mac verifiers (`tools/mac_verify.zig`) also rely on, spelled once |
 | `src/suggest_live.zig`, `src/files_live.zig`, `src/commands_live.zig` | The app's side of Google's completions, file search and system commands |
 | `src/menu_live.zig`, `src/update_live.zig`, `src/settings_bind.zig` | The menu bar icon and its menu, updates, and Settings' answers |
-| `src/view.zig`, `src/query.zig`, `src/screen.zig` | The panel: query, rows, footer, keys; the query's text, the words it is read as, and when the rows are built again; which screen is up, the one way between them, and how long each lasts once the panel goes |
-| `src/anchor.zig`, `src/answers.zig` | The selected row held across a refill of the list; Google's answers reaching the panel, their room kept until they land |
+| `src/nanolight.zig`, `src/view.zig`, `src/query.zig`, `src/screen.zig` | The panel: its state and the screen up; drawing it (query, rows, footer, keys); the query's text, the words it is read as, and when the rows are built again; which screen is up, the one way between them, and how long each lasts once the panel goes |
+| `src/pipeline.zig`, `src/host.zig` | The rows built from the query, the selected row held across a refill, and Google's and file search's answers landing, their room kept until they do; what the panel and its screens ask of the app, and the target Return opens |
 | `src/chrome.zig`, `src/palette.zig`, `src/calc_card.zig` | What every screen lays out alike (sizes, the footer and its keys, section heads, a row's pieces, the keys that move a selection); the colors, light and dark, and the roles text plays; the math row |
-| `src/results.zig` | What a query lists, in order: one provider per kind of row, its cap, and the target Return opens |
+| `src/results.zig` | What a query lists, in order: one provider per kind of row and its cap |
 | `src/launchers.zig`, `src/launch_counts.zig` | The apps and script commands side by side, in one name order, and how often each was opened |
 | `src/apps.zig`, `src/app_scan.zig`, `src/icon_mac.zig` | The apps found, sorted, their icons asked for only when shown; what the index and each OS's backend share (the app row, the folder walk); the Finder's icon as PNG |
-| `src/files.zig`, `src/files_view.zig`, `src/spotlight.zig` | File search: the files found and a typed path's entries; their rows and Tab taking a path; Spotlight's index through `mdfind` (the Mac) |
+| `src/files.zig`, `src/spotlight.zig` | File search: the files found and a typed path's entries; Spotlight's index through `mdfind` (the Mac) |
 | `src/web.zig` | Quicklinks: the defaults, keywords, Google's, and the address a search opens |
 | `src/search.zig` | Fuzzy matching and ranking (allocation-free): the tiers, and every score offset set against them |
 | `src/text.zig`, `src/clock.zig`, `src/log.zig` | UTF-8 cutting and URL escaping; wall-clock seconds and how long ago, in words; the log, silent under test |

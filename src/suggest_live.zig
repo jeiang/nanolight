@@ -4,7 +4,8 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const suggest = @import("suggest.zig");
 const prefs = @import("prefs.zig");
-const view = @import("view.zig");
+const Host = @import("host.zig").Host;
+const pipeline = @import("pipeline.zig");
 const after = @import("after.zig");
 const App = @import("app.zig").App;
 
@@ -19,12 +20,12 @@ pub const Suggest = struct {
     asking_len: usize = 0,
     pause: after.Debounce = .{},
 
-    pub fn entry(sg: *Suggest) view.Host.Ask {
+    pub fn entry(sg: *Suggest) Host.Ask {
         return .{ .ctx = sg, .func = ask };
     }
 
     /// Google is asked once typing pauses (`suggest.pause_ms`); only the
-    /// last ask is sent, and answered (`Nanolight.answered`).
+    /// last ask is sent, and answered (`pipeline.answered`).
     fn ask(ctx: *anyopaque, words: []const u8) void {
         const sg = after.cast(*Suggest, ctx);
         // The panel asks only about words `suggest.eligible` lets out.
@@ -38,8 +39,8 @@ pub const Suggest = struct {
         const core = sg.core;
         const q = sg.asking[0..sg.asking_len];
         // Typed on, or turned off, while it waited.
-        if (!core.s.wants(q)) return core.s.answered(q, null);
-        const a = core.app.gpa.create(Ask) catch return core.s.answered(q, null);
+        if (!pipeline.wants(core.s, q)) return pipeline.answered(core.s, q, null);
+        const a = core.app.gpa.create(Ask) catch return pipeline.answered(core.s, q, null);
         a.* = .{ .core = core, .len = q.len };
         @memcpy(a.text[0..q.len], q);
         var buf: [suggest.url_max]u8 = undefined;
@@ -67,7 +68,7 @@ const Ask = struct {
         const typed = a.text[0..a.len];
         var list: suggest.List = .{};
         const said = r.status == 200 and suggest.decode(arena.allocator(), r.body, typed, &list);
-        core.s.answered(typed, if (said) &list else null);
+        pipeline.answered(core.s, typed, if (said) &list else null);
     }
 };
 

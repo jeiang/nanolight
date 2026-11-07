@@ -7,7 +7,8 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const panel = @import("view.zig");
+const Query = @import("query.zig").Query;
+const Host = @import("host.zig").Host.Clipboard;
 const clipboard = @import("clipboard.zig");
 const types = @import("clipboard_types.zig");
 const search = @import("search.zig");
@@ -16,23 +17,6 @@ const clock = @import("clock.zig");
 const clip = @import("text.zig").clip;
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;
-
-/// What the screen asks of the app. Without it the screen says history is
-/// not available (tests draw it so).
-pub const Host = struct {
-    ctx: *anyopaque,
-    store: *clipboard.Store,
-    /// Return only copies, as ⌘↩ does (`paste_plain_text` off).
-    copy_only: bool,
-    /// Why entries are not being recorded now (this system cannot, or it
-    /// is switched off); null while they are.
-    status: *const fn (ctx: *anyopaque) ?[]const u8,
-    /// Return: writes the entry and pastes it where it can.
-    paste: *const fn (ctx: *anyopaque, hash: u64) types.PasteResult,
-    /// ⌘↩: writes the entry only (Return too, when `copy_only`): `.copied`,
-    /// `.failed` or `.unreadable`.
-    copy: *const fn (ctx: *anyopaque, hash: u64) types.PasteResult,
-};
 
 const visible_rows = 7;
 const detail_h: f32 = 112;
@@ -57,30 +41,25 @@ pub const Screen = struct {
     /// Said in the footer until the next key.
     note: []const u8 = "",
 
-    /// The screen opens (view.zig `Nanolight.open`); it uses the panel's
+    /// The screen opens (nanolight.zig `Nanolight.open`); it uses the panel's
     /// own field, cleared, which is the rows' again once it goes.
-    pub fn show(s: *Screen, n: *panel.Nanolight) void {
+    pub fn show(s: *Screen, q: *Query) void {
         s.sel = 0;
         s.stale = true;
         s.note = "";
-        n.query.clear();
-        n.query.focus();
+        q.clear();
+        q.focus();
     }
 
-    fn host(n: *const panel.Nanolight) ?*const Host {
-        const h = n.host orelse return null;
-        return h.clipboard;
-    }
-
-    fn refresh(s: *Screen, n: *panel.Nanolight, h: *const Host) void {
-        const q = n.query.hash();
+    fn refresh(s: *Screen, query: *const Query, h: *const Host) void {
+        const q = query.hash();
         if (!s.stale and q == s.built and h.store.gen == s.gen) return;
         const same_query = !s.stale and q == s.built;
         if (!same_query) s.sel = 0;
         s.stale = false;
         s.built = q;
         s.gen = h.store.gen;
-        s.n = h.store.find(n.query.text(), &s.found);
+        s.n = h.store.find(query.text(), &s.found);
         if (same_query) for (s.found[0..s.n], 0..) |f, i|
             if (h.store.at(f.index).hash == s.sel_hash) {
                 s.sel = i;
@@ -94,15 +73,19 @@ pub const Screen = struct {
         return h.store.at(s.found[s.sel].index);
     }
 
-    /// The screen, as the screen up (view.zig `Nanolight.draw`).
-    pub fn draw(s: *Screen, c: *ui.Context, n: *panel.Nanolight, p: Palette) void {
-        const hh = host(n);
-        if (hh) |x| s.refresh(n, x);
-        s.keys(c, n, hh);
-        const submitted = s.header(c, n, p);
+    /// What the screen asks of the panel as it draws: its back chevron
+    /// takes it away.
+    pub const Outcome = enum { stays, back };
+
+    /// The screen, as the screen up (view.zig `draw`), searching in the
+    /// panel's field `q`; `hh` null where history is not available.
+    pub fn draw(s: *Screen, c: *ui.Context, q: *Query, hh: ?*const Host, p: Palette) Outcome {
+        if (hh) |x| s.refresh(q, x);
+        s.keys(c, q, hh);
+        const head = s.header(c, q, p);
         if (hh) |x| {
-            s.refresh(n, x);
-            if (submitted) s.paste(x);
+            s.refresh(q, x);
+            if (head.submitted) s.paste(x);
         }
         chrome.hairline(c, p);
         const rows = ui.div(c).column().wFull().h(list_h).p(chrome.list_pad).clip();
@@ -112,9 +95,10 @@ pub const Screen = struct {
         chrome.hairline(c, p);
         if (hh) |x| s.detail(c, p, x);
         s.footer(c, p, hh);
+        return if (head.back) .back else .stays;
     }
 
-    fn keys(s: *Screen, c: *ui.Context, n: *panel.Nanolight, hh: ?*const Host) void {
+    fn keys(s: *Screen, c: *ui.Context, q: *const Query, hh: ?*const Host) void {
         const S = ui.Shortcut;
         const h = hh orelse return;
         if (chrome.moveDown(c)) {
@@ -133,7 +117,7 @@ pub const Screen = struct {
         {
             _ = h.store.remove(e.hash);
             s.note = "Deleted";
-            s.refresh(n, h);
+            s.refresh(q, h);
         };
     }
 
@@ -149,15 +133,17 @@ pub const Screen = struct {
         s.note = note(h.copy(h.ctx, e.hash));
     }
 
-    fn header(s: *Screen, c: *ui.Context, n: *panel.Nanolight, p: Palette) bool {
+    const Head = struct { submitted: bool, back: bool };
+
+    fn header(s: *Screen, c: *ui.Context, q: *Query, p: Palette) Head {
         const bar = ui.div(c).row().wFull().h(chrome.header_h).px(18).gap(12).itemsCenter();
         defer bar.end();
         const chevron = ui.div(c).size(26, 26).center().rounded(7).bg(p.tile).control();
-        if (chevron.clicked()) n.leave(.closed);
+        const back = chevron.clicked();
         ui.icon(c, "chevron.left", .{ .size = 13, .weight = .semibold, .color = p.sub });
         chevron.end();
-        const before = n.query.hash();
-        const r = ui.textField(c, &n.query.field, .{
+        const before = q.hash();
+        const r = ui.textField(c, &q.field, .{
             .bare = true,
             .size = 19,
             .width = .fill,
@@ -165,8 +151,8 @@ pub const Screen = struct {
             .placeholder_color = p.placeholder(),
             .color = p.text,
         });
-        if (n.query.hash() != before) s.note = "";
-        return r.submitted;
+        if (q.hash() != before) s.note = "";
+        return .{ .submitted = r.submitted, .back = back };
     }
 
     fn list(s: *Screen, c: *ui.Context, p: Palette, h: *const Host) void {

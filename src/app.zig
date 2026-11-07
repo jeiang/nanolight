@@ -4,7 +4,8 @@
 //! `Hooks`; main.zig wires them.
 const std = @import("std");
 const nanoui = @import("nanoui");
-const Nanolight = @import("view.zig").Nanolight;
+const Nanolight = @import("nanolight.zig").Nanolight;
+const view = @import("view.zig");
 const onboard = @import("onboard.zig");
 const keys = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
@@ -17,8 +18,8 @@ const single = @import("single.zig");
 const account = @import("account.zig");
 const clock = @import("clock.zig");
 const apps = @import("apps.zig");
-const results = @import("results.zig");
-const Target = results.Target;
+const host = @import("host.zig");
+const Target = host.Target;
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 const after = @import("after.zig");
@@ -49,7 +50,7 @@ pub const Hook = struct {
 /// A feature that opens script commands' rows (script_live.zig).
 pub const Opens = struct {
     ctx: *anyopaque,
-    func: *const fn (ctx: *anyopaque, target: results.ScriptTarget) void,
+    func: *const fn (ctx: *anyopaque, target: host.ScriptTarget) void,
 };
 
 /// Where the features join the panel's comings and goings.
@@ -108,7 +109,7 @@ pub const App = struct {
     pub fn start(a: *App) void {
         const w = a.window.?;
         a.s.fit = panel.setup(w);
-        panel.resize(w, a.s.height());
+        panel.resize(w, view.height(a.s));
         a.useKey(a.choice);
         a.through = .{ .window = w, .height = a.s.last_h };
         a.preview.watch(.{ .ctx = a, .func = pageKey });

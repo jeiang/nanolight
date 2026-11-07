@@ -1,5 +1,5 @@
 //! Which screen the panel shows, one at a time, and how long each lasts once
-//! the panel goes away. view.zig's `Nanolight` holds the one that is up and
+//! the panel goes away. nanolight.zig's `Nanolight` holds the one that is up and
 //! moves between them (`open`, `leave`, `escape`, `show`).
 const std = @import("std");
 

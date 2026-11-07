@@ -7,17 +7,19 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const Index = @import("apps.zig").Index;
 const view = @import("view.zig");
+const Nanolight = @import("nanolight.zig").Nanolight;
+const Host = @import("host.zig").Host;
 const chrome = @import("chrome.zig");
 const Choice = @import("keys.zig").Choice;
 const SettingsHost = @import("settings_host.zig").SettingsHost;
-const Target = @import("results.zig").Target;
+const Target = @import("host.zig").Target;
 
 /// A panel over its own index, drawn by a Tester once mounted. Pinned: the
 /// panel points at the index, so a Rig is initialized in place, and torn
 /// down in the one order that frees everything the panel owns.
 pub const Rig = struct {
     ix: Index,
-    s: view.Nanolight,
+    s: Nanolight,
     t: ui.Tester,
     mounted: bool,
 
@@ -33,7 +35,7 @@ pub const Rig = struct {
 
     pub const Options = struct {
         /// The panel's host; none keeps the one the test set, if any.
-        host: ?view.Host = null,
+        host: ?Host = null,
         screen: Screen = .rows,
         width: f32 = chrome.width,
         height: f32 = chrome.max_height,
@@ -69,7 +71,7 @@ pub const Rig = struct {
             .settings => r.s.open(.settings),
             .none => {},
         }
-        try r.t.init(r.ix.gpa, .init(&r.s, view.Nanolight.view), .{
+        try r.t.init(r.ix.gpa, .init(&r.s, view.window), .{
             .width = options.width,
             .height = options.height,
             .dark = options.dark,
@@ -99,7 +101,7 @@ pub const Probe = struct {
     opened_len: usize = 0,
     hidden: bool = false,
 
-    pub fn host(p: *Probe) view.Host {
+    pub fn host(p: *Probe) Host {
         return .{ .ctx = p, .open = open, .hide = hide };
     }
     fn open(ctx: *anyopaque, target: Target) void {
@@ -125,7 +127,7 @@ pub const Probe = struct {
 };
 
 /// The selected row is the first quicklink: the search for what was typed.
-pub fn onFirstQuicklink(s: *const view.Nanolight) bool {
+pub fn onFirstQuicklink(s: *const Nanolight) bool {
     const r = s.selected() orelse return false;
     return r.kind == .quicklink and r.item == 0;
 }
@@ -162,7 +164,7 @@ pub const Web = struct {
     page: [256]u8 = undefined,
     page_len: ?usize = null,
 
-    pub fn host(w: *Web) view.Host {
+    pub fn host(w: *Web) Host {
         return .{
             .ctx = w,
             .open = open,
@@ -217,7 +219,7 @@ pub const Prefs = struct {
     clip_clear_ok: bool = true,
     box: SettingsHost = undefined,
     /// The panel whose suggestions and searches the app's host would set.
-    nl: ?*view.Nanolight = null,
+    nl: ?*Nanolight = null,
     /// Opening at login, as the system keeps it: one for the process,
     /// as `Login.enabled` has. `init` turns it off.
     pub var login_on: bool = false;
@@ -246,7 +248,7 @@ pub const Prefs = struct {
             .quit = noop,
         };
     }
-    pub fn host(p: *Prefs) view.Host {
+    pub fn host(p: *Prefs) Host {
         return .{ .ctx = p, .open = open, .hide = hide, .settings = &p.box };
     }
     fn open(ctx: *anyopaque, target: Target) void {

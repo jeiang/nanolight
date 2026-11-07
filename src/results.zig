@@ -49,34 +49,6 @@ pub const Kind = enum {
     suggest,
 };
 
-/// What a row opens when Return is pressed on it.
-pub const Target = union(enum) {
-    /// An app, a file or a folder: its path.
-    app: []const u8,
-    url: []const u8,
-    script: ScriptTarget,
-    /// A pane of System Settings, its place in settings_panes.zig.
-    pane: u16,
-
-    /// Whether it opens a screen in the panel, which then stays up: a
-    /// script command's runs there (its runner hides it for a silent one).
-    pub fn opensScreen(t: Target) bool {
-        return switch (t) {
-            .script => true,
-            .app, .url, .pane => false,
-        };
-    }
-};
-
-/// A script command's row or their folder's: the host's script feature
-/// opens it (app.zig `Opens`).
-pub const ScriptTarget = union(enum) {
-    /// A script command, its place in `script_commands.List`.
-    command: u32,
-    /// Their folder.
-    folder,
-};
-
 /// The header over a provider's rows.
 pub const Section = enum {
     /// "Calculator", over the answer's card.
@@ -90,7 +62,7 @@ pub const Section = enum {
     above,
 };
 
-/// What keeps a row the same row when the list is filled again (anchor.zig).
+/// What keeps a row the same row when the list is filled again (pipeline.zig `Anchor`).
 pub const Identity = enum {
     /// Its place in its provider's list.
     item,
@@ -245,11 +217,6 @@ pub const max_heads = 3;
 /// The rows a card waiting on rates costs: its extra height and its head
 /// (view.zig asserts they fit).
 pub const pending_rows = 2;
-comptime {
-    // The panel's tallest list is sized for these (chrome.max_height).
-    assert(max_rows == chrome.max_rows);
-    assert(max_heads == chrome.max_heads);
-}
 /// Every local candidate, and a card, fit before ranking keeps the best of
 /// them and trims the list to `max_rows`.
 const max_candidates = blk: {
