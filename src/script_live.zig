@@ -5,7 +5,6 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const sc = @import("script_commands.zig");
 const apps = @import("apps.zig");
-const launchers = @import("launchers.zig");
 const config = @import("config.zig");
 const Target = @import("results.zig").Target;
 const App = @import("app.zig").App;
@@ -108,7 +107,7 @@ pub const Scripts = struct {
     /// counts kept by name are their app's or script's from now on.
     fn changed(sx: *Scripts) void {
         const s = sx.core.s;
-        launchers.adopt(&s.counts, s.index.gpa, s.launchable());
+        s.tally.adopt(s.index.gpa, s.launchable());
         s.query.invalidate();
         s.rebuild();
         sx.core.redraw();

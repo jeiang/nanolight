@@ -178,34 +178,61 @@ pub const Launchers = struct {
     }
 };
 
-pub fn load(counts: *Counts, gpa: std.mem.Allocator, kv: nanoui.kv.Store) void {
-    const text = prefs.text(kv, gpa, .launches) orelse return;
-    defer gpa.free(text);
-    counts.parse(gpa, text);
-}
+/// This machine's counts and where they are kept: the one writer of
+/// `nanolight.launches`.
+pub const Tally = struct {
+    counts: Counts = .{},
+    /// Null in tests: the counts last the run.
+    kv: ?nanoui.kv.Store = null,
 
-/// Every count kept in `kv`, the `launch_counts.max` most opened. A failure
-/// is logged; the counts in memory stand for this run.
-pub fn save(counts: *const Counts, gpa: std.mem.Allocator, kv: nanoui.kv.Store) void {
-    const text = counts.encode(gpa) orelse return;
-    defer gpa.free(text);
-    _ = prefs.setText(kv, .launches, text);
-}
-
-/// Older rows kept an app's count by its name: its key keeps it now.
-pub fn adopt(counts: *Counts, gpa: std.mem.Allocator, l: Launchers) void {
-    const Old = struct { name: []const u8, key: []const u8 };
-    // Found first: a rename changes the table.
-    var old: std.ArrayList(Old) = .empty;
-    defer old.deinit(gpa);
-    for (counts.map.keys()) |k| {
-        if (l.findKey(k) != null) continue;
-        const x = l.findName(k) orelse continue;
-        // best effort: out of memory, the older rows wait for the next scan.
-        old.append(gpa, .{ .name = k, .key = l.key(x) }) catch break;
+    pub fn deinit(t: *Tally, gpa: std.mem.Allocator) void {
+        t.counts.deinit(gpa);
+        t.* = undefined;
     }
-    for (old.items) |o| counts.rename(gpa, o.name, o.key);
-}
+
+    /// The counts kept, into an empty table.
+    pub fn load(t: *Tally, gpa: std.mem.Allocator) void {
+        const kv = t.kv orelse return;
+        const text = prefs.text(kv, gpa, .launches) orelse return;
+        defer gpa.free(text);
+        t.counts.parse(gpa, text);
+    }
+
+    /// Counts an opening of `key`, and keeps it.
+    pub fn bump(t: *Tally, gpa: std.mem.Allocator, key: []const u8) void {
+        t.counts.bump(gpa, key);
+        t.save(gpa);
+    }
+
+    /// `key`'s count, at least `count` (another machine's); kept by `save`.
+    pub fn raise(t: *Tally, gpa: std.mem.Allocator, key: []const u8, count: u16) void {
+        t.counts.raise(gpa, key, count);
+    }
+
+    /// Every count kept, the `launch_counts.max` most opened. A failure is
+    /// logged; the counts in memory stand for this run.
+    pub fn save(t: *const Tally, gpa: std.mem.Allocator) void {
+        const kv = t.kv orelse return;
+        const text = t.counts.encode(gpa) orelse return;
+        defer gpa.free(text);
+        _ = prefs.setText(kv, .launches, text);
+    }
+
+    /// Older rows kept an app's count by its name: its key keeps it now.
+    pub fn adopt(t: *Tally, gpa: std.mem.Allocator, l: Launchers) void {
+        const Old = struct { name: []const u8, key: []const u8 };
+        // Found first: a rename changes the table.
+        var old: std.ArrayList(Old) = .empty;
+        defer old.deinit(gpa);
+        for (t.counts.map.keys()) |k| {
+            if (l.findKey(k) != null) continue;
+            const x = l.findName(k) orelse continue;
+            // best effort: out of memory, the older rows wait for the next scan.
+            old.append(gpa, .{ .name = k, .key = l.key(x) }) catch break;
+        }
+        for (old.items) |o| t.counts.rename(gpa, o.name, o.key);
+    }
+};
 
 fn testIndex(a: std.mem.Allocator, names: []const []const u8) !apps.Index {
     var ix: apps.Index = .init(a);
@@ -285,29 +312,31 @@ test "counts outlive a scan that missed their app, and follow its path" {
     const t = std.testing;
     var mem: nanoui.kv.Memory = .{ .gpa = t.allocator };
     defer mem.deinit();
-    var counts: Counts = .{};
-    defer counts.deinit(t.allocator);
-    counts.bump(t.allocator, "/Volumes/Studio/Logic.app");
-    counts.bump(t.allocator, "/Volumes/Studio/Logic.app");
-    counts.bump(t.allocator, "C:\\Windows\\explorer.exe");
-    save(&counts, t.allocator, mem.store());
+    var tally: Tally = .{ .kv = mem.store() };
+    defer tally.deinit(t.allocator);
+    tally.bump(t.allocator, "/Volumes/Studio/Logic.app");
+    tally.bump(t.allocator, "/Volumes/Studio/Logic.app");
+    tally.bump(t.allocator, "C:\\Windows\\explorer.exe");
     // The volume is not mounted, and the app has another name now: both keep theirs.
-    var again: Counts = .{};
+    var again: Tally = .{ .kv = mem.store() };
     defer again.deinit(t.allocator);
-    load(&again, t.allocator, mem.store());
+    again.load(t.allocator);
     var ix: apps.Index = .init(t.allocator);
     defer ix.deinit();
     try ix.add("微信", "C:\\Windows\\explorer.exe");
-    adopt(&again, t.allocator, .{ .apps = &ix, .counts = &again });
-    const l: Launchers = .{ .apps = &ix, .counts = &again };
+    again.adopt(t.allocator, .{ .apps = &ix, .counts = &again.counts });
+    const l: Launchers = .{ .apps = &ix, .counts = &again.counts };
     try t.expectEqual(@as(u16, 1), l.count(.{ .app = 0 }));
-    try t.expectEqual(@as(u16, 2), again.of("/Volumes/Studio/Logic.app"));
+    try t.expectEqual(@as(u16, 2), again.counts.of("/Volumes/Studio/Logic.app"));
     // An older row by the app's name, in any case, is its path's from now on.
-    var old: Counts = .{};
+    var old: Tally = .{};
     defer old.deinit(t.allocator);
-    old.parse(t.allocator, "safari\t4\n");
+    old.counts.parse(t.allocator, "safari\t4\n");
     var named = try testIndex(t.allocator, &.{"Safari"});
     defer named.deinit();
-    adopt(&old, t.allocator, .{ .apps = &named, .counts = &old });
-    try t.expectEqual(@as(u16, 4), old.of("/Applications/Safari.app"));
+    old.adopt(t.allocator, .{ .apps = &named, .counts = &old.counts });
+    try t.expectEqual(@as(u16, 4), old.counts.of("/Applications/Safari.app"));
+    // Without a store, an opening is counted for the run only.
+    old.bump(t.allocator, "/Applications/Safari.app");
+    try t.expectEqual(@as(u16, 5), old.counts.of("/Applications/Safari.app"));
 }
