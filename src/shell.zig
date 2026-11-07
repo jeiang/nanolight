@@ -55,14 +55,17 @@ comptime {
 // The three OSes' `Single` answer the app's calls with the same types: a
 // seam that drifts fails the build, whichever OS it is built on.
 comptime {
-    const mac_single = @import("single_mac.zig");
-    for ([_]type{
-        @import("single_win.zig"),
-        @import("single_unix.zig"),
-    }) |S| {
-        for ([_][]const u8{ "claim", "send", "isSelf" }) |name| {
-            if (@TypeOf(@field(S, name)) != @TypeOf(@field(mac_single, name))) {
-                @compileError(@typeName(S) ++ "." ++ name ++ " differs from the Mac's");
+    // The Mac's alone: its file is AppKit's, which only its build analyzes.
+    if (mac) {
+        const mac_single = @import("single_mac.zig");
+        for ([_]type{
+            @import("single_win.zig"),
+            @import("single_unix.zig"),
+        }) |S| {
+            for ([_][]const u8{ "claim", "send", "isSelf" }) |name| {
+                if (@TypeOf(@field(S, name)) != @TypeOf(@field(mac_single, name))) {
+                    @compileError(@typeName(S) ++ "." ++ name ++ " differs from the Mac's");
+                }
             }
         }
     }
