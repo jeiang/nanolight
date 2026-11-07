@@ -30,7 +30,7 @@ pub const Step = enum { key, try_it, done };
 pub const Hooks = struct {
     ctx: *anyopaque,
     /// Who holds the keys, the system's into `system_buf`
-    /// (`shortcut_clash.look`). The system keeps it, so no context.
+    /// (`shortcut_holders.look`). The system keeps it, so no context.
     look: *const fn (system_buf: []shortcut_clash.SystemKey) shortcut_clash.Holders,
     /// Uses `choice` from now on (registers it, keeps it).
     apply: *const fn (ctx: *anyopaque, choice: Choice) void,

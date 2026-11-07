@@ -16,6 +16,7 @@ const settings = @import("settings.zig");
 const Toggle = @import("toggles.zig").Toggle;
 const Quicklink = @import("web.zig").Quicklink;
 const log = @import("log.zig");
+const paths = @import("paths.zig");
 const Away = @import("screen.zig").Away;
 
 pub const max_bytes = 1 << 20;
@@ -123,7 +124,6 @@ pub fn load(
     env: *const std.process.Environ.Map,
     kv: nanoui.kv.Store,
 ) Loaded {
-    const paths = @import("paths.zig");
     const data = paths.dataDir(arena) catch null;
     return loadFrom(arena, io, paths.configCandidates(arena, env, data) catch return .unusable, kv);
 }
@@ -148,10 +148,10 @@ fn absoluteScriptDirs(
 fn loadFrom(
     arena: std.mem.Allocator,
     io: std.Io,
-    paths: []const []const u8,
+    candidates: []const []const u8,
     kv: nanoui.kv.Store,
 ) Loaded {
-    for (paths) |path| {
+    for (candidates) |path| {
         const cwd = std.Io.Dir.cwd();
         const text = cwd.readFileAlloc(io, path, arena, .limited(max_bytes)) catch |e| {
             if (e == error.FileNotFound) continue;
@@ -835,12 +835,12 @@ test "the first file that exists wins" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "c.toml", .data = "suggestions = true\n" });
     const a = arena.allocator();
     const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
-    const paths = [_][]const u8{
+    const candidates = [_][]const u8{
         try std.fs.path.join(a, &.{ dir, "a.toml" }),
         try std.fs.path.join(a, &.{ dir, "b.toml" }),
         try std.fs.path.join(a, &.{ dir, "c.toml" }),
     };
-    const c = loadFrom(a, testing.io, &paths, m.store()).file;
+    const c = loadFrom(a, testing.io, &candidates, m.store()).file;
     try testing.expectEqual(false, c.suggestions.?);
 }
 
@@ -857,8 +857,8 @@ test "a relative script command dir is relative to the config file" {
     );
     const a = arena.allocator();
     const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
-    const paths = [_][]const u8{try std.fs.path.join(a, &.{ dir, "a.toml" })};
-    const c = loadFrom(a, testing.io, &paths, m.store()).file;
+    const candidates = [_][]const u8{try std.fs.path.join(a, &.{ dir, "a.toml" })};
+    const c = loadFrom(a, testing.io, &candidates, m.store()).file;
     try testing.expectEqualStrings(
         try std.fs.path.join(a, &.{ dir, "scripts" }),
         c.script_commands.dirs[0],
@@ -881,9 +881,9 @@ test "a relative config path still gives absolute script command dirs" {
     const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, ".", a);
     const relative = try std.fs.path.relativeAlloc(a, cwd, null, cwd, dir);
-    const paths = [_][]const u8{try std.fs.path.join(a, &.{ relative, "a.toml" })};
-    try testing.expect(!std.fs.path.isAbsolute(paths[0]));
-    const c = loadFrom(a, testing.io, &paths, m.store()).file;
+    const candidates = [_][]const u8{try std.fs.path.join(a, &.{ relative, "a.toml" })};
+    try testing.expect(!std.fs.path.isAbsolute(candidates[0]));
+    const c = loadFrom(a, testing.io, &candidates, m.store()).file;
     try testing.expectEqualStrings(
         try std.fs.path.join(a, &.{ dir, "scripts" }),
         c.script_commands.dirs[0],

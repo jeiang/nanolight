@@ -28,7 +28,7 @@ pub fn unregister() void {
 }
 
 /// Whether another program holds `choice` (Windows, X11; on the Mac the
-/// system's shortcut table says, shortcut_clash.zig).
+/// system's shortcut table says, shortcut_holders.zig).
 pub fn taken(choice: keys.Choice) bool {
     return impl.taken(choice);
 }

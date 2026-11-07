@@ -204,7 +204,7 @@ const Rig = struct {
         r.host = .{ .screen = r.s.scriptScreen(), .backing = opts.backing };
         r.prefs = .{};
         r.prefs.init();
-        r.scripts = .init(gpa);
+        r.scripts = .init(gpa, std.testing.io, &@import("test_apps.zig").no_env);
         errdefer r.deinit();
         r.scripts.add(r.panel.ix.apps.items, "Greet", "scripts", "/scripts/greet.sh");
         r.scripts.finish();

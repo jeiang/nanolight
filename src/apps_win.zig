@@ -148,7 +148,7 @@ const flags: u32 = 0x1 | 0x4;
 pub fn icon(
     gpa: std.mem.Allocator,
     io: std.Io,
-    env: ?*const std.process.Environ.Map,
+    env: *const std.process.Environ.Map,
     path: []const u8,
 ) ?[]u8 {
     _ = io;

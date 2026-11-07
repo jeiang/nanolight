@@ -145,7 +145,7 @@ fn theme(ctx: *anyopaque, set: ?Theme) Theme {
     if (set) |t| {
         core.s.theme = t;
         // Unkept, the next launch has the old tint.
-        prefs.keepTheme(core.kv, t);
+        prefs.keepText(core.kv, .theme, @tagName(t));
         core.redraw();
     }
     return core.s.theme;

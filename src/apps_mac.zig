@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const app_scan = @import("app_scan.zig");
 const search = @import("search.zig");
+const icon_mac = @import("icon_mac.zig");
 const objc = nanoui.objc;
 const Sink = app_scan.Sink;
 
@@ -79,12 +80,12 @@ pub fn launch(io: std.Io, path: []const u8) bool {
 pub fn icon(
     gpa: std.mem.Allocator,
     io: std.Io,
-    env: ?*const std.process.Environ.Map,
+    env: *const std.process.Environ.Map,
     path: []const u8,
 ) ?[]u8 {
     _ = io;
     _ = env;
-    return @import("icon_mac.zig").png(gpa, path);
+    return icon_mac.png(gpa, path);
 }
 
 /// Opens the Mac app at `path` without waiting for it: LaunchServices

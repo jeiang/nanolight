@@ -243,7 +243,7 @@ pub const Tally = struct {
 const test_apps = @import("test_apps.zig");
 
 fn testIndex(a: std.mem.Allocator, names: []const []const u8) !apps.Index {
-    var ix: apps.Index = .init(a);
+    var ix: apps.Index = .init(a, std.testing.io, &test_apps.no_env);
     for (names) |n| {
         var buf: [128]u8 = undefined;
         const path = try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n});
@@ -257,7 +257,7 @@ test "apps and scripts take turns by name, and opening one suggests it" {
     const t = std.testing;
     var ix = try testIndex(t.allocator, &.{ "Safari", "Calculator", "Notes" });
     defer ix.deinit();
-    var list: sc.List = .init(t.allocator);
+    var list: sc.List = .init(t.allocator, t.io, &test_apps.no_env);
     defer list.deinit();
     list.add(ix.apps.items, "Greet", "Mine", "/s/greet.sh");
     list.add(ix.apps.items, "Script Commands Folder", "Raycast", null);
@@ -295,7 +295,7 @@ test "apps and scripts take turns by name, and opening one suggests it" {
 
 test "rank keeps the best, best first, and opening often lifts a name" {
     const t = std.testing;
-    var ix: apps.Index = .init(t.allocator);
+    var ix: apps.Index = .init(t.allocator, t.io, &test_apps.no_env);
     defer ix.deinit();
     for ([_][]const u8{ "Notes Helper", "Notes", "Numbers", "Keynote" }) |name| {
         try test_apps.add(ix.sink(), name, name);
@@ -331,7 +331,7 @@ test "counts outlive a scan that missed their app, and follow its path" {
     var again: Tally = .{ .kv = mem.store() };
     defer again.deinit(t.allocator);
     again.load(t.allocator);
-    var ix: apps.Index = .init(t.allocator);
+    var ix: apps.Index = .init(t.allocator, t.io, &test_apps.no_env);
     defer ix.deinit();
     try test_apps.add(ix.sink(), "微信", "C:\\Windows\\explorer.exe");
     again.adopt(t.allocator, .{ .apps = &ix, .counts = &again.counts });

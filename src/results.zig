@@ -587,7 +587,7 @@ const defaults = &web.default_quicklinks;
 const no_counts: launch_counts.Counts = .{};
 
 fn testIndex(a: std.mem.Allocator, names: []const []const u8) !apps.Index {
-    var ix: apps.Index = .init(a);
+    var ix: apps.Index = .init(a, std.testing.io, &test_apps.no_env);
     for (names) |n| {
         var buf: [128]u8 = undefined;
         const path = try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n});
