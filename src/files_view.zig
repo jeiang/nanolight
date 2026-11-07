@@ -50,10 +50,10 @@ pub fn tile(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
 pub fn rebuild(s: *Nanolight) void {
     const q = s.query.words();
     if (platform.files and s.files_on and
-        (paths.isPath(q) or (spotlight.eligible(q) and !results.isMath(q, s.ratesTable()))))
+        (paths.isPath(q) or (spotlight.eligible(q) and results.math(q, s.ratesTable()) == null)))
     {
         s.found.filter(q);
-        if (s.host) |host| if (host.files) |ask| ask.func(ask.ctx, q);
+        if (s.host.files) |ask| ask.func(ask.ctx, q);
     } else s.found.deinit();
 }
 

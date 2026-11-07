@@ -49,19 +49,19 @@ pub const Host = struct {
     ctx: *anyopaque,
     open: *const fn (ctx: *anyopaque, target: Target) void,
     hide: *const fn (ctx: *anyopaque) void,
-    resize: ?*const fn (ctx: *anyopaque, h: f32) void = null,
+    resize: *const fn (ctx: *anyopaque, h: f32) void,
     /// Shows a search's page in the panel, over `chrome.webArea`; null takes it
     /// away. Without it, searches open in the browser.
     preview: ?*const fn (ctx: *anyopaque, url: ?[]const u8) void = null,
     /// Asks Google about the query's words. The last ask is answered once
     /// through `Nanolight.answered`, with completions or with none; the
     /// panel keeps its room until it is.
-    suggest: ?Ask = null,
+    suggest: Ask,
     /// Looks for files for the query's words; what is found comes back
     /// through `Nanolight.filesAnswered`, if anything does.
     files: ?Ask = null,
-    /// Settings' answers: Settings is drawn only with them.
-    settings: ?*const SettingsHost = null,
+    /// Settings' answers.
+    settings: *const SettingsHost,
     /// Runs system command `i` (commands.zig). Without it, nothing runs.
     command: ?Run = null,
     /// Clipboard history (clipboard_view.zig). Without it the "Clipboard
@@ -128,7 +128,9 @@ pub const Nanolight = struct {
     query: Query = .{},
     res: results.Results = .{},
     sel: usize = 0,
-    host: ?Host = null,
+    host: Host,
+    /// Listed for no words, by name, after the most opened (`apps.starters`).
+    starters: []const []const u8,
     /// How the window holds the panel (`shell.panel.setup`).
     fit: chrome.Fit = .{},
     /// Return sends a Google search to the browser and ⌘↩ shows it in
@@ -157,8 +159,8 @@ pub const Nanolight = struct {
     quicklinks: []const web.Quicklink = &web.default_quicklinks,
     web: suggest.List = .{},
     cache: suggest.Cache = .{},
-    /// Currency rates and their fetching (rates.zig); without them none are fetched.
-    rates: ?*rates.Live = null,
+    /// Currency rates and their fetching (rates.zig).
+    rates: *rates.Live,
     /// A quicklink's address with the longest query, each byte escaped (3
     /// bytes), and room for the address round it; a longer one is not opened.
     preview_buf: [4 * max_query_bytes]u8 = undefined,
@@ -207,8 +209,7 @@ pub const Nanolight = struct {
     /// Whether this system has clipboard history: the one answer for its
     /// row, its screen and Settings' section.
     pub fn hasClipboard(s: *const Nanolight) bool {
-        const h = s.host orelse return false;
-        return h.clipboard != null;
+        return s.host.clipboard != null;
     }
 
     pub fn hid(s: *Nanolight, now: i64) void {
@@ -243,7 +244,7 @@ pub const Nanolight = struct {
         s.screen = next;
         switch (next) {
             .rows, .welcome => {},
-            .preview => |page| if (s.host) |h| if (h.preview) |f| f(h.ctx, page.url),
+            .preview => |page| if (s.host.preview) |f| f(s.host.ctx, page.url),
             .settings => s.settings_ui.show(),
             .clipboard => s.clip_ui.show(s),
             .script => s.query.clear(),
@@ -260,7 +261,7 @@ pub const Nanolight = struct {
         s.screen = .rows;
         switch (was) {
             .rows => unreachable,
-            .preview => if (s.host) |h| if (h.preview) |f| f(h.ctx, null),
+            .preview => if (s.host.preview) |f| f(s.host.ctx, null),
             .settings => {
                 s.settings_ui.leave();
                 s.query.focus();
@@ -287,7 +288,7 @@ pub const Nanolight = struct {
     }
 
     fn hidePanel(s: *Nanolight) void {
-        if (s.host) |h| h.hide(h.ctx);
+        s.host.hide(s.host.ctx);
     }
 
     /// The field the rows' again, empty: a screen that searched in it went.
@@ -321,17 +322,7 @@ pub const Nanolight = struct {
         }
     }
 
-    /// The rows listed, top first.
-    pub fn rows(s: *const Nanolight) []const Row {
-        return s.res.slice();
-    }
-
-    /// The head over row `i`, where a section starts.
-    pub fn section(s: *const Nanolight, i: usize) ?[]const u8 {
-        return s.res.section(i);
-    }
-
-    /// Where the selection is among `rows`; null when none are listed.
+    /// Where the selection is among the rows listed; null when none are.
     pub fn selection(s: *const Nanolight) ?usize {
         return if (s.sel < s.res.n) s.sel else null;
     }
@@ -450,10 +441,10 @@ pub const Nanolight = struct {
     /// at once (easing to it only made each key wait); a window follows it.
     pub fn follow(s: *Nanolight, target: f32) f32 {
         const h = @min(target, chrome.max_height);
-        if (s.host) |host| if (host.resize) |f| if (@abs(h - s.last_h) > 0.25) {
+        if (@abs(h - s.last_h) > 0.25) {
             s.last_h = h;
-            f(host.ctx, h);
-        };
+            s.host.resize(s.host.ctx, h);
+        }
         return h;
     }
 
@@ -564,15 +555,15 @@ pub const Nanolight = struct {
         // no keyword (`res.google`), and no conversion waiting on rates.
         const listed = s.res.google != null and !s.res.pending;
         const asks = listed and s.suggest_on and suggest.eligible(words);
-        if (asks) if (s.host) |host| if (host.suggest) |ask| {
+        if (asks) {
             // The answer, or one to fewer letters, stands in meanwhile.
             const cached = s.cache.lookup(words, &s.web);
             if (s.web.n > 0) s.fill();
             if (!cached) {
                 s.held_h = held;
-                ask.func(ask.ctx, words);
+                s.host.suggest.func(s.host.suggest.ctx, words);
             }
-        };
+        }
         // The first row: an app, the answer, or the search for what was
         // typed; never a completion nobody picked (they come after it).
         s.sel = s.res.actionable(0);
@@ -615,18 +606,19 @@ pub const Nanolight = struct {
         s.res.build(.{
             .words = s.query.words(),
             .from = s.launchable(),
+            .starters = s.starters,
             .quicklinks = s.quicklinks,
             .completions = s.web.slices(&said),
             .rates = status,
             .clip_on = s.hasClipboard(),
             .found = &s.found,
-            .commands = if (s.host) |h| if (h.command) |run| run.installed else null else null,
+            .commands = if (s.host.command) |run| run.installed else null,
         });
         return s.res.need_rates;
     }
 
     pub fn ratesTable(s: *const Nanolight) ?*const rates_table.Rates {
-        return if (s.rates) |r| r.feed.table() else null;
+        return s.rates.feed.table();
     }
 
     pub const answered = answers.answered;
@@ -769,7 +761,7 @@ pub const Nanolight = struct {
     /// Quicklink `ql`'s page for `words`: in the panel when `in_panel` and
     /// the host can show it there, else in the browser.
     fn searchWith(s: *Nanolight, ql: u16, words: []const u8, in_panel: bool) void {
-        const h = s.host orelse return;
+        const h = s.host;
         if (ql >= s.quicklinks.len) return;
         const link = s.quicklinks[ql];
         const u = web.url(&s.preview_buf, link.url, words) orelse {
@@ -781,7 +773,7 @@ pub const Nanolight = struct {
     }
 
     fn go(s: *Nanolight, target: Target) void {
-        const h = s.host orelse return;
+        const h = s.host;
         h.open(h.ctx, target);
         if (!target.opensScreen()) h.hide(h.ctx);
     }
@@ -969,8 +961,7 @@ fn openPane(s: *Nanolight, _: *ui.Context, r: Row) void {
 }
 
 fn runCommand(s: *Nanolight, _: *ui.Context, r: Row) void {
-    const h = s.host orelse return;
-    const run = h.command orelse return;
+    const run = s.host.command orelse return;
     run.func(run.ctx, r.item);
 }
 

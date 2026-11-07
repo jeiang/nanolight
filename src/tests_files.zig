@@ -43,10 +43,10 @@ test "files share the local results' head and fit the original window" {
             var apps: usize = 0;
             var file_rows: usize = 0;
             var heads: usize = 0;
-            for (s.rows(), 0..) |row, i| {
+            for (s.res.slice(), 0..) |row, i| {
                 if (row.kind == .app) apps += 1;
                 if (row.kind == .file) file_rows += 1;
-                if (s.section(i) != null) heads += 1;
+                if (s.res.section(i) != null) heads += 1;
             }
             try std.testing.expectEqual(@as(usize, if (settings) 1 else 6), apps);
             try std.testing.expect(file_rows > 0);
@@ -54,14 +54,14 @@ test "files share the local results' head and fit the original window" {
             try std.testing.expectEqual(@as(usize, 3), heads);
             if (exact) try std.testing.expectEqual(
                 results.Kind.file,
-                s.rows()[@intFromBool(settings)].kind,
+                s.res.slice()[@intFromBool(settings)].kind,
             );
             // Every quicklink still follows, X's last, and one search for what was typed.
-            const last = s.rows()[s.rows().len - 1];
+            const last = s.res.slice()[s.res.slice().len - 1];
             try std.testing.expectEqual(results.Kind.quicklink, last.kind);
             try std.testing.expectEqualStrings("X", s.quicklinks[last.item].name);
             var google: usize = 0;
-            for (s.rows()) |row| {
+            for (s.res.slice()) |row| {
                 const named = row.kind == .quicklink and
                     std.mem.eql(u8, s.quicklinks[row.item].name, "Google");
                 if (named) google += 1;
@@ -219,8 +219,8 @@ test "apps, panes, files and quicklinks share the window budget" {
     var files = false;
     var google = false;
     var links: usize = 0;
-    for (s.rows(), 0..) |row, i| {
-        if (s.section(i) != null) heads += 1;
+    for (s.res.slice(), 0..) |row, i| {
+        if (s.res.section(i) != null) heads += 1;
         switch (row.kind) {
             .app => apps = true,
             .pane => panes = true,
@@ -234,10 +234,10 @@ test "apps, panes, files and quicklinks share the window budget" {
     }
     try t.expect(apps and files and google);
     try t.expectEqual(mac, panes);
-    try t.expectEqual(results.Kind.file, s.rows()[0].kind);
+    try t.expectEqual(results.Kind.file, s.res.slice()[0].kind);
     try t.expectEqual(results.max_quicklink_rows, links);
     try t.expectEqual(@as(usize, 3), heads);
-    if (mac) try t.expectEqual(results.max_rows, s.rows().len);
+    if (mac) try t.expectEqual(results.max_rows, s.res.slice().len);
     try t.expect(s.height() <= chrome.max_height);
 }
 
@@ -313,7 +313,7 @@ test "file answers move icons only for the current enabled query" {
 
 /// The row of `kind` showing `text` (a file's path or a completion), if listed.
 fn rowOf(s: *const view.Nanolight, kind: results.Kind, text: []const u8) ?usize {
-    for (s.rows(), 0..) |r, i| {
+    for (s.res.slice(), 0..) |r, i| {
         if (r.kind == kind and std.mem.eql(u8, @import("anchor.zig").textOf(s, r), text)) return i;
     }
     return null;
@@ -322,7 +322,7 @@ fn rowOf(s: *const view.Nanolight, kind: results.Kind, text: []const u8) ?usize 
 /// ↓ until the row of `kind` showing `text` is selected.
 fn pick(rig: *Rig, kind: results.Kind, text: []const u8) !void {
     const want = rowOf(&rig.s, kind, text) orelse return error.NoRow;
-    for (0..rig.s.rows().len) |_| {
+    for (0..rig.s.res.slice().len) |_| {
         if (rig.s.selection() == want) return;
         _ = rig.t.shortcut(.{ .key = @import("nanoui").ui.Shortcut.down });
     }
@@ -381,7 +381,9 @@ const FileAsks = struct {
     count: usize = 0,
 
     fn host(a: *FileAsks) view.Host {
-        return .{ .ctx = a, .open = open, .hide = hide, .files = .{ .ctx = a, .func = ask } };
+        var h = @import("test_support.zig").quietHost(a, open, hide);
+        h.files = .{ .ctx = a, .func = ask };
+        return h;
     }
     fn open(_: *anyopaque, _: @import("results.zig").Target) void {}
     fn hide(_: *anyopaque) void {}
@@ -414,13 +416,13 @@ test "a query the answer card takes is not searched for as a file" {
     for (cards) |q| {
         s.query.set(q);
         s.rebuild();
-        try t.expectEqual(results.Kind.calc, s.rows()[0].kind);
+        try t.expectEqual(results.Kind.calc, s.res.slice()[0].kind);
         try t.expectEqual(@as(usize, 0), asks.count);
     }
     // Words are searched for.
     s.query.set("10 km report");
     s.rebuild();
-    try t.expect(s.rows().len == 0 or s.rows()[0].kind != .calc);
+    try t.expect(s.res.slice().len == 0 or s.res.slice()[0].kind != .calc);
     try t.expectEqual(@as(usize, 1), asks.count);
     try t.expectEqualStrings("10 km report", asks.last[0..asks.last_len]);
 }
@@ -438,7 +440,7 @@ test "a tab or line break pasted round the words reads as the words, to rows and
     // Math: the card shows, and no file is looked for.
     s.query.set("2 + 3\t");
     s.rebuild();
-    try t.expectEqual(results.Kind.calc, s.rows()[0].kind);
+    try t.expectEqual(results.Kind.calc, s.res.slice()[0].kind);
     try t.expectEqual(@as(usize, 0), asks.count);
     // Words: searched for without the blanks, and what is found lands.
     s.query.set("\treport\r\n");

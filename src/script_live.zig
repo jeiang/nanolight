@@ -12,7 +12,7 @@ const Hook = @import("app.zig").Hook;
 const Opens = @import("app.zig").Opens;
 const Runner = @import("script_run.zig").Runner;
 
-/// Pinned once initialized: the runner's hooks point at it.
+/// Pinned once its hooks are taken and its list is the panel's (main.zig).
 pub const Scripts = struct {
     core: *App,
     env: *const std.process.Environ.Map,
@@ -24,24 +24,38 @@ pub const Scripts = struct {
     /// The script commands found, listed among the apps (the panel's `scripts`).
     list: sc.List,
 
+    /// The script commands among the apps already found (main.zig scans
+    /// them once), and their runner.
     pub fn init(
-        sx: *Scripts,
         core: *App,
         env: *const std.process.Environ.Map,
         cfg: *const config.Config,
-    ) void {
+    ) Scripts {
         const gpa = core.app.gpa;
-        sx.core = core;
-        sx.env = env;
-        sx.cfg = cfg;
-        sx.runner = .{
-            .gpa = gpa,
-            .io = core.app.io,
-            .screen = core.s.scriptScreen(),
-            .hooks = .{ .ctx = sx, .hide = hide, .redraw = redraw, .copy = copy, .footer = footer },
+        const ix = core.s.index;
+        var list: sc.List = .init(gpa);
+        sc.scan(&list, core.app.io, ix.apps.items, ix.env, cfg.script_commands.dirs);
+        list.finish();
+        return .{
+            .core = core,
+            .env = env,
+            .cfg = cfg,
+            .runner = .{
+                .gpa = gpa,
+                .io = core.app.io,
+                .screen = core.s.scriptScreen(),
+                .hooks = .{
+                    .ctx = core,
+                    // A silent script runs on without its screen: the
+                    // panel goes, and its going is noted.
+                    .hide = App.hide,
+                    .redraw = redraw,
+                    .copy = copy,
+                    .footer = App.footer,
+                },
+            },
+            .list = list,
         };
-        sx.list = .init(gpa);
-        core.s.scripts = &sx.list;
     }
 
     pub fn deinit(sx: *Scripts) void {
@@ -81,18 +95,6 @@ pub const Scripts = struct {
             },
             .app, .url, .pane => unreachable, // The core opens these itself.
         }
-    }
-
-    /// The apps and script commands found again, their counts kept.
-    pub fn rescan(sx: *Scripts) void {
-        const gpa = sx.core.app.gpa;
-        const ix = sx.core.s.index;
-        ix.deinit();
-        ix.* = .init(gpa);
-        sx.list.deinit();
-        sx.list = .init(gpa);
-        sx.fill(ix, &sx.list);
-        sx.changed();
     }
 
     /// The apps first: a script whose title an app has is not listed.
@@ -149,20 +151,10 @@ fn pop(ctx: *anyopaque) void {
     from(ctx).runner.pop();
 }
 
-fn footer(ctx: *anyopaque, text: []const u8) void {
-    App.footer(from(ctx).core, text);
-}
-
 fn copy(_: *anyopaque, text: []const u8) void {
     nanoui.clipboard.writeText(text);
 }
 
-/// A silent script runs on without its screen: the panel goes, and its
-/// going is noted (`App.hide`).
-fn hide(ctx: *anyopaque) void {
-    App.hide(from(ctx).core);
-}
-
 fn redraw(ctx: *anyopaque) void {
-    from(ctx).core.redraw();
+    App.from(ctx).redraw();
 }

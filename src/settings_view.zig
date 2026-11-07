@@ -470,9 +470,9 @@ pub const Settings = struct {
     }
 };
 
-/// The app's answers. Settings is never drawn, nor driven, without them.
+/// The app's answers.
 fn hooks(n: *const panel.Nanolight) *const SettingsHost {
-    return n.host.?.settings.?;
+    return n.host.settings;
 }
 
 /// The rows this build shows, in order, with or without the clipboard's.

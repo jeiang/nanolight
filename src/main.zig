@@ -48,10 +48,6 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "Nanolight", .quit_on_last_window_closed = false },
     );
     defer app.destroy();
-    var index: Index = .init(init.gpa);
-    defer index.deinit();
-    apps.scan(&index, init.io, init.environ_map, &.{});
-    index.finish();
     const kv = nanoui.kv.standard();
     // A headless run is no one's: neither their config nor their settings.
     var cfg_arena: std.heap.ArenaAllocator = .init(init.gpa);
@@ -62,17 +58,28 @@ pub fn main(init: std.process.Init) !void {
         config.load(cfg_arena.allocator(), init.io, init.environ_map, kv);
     const cfg = loaded.config();
     config.apply(kv, init.gpa, loaded, clock.now());
+    // The apps, once: the config names folders to look in besides.
+    var index: Index = .init(init.gpa);
+    defer index.deinit();
+    apps.scan(&index, init.io, init.environ_map, cfg.apps.extra_dirs);
+    index.finish();
     // The key is the config's or the Nix module's: the welcome does not ask.
     // `config.parse` lets through only a hotkey this system can use.
-    var o: Onboard = .{ .skip_key = !platform.key_ui or cfg.hotkey != null };
+    var o: Onboard = .{
+        .skip_key = !platform.key_ui or cfg.hotkey != null,
+        .hooks = undefined, // The App's, below: their context.
+    };
     var s: Nanolight = .{
         .index = &index,
+        .starters = apps.starters,
         .tally = .{ .kv = kv },
         .away = .{ .pop_after = cfg.pop_to_root_seconds },
+        // Both answer through the App, and come with the features `run` wires.
+        .host = undefined,
+        .rates = undefined,
     };
     defer s.deinit();
     s.tally.load(init.gpa);
-    s.tally.adopt(init.gpa, s.launchable());
     var core: App = .{
         .app = app,
         .s = &s,
@@ -80,6 +87,7 @@ pub fn main(init: std.process.Init) !void {
         .kv = kv,
         .choice = prefs.hotkey(kv, init.gpa),
     };
+    o.hooks = core.welcomeHooks();
     try run(init, &core, loaded, &cfg, cfg_arena.allocator());
 }
 
@@ -93,7 +101,6 @@ fn run(
     cfg: *const config.Config,
     cfg_arena: std.mem.Allocator,
 ) !void {
-    const shown = !core.app.flags.hidden;
     const s = core.s;
     var money: rates.Live = .{ .env = .{
         .gpa = core.app.gpa,
@@ -108,19 +115,8 @@ fn run(
     var files: files_live.Files = .{ .core = core };
     var sync: account_live.Sync = .{ .core = core };
     defer sync.deinit();
-    var scripts: script_live.Scripts = undefined;
-    var cmds: commands_live.Commands = undefined;
-    if (shown) {
-        scripts.init(core, init.environ_map, cfg);
-        cmds.init(core, init.environ_map);
-    }
-    defer if (shown) {
-        cmds.deinit();
-        scripts.deinit();
-    };
     var clip: clipboard_live.Clip = .{ .core = core };
     defer clip.deinit();
-    if (shown) clip.open(loaded.clipboardConfig(), loaded != .unusable);
     var update: update_live.Update = .{ .core = core };
     defer update.deinit();
     var menu: menu_live.Menu = .{ .core = core, .update = &update, .sync = &sync };
@@ -141,23 +137,36 @@ fn run(
         .suggest = sug.entry(),
         .files = if (platform.files) files.entry() else null,
         .settings = &settings,
-        .command = if (shown) cmds.entry() else null,
         .clipboard = clip.entry(),
     };
     core.hooks = .{
         .showing = clip.showingHook(),
-        .rescan = if (shown) scripts.rescanHook() else null,
-        .popped = if (shown) scripts.poppedHook() else null,
-        .opens = if (shown) scripts.opensHook() else null,
         .away = update.awayHook(),
         .menu = menu.menuHook(),
     };
-    if (shown) _ = sync.setQuicklinks(prefs.quicklinks(cfg_arena, core.kv));
-    if (shown) scripts.rescan();
-    files_live.load(core);
-    loadPreferences(s, core.kv, init.gpa);
-    try openWindow(core);
-    if (!shown) return core.app.run();
+    if (core.app.flags.hidden) {
+        ready(core, init.gpa);
+        var options = windowOptions(core);
+        // Snapshots: the panel alone; `setup`, which leaves room round it,
+        // never runs.
+        options.width = chrome.width;
+        options.height = s.height();
+        core.window = try core.app.newWindow(options);
+        return core.app.run();
+    }
+    clip.open(loaded.clipboardConfig(), loaded != .unusable);
+    var scripts: script_live.Scripts = .init(core, init.environ_map, cfg);
+    defer scripts.deinit();
+    s.scripts = &scripts.list;
+    var cmds: commands_live.Commands = .init(core, init.environ_map);
+    defer cmds.deinit();
+    s.host.command = cmds.entry();
+    core.hooks.rescan = scripts.rescanHook();
+    core.hooks.popped = scripts.poppedHook();
+    core.hooks.opens = scripts.opensHook();
+    _ = sync.setQuicklinks(prefs.quicklinks(cfg_arena, core.kv));
+    ready(core, init.gpa);
+    core.window = try core.app.newWindow(windowOptions(core));
     try runShown(init, core, &menu, &update, &sync, cfg.sync);
 }
 
@@ -178,6 +187,16 @@ fn answeredArgs(init: std.process.Init, args: []const [:0]const u8) !bool {
     return false;
 }
 
+/// What the panel lists from, once all of it is there: the counts kept by
+/// name are their app's or script's, file search, and the settings kept
+/// outside the config.
+fn ready(core: *App, gpa: std.mem.Allocator) void {
+    const s = core.s;
+    s.tally.adopt(gpa, s.launchable());
+    files_live.load(core);
+    loadPreferences(s, core.kv, gpa);
+}
+
 /// The settings kept outside the config: Google's completions (on unless
 /// turned off in Settings), searches sent out, and the theme.
 fn loadPreferences(s: *Nanolight, kv: nanoui.kv.Store, gpa: std.mem.Allocator) void {
@@ -186,9 +205,9 @@ fn loadPreferences(s: *Nanolight, kv: nanoui.kv.Store, gpa: std.mem.Allocator) v
     s.theme = prefs.theme(kv, gpa);
 }
 
-/// The panel as a hotkey shows it, then its window, hidden until its key
+/// The panel as a hotkey shows it, then its window's: hidden until its key
 /// or its menu shows it.
-fn openWindow(core: *App) !void {
+fn windowOptions(core: *App) nanoui.WindowOptions {
     const s = core.s;
     _ = s.show(clock.now());
     // The rows first, so a snapshot is as tall as the panel.
@@ -203,13 +222,7 @@ fn openWindow(core: *App) !void {
         .content = .{ .view = .init(s, Nanolight.view) },
     };
     panel.adjust(&options);
-    // Headless (snapshots): the panel alone; `setup`, which leaves room
-    // round it, never runs.
-    if (core.app.flags.hidden) {
-        options.width = chrome.width;
-        options.height = s.height();
-    }
-    core.window = try core.app.newWindow(options);
+    return options;
 }
 
 /// A run with a person at it: one copy, the window round the panel, the

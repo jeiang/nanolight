@@ -21,12 +21,8 @@ comptime {
 }
 
 /// Listed with an empty query before anything was opened: names the
-/// backend's scan lists. Tests list the Mac's on every OS, as their apps
-/// are named after them.
-pub const starters: []const []const u8 = if (builtin.is_test)
-    &.{ "Safari", "Notes", "Calendar", "System Settings", "Finder" }
-else
-    backend.starters;
+/// backend's scan lists.
+pub const starters = backend.starters;
 
 /// Finds this machine's apps, and those in the folders config.toml names,
 /// found as this OS finds its own. `Index.finish` comes after the last scan.
@@ -94,17 +90,6 @@ pub const Index = struct {
         };
     }
 
-    /// Adds an app unless one of its name is there already, its folder
-    /// the one it is in.
-    pub fn add(ix: *Index, name: []const u8, path: []const u8) !void {
-        return ix.addIn(name, path, app_scan.folderOf(path));
-    }
-
-    /// Adds an app, its row saying `folder` ("Applications", "Start").
-    pub fn addIn(ix: *Index, name: []const u8, path: []const u8, folder: []const u8) !void {
-        return ix.sink().put(name, path, folder);
-    }
-
     /// After the scans: the apps sorted, and those memory left out logged.
     pub fn finish(ix: *Index) void {
         if (ix.lost > 0) std.log.warn("nanolight: {d} apps not listed: out of memory", .{ix.lost});
@@ -162,14 +147,16 @@ pub fn score(query: []const u8, app: App) ?search.Match {
     return m;
 }
 
+const test_apps = @import("test_apps.zig");
+
 test "names are kept once and sorted" {
     const t = std.testing;
     var ix: Index = .init(t.allocator);
     defer ix.deinit();
-    try ix.add("Safari", "/Applications/Safari.app");
-    try ix.add("notes", "/System/Applications/Notes.app");
-    try ix.add("Notes", "/Applications/Notes.app");
-    try ix.add("Calculator", "/System/Applications/Calculator.app");
+    try test_apps.add(ix.sink(), "Safari", "/Applications/Safari.app");
+    try test_apps.add(ix.sink(), "notes", "/System/Applications/Notes.app");
+    try test_apps.add(ix.sink(), "Notes", "/Applications/Notes.app");
+    try test_apps.add(ix.sink(), "Calculator", "/System/Applications/Calculator.app");
     ix.sort();
     try t.expectEqual(@as(usize, 3), ix.apps.items.len);
     try t.expectEqualStrings("Calculator", ix.apps.items[0].name);
@@ -181,8 +168,8 @@ test "an icon stays with its app through a sort" {
     const t = std.testing;
     var ix: Index = .init(t.allocator);
     defer ix.deinit();
-    try ix.add("Mail", "/Applications/Mail.app");
-    try ix.add("Zed", "/Applications/Zed.app");
+    try test_apps.add(ix.sink(), "Mail", "/Applications/Mail.app");
+    try test_apps.add(ix.sink(), "Zed", "/Applications/Zed.app");
     const zed_was = ix.find("Zed").?;
     ix.apps.items[zed_was].icon = .{ .png = try t.allocator.dupe(u8, "zed") };
     // A name read later (localize) sorts again: Mail moves.
@@ -229,7 +216,7 @@ test "pinyin keys find CJK display names" {
     const t = std.testing;
     var ix = Index.init(t.allocator);
     defer ix.deinit();
-    try ix.add("WeChat", "/Applications/WeChat.app");
+    try test_apps.add(ix.sink(), "WeChat", "/Applications/WeChat.app");
     const a = ix.arena.allocator();
     ix.apps.items[0].name = try a.dupe(u8, "微信");
     ix.apps.items[0].pinyin = try a.dupe(u8, "weixin");

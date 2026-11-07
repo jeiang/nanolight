@@ -104,7 +104,7 @@ pub const App = struct {
     }
 
     /// Once the window is up, in a run with a person at it: the room round
-    /// the panel, its key, click-through, the page's keys, the welcome's.
+    /// the panel, its key, click-through, the page's keys.
     pub fn start(a: *App) void {
         const w = a.window.?;
         a.s.fit = panel.setup(w);
@@ -112,8 +112,15 @@ pub const App = struct {
         a.useKey(a.choice);
         a.through = .{ .window = w, .height = a.s.last_h };
         a.preview.watch(.{ .ctx = a, .func = pageKey });
-        a.o.hooks = .{
+    }
+
+    /// What the welcome asks of the app: who holds the keys, the key kept,
+    /// a holder made to let go, opening at login (unless the key is set
+    /// elsewhere), the welcome kept as done.
+    pub fn welcomeHooks(a: *App) onboard.Hooks {
+        return .{
             .ctx = a,
+            .look = shortcut_clash.look,
             .apply = apply,
             .fix = fix,
             .login = if (a.o.skip_key) null else shell.Login.enabled,

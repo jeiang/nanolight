@@ -9,6 +9,7 @@ const Theme = @import("palette.zig").Theme;
 const settings_view = @import("settings_view.zig");
 const support = @import("test_support.zig");
 const Rig = support.Rig;
+const test_apps = @import("test_apps.zig");
 const suggest = @import("suggest.zig");
 const platform = @import("platform.zig");
 const placeholder = "Search apps, do math, search the web…";
@@ -213,7 +214,8 @@ test "System Settings' panes open from the panel, which stays in its window (#12
     defer rig.deinit();
     const s = &rig.s;
     const t = &rig.t;
-    try rig.ix.add("System Settings", "/System/Applications/System Settings.app");
+    const settings_app = "/System/Applications/System Settings.app";
+    try test_apps.add(rig.ix.sink(), "System Settings", settings_app);
     try rig.apps(&.{ "Sound A", "Sound B", "Sound C", "Sound D", "Sound E", "Sound F" });
     try rig.mount(.{ .host = web.host() });
     support.press(t, &.{.{ .insert = "login items" }});
@@ -253,7 +255,7 @@ test "the panel's height lands at once, and keeps Google's room between keys" {
             h = to;
         }
     };
-    s.host.?.resize = Asked.f;
+    s.host.resize = Asked.f;
     try rig.mount(.{ .dark = false, .settle = false });
     t.frame();
     const empty = Asked.h;

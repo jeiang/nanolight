@@ -68,8 +68,7 @@ pub const Screen = struct {
     }
 
     fn host(n: *const panel.Nanolight) ?*const Host {
-        const h = n.host orelse return null;
-        return h.clipboard;
+        return n.host.clipboard;
     }
 
     fn refresh(s: *Screen, n: *panel.Nanolight, h: *const Host) void {

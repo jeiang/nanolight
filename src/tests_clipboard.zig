@@ -44,7 +44,9 @@ const Fake = struct {
     }
 
     fn host(f: *Fake) view.Host {
-        return .{ .ctx = f, .open = open, .hide = hide, .clipboard = &f.ch };
+        var h = support.quietHost(f, open, hide);
+        h.clipboard = &f.ch;
+        return h;
     }
 
     fn open(_: *anyopaque, _: @import("results.zig").Target) void {}
@@ -152,7 +154,7 @@ test "the row appears for clip and clipboard, only with a host, and opens the sc
     try testing.expect(t.hasText("Search Clipboard History…"));
     // Without a host for it the row is not listed.
     s.leave(.closed);
-    s.host.?.clipboard = null;
+    s.host.clipboard = null;
     _ = s.show(0);
     support.retype(t, "clip");
     for (s.res.slice()) |r| try testing.expect(r.kind != .clipboard);

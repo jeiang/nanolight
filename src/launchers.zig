@@ -130,9 +130,9 @@ pub const Launchers = struct {
         return top.n;
     }
 
-    /// Up to `out.len` for an empty query: the most opened, else the
-    /// starters there are.
-    pub fn suggestions(l: Launchers, out: []Item) usize {
+    /// Up to `out.len` for an empty query: the most opened, else those of
+    /// `starters` (names) there are.
+    pub fn suggestions(l: Launchers, starters: []const []const u8, out: []Item) usize {
         var n: usize = 0;
         // Most opened first: a few passes from the highest count down.
         var best: u16 = std.math.maxInt(u16);
@@ -151,7 +151,7 @@ pub const Launchers = struct {
             };
             best = next;
         }
-        for (apps.starters) |s| {
+        for (starters) |s| {
             if (n == out.len) break;
             const x = l.findName(s) orelse continue;
             for (out[0..n]) |o| {
@@ -234,11 +234,14 @@ pub const Tally = struct {
     }
 };
 
+const test_apps = @import("test_apps.zig");
+
 fn testIndex(a: std.mem.Allocator, names: []const []const u8) !apps.Index {
     var ix: apps.Index = .init(a);
     for (names) |n| {
         var buf: [128]u8 = undefined;
-        try ix.add(n, try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n}));
+        const path = try std.fmt.bufPrint(&buf, "/Applications/{s}.app", .{n});
+        try test_apps.add(ix.sink(), n, path);
     }
     ix.sort();
     return ix;
@@ -264,14 +267,15 @@ test "apps and scripts take turns by name, and opening one suggests it" {
     try t.expectEqualStrings("Greet", names[1]);
     try t.expectEqualStrings("Script Commands Folder", names[4]);
     // Nothing opened yet: the starters there are.
+    const starters: []const []const u8 = &.{ "Safari", "Mail", "Notes" };
     var out: [3]Item = undefined;
-    try t.expectEqual(@as(usize, 2), l.suggestions(&out));
+    try t.expectEqual(@as(usize, 2), l.suggestions(starters, &out));
     try t.expectEqualStrings("Safari", l.name(out[0]));
     // Opened, a script comes first; ties go by name.
     counts.bump(t.allocator, list.items.items[0].key);
     counts.bump(t.allocator, list.items.items[0].key);
     counts.bump(t.allocator, ix.apps.items[0].path);
-    try t.expectEqual(@as(usize, 3), l.suggestions(&out));
+    try t.expectEqual(@as(usize, 3), l.suggestions(starters, &out));
     try t.expect(out[0].eql(.{ .script = 0 }));
     try t.expectEqualStrings("Calculator", l.name(out[1]));
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
@@ -288,7 +292,7 @@ test "rank keeps the best, best first, and opening often lifts a name" {
     var ix: apps.Index = .init(t.allocator);
     defer ix.deinit();
     for ([_][]const u8{ "Notes Helper", "Notes", "Numbers", "Keynote" }) |name| {
-        try ix.add(name, name);
+        try test_apps.add(ix.sink(), name, name);
     }
     var counts: Counts = .{};
     defer counts.deinit(t.allocator);
@@ -323,7 +327,7 @@ test "counts outlive a scan that missed their app, and follow its path" {
     again.load(t.allocator);
     var ix: apps.Index = .init(t.allocator);
     defer ix.deinit();
-    try ix.add("微信", "C:\\Windows\\explorer.exe");
+    try test_apps.add(ix.sink(), "微信", "C:\\Windows\\explorer.exe");
     again.adopt(t.allocator, .{ .apps = &ix, .counts = &again.counts });
     const l: Launchers = .{ .apps = &ix, .counts = &again.counts };
     try t.expectEqual(@as(u16, 1), l.count(.{ .app = 0 }));
