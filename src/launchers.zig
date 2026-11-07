@@ -189,7 +189,7 @@ pub fn load(counts: *Counts, gpa: std.mem.Allocator, kv: nanoui.kv.Store) void {
 pub fn save(counts: *const Counts, gpa: std.mem.Allocator, kv: nanoui.kv.Store) void {
     const text = counts.encode(gpa) orelse return;
     defer gpa.free(text);
-    _ = prefs.setText(kv, .launches, text);
+    prefs.keepText(kv, .launches, text);
 }
 
 /// Older rows kept an app's count by its name: its key keeps it now.

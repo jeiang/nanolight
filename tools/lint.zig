@@ -2,8 +2,9 @@
 //! can check. Each argument is a `.zig` file or a folder of them (not its
 //! subfolders). A line is at most 100 columns, except in a table laid out by
 //! hand between `// zig fmt: off` and `// zig fmt: on`. An error dropped
-//! with an empty catch says why: `// best effort: <why>` on its line or the
-//! line above. `zig fmt --check` runs beside this, as its own step.
+//! with the literal text `catch {}` says why: `// best effort: <why>` on its
+//! line or the line above; other ways of dropping one are not checked.
+//! `zig fmt --check` runs beside this, as its own step.
 const std = @import("std");
 const assert = std.debug.assert;
 

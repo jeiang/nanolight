@@ -74,14 +74,14 @@ fn files(ctx: *anyopaque, on: bool) void {
 fn searchesOut(ctx: *anyopaque, on: bool) void {
     const core = from(ctx).core;
     core.s.searches_out = on;
-    _ = prefs.setFlag(core.kv, .searches_out, on);
+    prefs.keepFlag(core.kv, .searches_out, on);
 }
 
 fn theme(ctx: *anyopaque, t: Theme) void {
     const core = from(ctx).core;
     core.s.theme = t;
-    // A failure is logged; the next launch then has the old tint.
-    _ = prefs.setTheme(core.kv, t);
+    // Unkept, the next launch has the old tint.
+    prefs.keepTheme(core.kv, t);
     core.redraw();
 }
 

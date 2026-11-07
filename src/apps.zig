@@ -31,6 +31,7 @@ else
 /// Finds this machine's apps, and those in the folders config.toml names,
 /// found as this OS finds its own. `Index.finish` comes after the last scan.
 pub fn scan(ix: *Index, io: std.Io, env: *const Env, extra_dirs: []const []const u8) void {
+    ix.io = io;
     ix.env = env;
     backend.scan(ix.sink(), io, env);
     for (extra_dirs) |d| backend.scanDir(ix.sink(), io, d, 1);
@@ -42,10 +43,11 @@ pub fn launch(io: std.Io, path: []const u8) bool {
 }
 
 /// The icon kept in `slot`, asked of the system for `path` (as PNG, `gpa`
-/// owning it) the first time.
+/// owning it) the first time; none asked without an `io`.
 pub fn cachedIcon(
     slot: *app_scan.Icon,
     gpa: std.mem.Allocator,
+    io: ?std.Io,
     env: ?*const Env,
     path: []const u8,
 ) ?[]const u8 {
@@ -54,8 +56,7 @@ pub fn cachedIcon(
         .none => return null,
         .unloaded => {},
     }
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const png = backend.icon(gpa, io, env, path);
+    const png = backend.icon(gpa, io orelse return null, env, path);
     slot.* = if (png) |p| .{ .png = p } else .none;
     return png;
 }
@@ -66,7 +67,8 @@ pub const Index = struct {
     apps: std.ArrayList(App) = .empty,
     /// Apps a scan found but memory left out (`finish` says so).
     lost: u32 = 0,
-    /// The environment the apps were found in, for their icons.
+    /// The Io and environment the apps were found with, for their icons.
+    io: ?std.Io = null,
     env: ?*const Env = null,
 
     pub fn init(gpa: std.mem.Allocator) Index {
@@ -141,7 +143,7 @@ pub const Index = struct {
     /// The app's icon as PNG, made the first time it is asked for.
     pub fn icon(ix: *Index, i: u32) ?[]const u8 {
         const app = &ix.apps.items[i];
-        return cachedIcon(&app.icon, ix.gpa, ix.env, app.path);
+        return cachedIcon(&app.icon, ix.gpa, ix.io, ix.env, app.path);
     }
 };
 

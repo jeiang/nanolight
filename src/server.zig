@@ -93,7 +93,10 @@ pub fn main(init: std.process.Init) !void {
             continue;
         };
         defer stream.close(init.io);
-        transport.serveOne(init.gpa, init.io, stream, .{ .state = state, .tokens = tokens });
+        const serve: transport.Serve = .{ .state = state, .tokens = tokens };
+        transport.serveOne(init.gpa, init.io, stream, serve) catch |e| {
+            std.log.warn("connection dropped: {t}", .{e});
+        };
     }
 }
 

@@ -26,6 +26,8 @@ const max_out = 256 * 1024;
 /// A script this size or larger isn't read, so it isn't run: its header,
 /// which may ask to confirm or for arguments, would go unread.
 const max_script_bytes = 1 << 20;
+/// The longest percent-encoded argument handed to a script.
+const max_encoded = 2048;
 
 const run_actions = [_]model.Action{.run};
 const done_actions = actions: {
@@ -43,14 +45,10 @@ pub const Row = struct {
     icon: ?[]const u8 = null,
 };
 
-fn io() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
-
 pub const Runner = struct {
     gpa: std.mem.Allocator,
     /// The app's (processes need a real one: the global single-threaded
-    /// Io can't start them).
+    /// Io can't start them), which also reads the script.
     io: std.Io,
     screen: model.Screen,
     hooks: Hooks,
@@ -97,7 +95,7 @@ pub const Runner = struct {
         r.open = true;
         r.shown = false;
         const limit: std.Io.Limit = .limited(max_script_bytes);
-        r.bytes = std.Io.Dir.cwd().readFileAlloc(io(), r.file, a, limit) catch
+        r.bytes = std.Io.Dir.cwd().readFileAlloc(r.io, r.file, a, limit) catch
             return r.fail("Couldn't read the script.");
         r.meta = sc.parse(a, r.bytes) orelse .{ .title = r.title };
         if (r.asks()) return r.ask();
@@ -176,31 +174,16 @@ pub const Runner = struct {
         r.stop();
         r.out.clearRetainingCapacity();
         const a = r.arena.?.allocator();
-        var cmd_buf: [8][]const u8 = undefined;
-        const cmd = sc.command(r.bytes, r.file, &cmd_buf);
-        var argv: std.ArrayList([]const u8) = .empty;
-        // Its errors with its output: through sh, where there is one.
-        if (!windows) argv.appendSlice(
-            a,
-            &.{ "/bin/sh", "-c", "exec \"$@\" 2>&1", "sh" },
-        ) catch return;
-        argv.appendSlice(a, cmd) catch return;
-        for (r.meta.args, 0..) |maybe, i| {
-            const arg = maybe orelse continue;
-            const v = r.args[i].items;
-            if (v.len == 0 and
-                !arg.optional) return r.fail("Fill in every argument that isn't optional.");
-            var enc: [2048]u8 = undefined;
-            var w: std.Io.Writer = .fixed(&enc);
-            // best effort: a value past `enc` is cut.
-            if (arg.percentEncoded) search.percentEncode(&w, v, .{}) catch {};
-            argv.append(
-                a,
-                a.dupe(u8, if (arg.percentEncoded) w.buffered() else v) catch return,
-            ) catch return;
-        }
+        const argv = r.commandLine(a) catch |e| return r.fail(switch (e) {
+            error.Missing => "Fill in every argument that isn't optional.",
+            error.TooLong => std.fmt.comptimePrint(
+                "An argument is too long (over {d} bytes once encoded).",
+                .{max_encoded},
+            ),
+            error.OutOfMemory => "Out of memory.",
+        });
         const options: std.process.SpawnOptions = .{
-            .argv = argv.items,
+            .argv = argv,
             .cwd = .{ .path = r.workDir(a) },
             .stdin = .ignore,
             .stdout = .pipe,
@@ -216,6 +199,32 @@ pub const Runner = struct {
             r.close();
             r.hooks.hide(r.hooks.ctx);
         } else r.showOutput(false);
+    }
+
+    const CommandLineError = error{ Missing, TooLong, OutOfMemory };
+
+    /// The script's command line and its arguments, in `a`.
+    fn commandLine(r: *const Runner, a: std.mem.Allocator) CommandLineError![]const []const u8 {
+        var cmd_buf: [8][]const u8 = undefined;
+        const cmd = sc.command(r.bytes, r.file, &cmd_buf);
+        var argv: std.ArrayList([]const u8) = .empty;
+        // Its errors with its output: through sh, where there is one.
+        if (!windows) try argv.appendSlice(a, &.{ "/bin/sh", "-c", "exec \"$@\" 2>&1", "sh" });
+        try argv.appendSlice(a, cmd);
+        for (r.meta.args, 0..) |maybe, i| {
+            const arg = maybe orelse continue;
+            const v = r.args[i].items;
+            if (v.len == 0 and !arg.optional) return error.Missing;
+            if (!arg.percentEncoded) {
+                try argv.append(a, try a.dupe(u8, v));
+                continue;
+            }
+            var enc: [max_encoded]u8 = undefined;
+            var w: std.Io.Writer = .fixed(&enc);
+            search.percentEncode(&w, v, .{}) catch return error.TooLong;
+            try argv.append(a, try a.dupe(u8, w.buffered()));
+        }
+        return argv.items;
     }
 
     /// Its directory: `currentDirectoryPath` (with ~), else the script's.
@@ -515,4 +524,29 @@ test "a dropdown's pick is kept and shown in the form; a typed value is only kep
     try t.expectEqualStrings("fr", shown[2].value);
     try t.expectEqualStrings("Rach", shown[0].value);
     try t.expect(r.proc.live == null);
+}
+
+test "an argument too long once encoded fails, saying so, and runs nothing" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(t.io, .{ .sub_path = "find.sh", .data = "#!/bin/sh\n" ++
+        "# @raycast.schemaVersion 1\n# @raycast.title Find\n" ++
+        "# @raycast.argument1 { \"type\": \"text\", \"percentEncoded\": true }\n" });
+    var kept: Kept = .{};
+    defer kept.deinit();
+    var probe: u8 = 0;
+    var r = quiet(&kept, &probe);
+    defer r.deinit();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir = try @import("test_tmp.zig").path(&dir_buf, &tmp);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    r.start(.{ .file = try std.fmt.bufPrint(&buf, "{s}/find.sh", .{dir}), .title = "Find" });
+    // Each space encodes to three bytes: one past the limit.
+    const long: [max_encoded / 3 + 1]u8 = @splat(' ');
+    Runner.heard(&r, .{ .field = .{ .slot = 0, .value = &long } });
+    Runner.heard(&r, .{ .action = .run });
+    try t.expect(r.proc.live == null);
+    const said = "An argument is too long (over 2048 bytes once encoded).";
+    try t.expectEqualStrings(said, kept.note());
 }

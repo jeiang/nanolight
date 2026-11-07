@@ -16,6 +16,8 @@ const Settings = settings.Settings;
 
 const pull_every_s = 5 * 60;
 const push_after_ms = 2000;
+/// Seconds without a byte before a sync gives up.
+const timeout = 15;
 
 comptime {
     // Whatever launches a request sheds to fit, the rest fits.
@@ -191,7 +193,7 @@ pub const Account = struct {
             .method = "PUT",
             .headers = headers[0..if (first) 3 else 2],
             .body = body,
-            .timeout = 15,
+            .timeout = timeout,
         });
     }
 
@@ -217,8 +219,8 @@ pub const Account = struct {
             first,
         ) catch return a.fail("out of memory");
         a.hooks.apply(a.hooks.ctx, merged);
-        // A failure is logged; the next sync is sent as a first one again.
-        _ = prefs.setText(a.kv, .account_synced, a.cfg.url);
+        // Unkept, the next sync is sent as a first one again.
+        prefs.keepText(a.kv, .account_synced, a.cfg.url);
         a.state = .{ .synced = now() };
         a.hooks.changed(a.hooks.ctx);
         if (!settings.same(merged, theirs)) a.changed();

@@ -140,17 +140,13 @@ fn parseMode(value: []const u8) Mode {
     return .full_output;
 }
 
-fn io() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
-
 /// `<data dir>/script-commands`, made if missing. Caller frees it.
-pub fn dir(gpa: std.mem.Allocator) ![]u8 {
+pub fn dir(gpa: std.mem.Allocator, io: std.Io) ![]u8 {
     const data = try @import("prefs.zig").dataDir(gpa);
     defer gpa.free(data);
     const d = try std.fs.path.join(gpa, &.{ data, "script-commands" });
     // best effort: a folder that can't be made just lists no scripts.
-    std.Io.Dir.cwd().createDirPath(io(), d) catch {};
+    std.Io.Dir.cwd().createDirPath(io, d) catch {};
     return d;
 }
 
@@ -180,7 +176,8 @@ pub const List = struct {
     items: std.ArrayList(Script) = .empty,
     /// Scripts found but left out: memory ran out.
     lost: u32 = 0,
-    /// The environment the apps were found in, for the icons.
+    /// The Io and environment the apps were found with, for the icons.
+    io: ?std.Io = null,
     env: ?*const std.process.Environ.Map = null,
 
     pub fn init(gpa: std.mem.Allocator) List {
@@ -261,7 +258,7 @@ pub const List = struct {
     /// for its key, which names no file (the Mac's blank document).
     pub fn icon(l: *List, i: u32) ?[]const u8 {
         const s = &l.items.items[i];
-        return @import("apps.zig").cachedIcon(&s.icon, l.gpa, l.env, s.key);
+        return @import("apps.zig").cachedIcon(&s.icon, l.gpa, l.io, l.env, s.key);
     }
 };
 
@@ -269,25 +266,28 @@ pub const List = struct {
 /// folder and in `extra` (a folder down too), past the titles `apps` has.
 pub fn scan(
     l: *List,
+    io: std.Io,
     apps: []const app_scan.App,
     env: ?*const std.process.Environ.Map,
     extra: []const []const u8,
 ) void {
+    l.io = io;
     l.env = env;
     l.add(apps, "Script Commands Folder", "Raycast", null);
-    if (dir(l.gpa)) |root| {
+    if (dir(l.gpa, io)) |root| {
         defer l.gpa.free(root);
-        scanDir(l, apps, root);
+        scanDir(l, io, apps, root);
     } else |err| std.log.warn("nanolight: no script commands folder: {t}", .{err});
-    for (extra) |d| scanDir(l, apps, d);
+    for (extra) |d| scanDir(l, io, apps, d);
 }
 
 /// The script commands in `root` and in the folders in it, no deeper.
-fn scanDir(l: *List, apps: []const app_scan.App, root: []const u8) void {
+fn scanDir(l: *List, io: std.Io, apps: []const app_scan.App, root: []const u8) void {
     var arena: std.heap.ArenaAllocator = .init(l.gpa);
     defer arena.deinit();
     const Scan = struct {
         list: *List,
+        io: std.Io,
         apps: []const app_scan.App,
         arena: std.mem.Allocator,
 
@@ -303,7 +303,7 @@ fn scanDir(l: *List, apps: []const app_scan.App, root: []const u8) void {
         fn addScript(s: @This(), f: app_scan.Found) void {
             // The header is in the first lines: the file's first 8 KB.
             var buf: [8192]u8 = undefined;
-            const head = f.dir.readFile(io(), f.entry.name, &buf) catch |err| {
+            const head = f.dir.readFile(s.io, f.entry.name, &buf) catch |err| {
                 std.log.warn("nanolight: {s} could not be read: {t}", .{ f.full, err });
                 return;
             };
@@ -312,8 +312,8 @@ fn scanDir(l: *List, apps: []const app_scan.App, root: []const u8) void {
             s.list.add(s.apps, m.title, package, f.full);
         }
     };
-    const ctx: Scan = .{ .list = l, .apps = apps, .arena = arena.allocator() };
-    app_scan.walk(io(), root, 1, ctx, Scan.visit);
+    const ctx: Scan = .{ .list = l, .io = io, .apps = apps, .arena = arena.allocator() };
+    app_scan.walk(io, root, 1, ctx, Scan.visit);
 }
 
 /// How to run `file`: its shebang's interpreter (`#!/usr/bin/env python3`),
@@ -437,7 +437,7 @@ test "a folder named in config.toml is scanned for script commands, a folder dow
     const path = try @import("test_tmp.zig").path(&buf, &tmp);
     var l: List = .init(t.allocator);
     defer l.deinit();
-    scanDir(&l, &.{}, path);
+    scanDir(&l, t.io, &.{}, path);
     try t.expectEqual(@as(usize, 2), l.items.items.len);
     try t.expect(l.find("Say Hello") != null and l.find("Two Down") == null);
     const near = l.items.items[l.find("One Down").?];

@@ -106,12 +106,18 @@ fn warn(comptime fmt: []const u8, args: anytype) void {
 }
 
 /// Writes `value` at `key`; false, and logged, when it could not be kept.
+/// `put` and the `set*` are for callers that act on a failure; the `keep*`
+/// write the same where nothing does, a failure only logged.
 pub fn put(kv: Store, key: []const u8, value: []const u8) bool {
     kv.set(key, value) catch |e| {
         warn("nanolight: could not save {s}: {t}", .{ key, e });
         return false;
     };
     return true;
+}
+
+pub fn keep(kv: Store, key: []const u8, value: []const u8) void {
+    _ = put(kv, key, value);
 }
 
 /// What is kept at `k`, or null (also when it cannot be read: logged). Caller frees it.
@@ -126,6 +132,10 @@ pub fn text(kv: Store, gpa: std.mem.Allocator, comptime k: Key) ?[]u8 {
 pub fn setText(kv: Store, comptime k: Key, value: []const u8) bool {
     comptime std.debug.assert(spec(k).kind == .text);
     return put(kv, k.name(), value);
+}
+
+pub fn keepText(kv: Store, comptime k: Key, value: []const u8) void {
+    _ = setText(kv, k, value);
 }
 
 /// The switch at `k`, or its default when none is kept.
@@ -152,6 +162,10 @@ pub fn setFlag(kv: Store, comptime k: Key, on: bool) bool {
     return put(kv, k.name(), if (on) "1" else "0");
 }
 
+pub fn keepFlag(kv: Store, comptime k: Key, on: bool) void {
+    _ = setFlag(kv, k, on);
+}
+
 /// The number at `k`; 0 when none is kept, or it cannot be read (logged).
 pub fn int(kv: Store, gpa: std.mem.Allocator, comptime k: Key) i64 {
     comptime std.debug.assert(spec(k).kind == .int);
@@ -166,10 +180,10 @@ pub fn int(kv: Store, gpa: std.mem.Allocator, comptime k: Key) i64 {
     };
 }
 
-pub fn setInt(kv: Store, comptime k: Key, value: i64) bool {
+pub fn keepInt(kv: Store, comptime k: Key, value: i64) void {
     comptime std.debug.assert(spec(k).kind == .int);
     var buf: [24]u8 = undefined;
-    return put(kv, k.name(), std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable);
+    keep(kv, k.name(), std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable);
 }
 
 pub fn has(kv: Store, comptime k: Key) bool {
@@ -187,8 +201,8 @@ pub fn theme(kv: Store, gpa: std.mem.Allocator) Theme {
     return std.meta.stringToEnum(Theme, v) orelse .system;
 }
 
-pub fn setTheme(kv: Store, t: Theme) bool {
-    return setText(kv, .theme, @tagName(t));
+pub fn keepTheme(kv: Store, t: Theme) void {
+    keepText(kv, .theme, @tagName(t));
 }
 
 /// The key that opens the panel; ⌘Space (Alt Space on a PC) when none is
@@ -202,6 +216,10 @@ pub fn hotkey(kv: Store, gpa: std.mem.Allocator) Choice {
 pub fn setHotkey(kv: Store, c: Choice) bool {
     var buf: [keys.name_max]u8 = undefined;
     return setText(kv, .hotkey, c.name(&buf));
+}
+
+pub fn keepHotkey(kv: Store, c: Choice) void {
+    _ = setHotkey(kv, c);
 }
 
 /// `list` as it is kept; null, and logged, out of memory.
@@ -236,7 +254,7 @@ pub fn setQuicklinks(kv: Store, gpa: std.mem.Allocator, list: []const Quicklink)
     if (list.len == 0) return remove(kv, .quicklinks);
     const json = quicklinksJson(gpa, list) orelse return;
     defer gpa.free(json);
-    _ = setText(kv, .quicklinks, json);
+    keepText(kv, .quicklinks, json);
 }
 
 /// Nanolight's data folder (config.toml, the clipboard, script commands, the rates).
@@ -280,7 +298,7 @@ test "a number is kept as decimal text" {
     defer m.deinit();
     const kv = m.store();
     try testing.expectEqual(@as(i64, 0), int(kv, testing.allocator, .sync_at));
-    try testing.expect(setInt(kv, .sync_at, 1500));
+    keepInt(kv, .sync_at, 1500);
     const v = (try kv.get(testing.allocator, "nanolight.sync.at")).?;
     defer testing.allocator.free(v);
     try testing.expectEqualStrings("1500", v);
@@ -294,7 +312,7 @@ test "the theme is kept by name" {
     defer m.deinit();
     const kv = m.store();
     try testing.expectEqual(Theme.system, theme(kv, testing.allocator));
-    try testing.expect(setTheme(kv, .forest));
+    keepTheme(kv, .forest);
     try testing.expectEqual(Theme.forest, theme(kv, testing.allocator));
     try kv.set(Key.theme.name(), "plaid");
     try testing.expectEqual(Theme.system, theme(kv, testing.allocator));

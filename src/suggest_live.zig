@@ -8,6 +8,9 @@ const view = @import("view.zig");
 const after = @import("after.zig");
 const App = @import("app.zig").App;
 
+/// Seconds without a byte before asking Google gives up.
+const timeout = 4;
+
 pub const Suggest = struct {
     core: *App,
     /// The words Google is to be asked about once typing pauses (only the
@@ -43,7 +46,7 @@ pub const Suggest = struct {
         nanoui.http.fetch(core.app.gpa, .{
             .url = suggest.url(&buf, q),
             .headers = &.{.{ .name = "Accept", .value = "application/json" }},
-            .timeout = 4,
+            .timeout = timeout,
         }, a, Ask.done);
     }
 };
@@ -75,8 +78,8 @@ pub const Origin = enum { here, synced };
 pub fn set(core: *App, on: bool, origin: Origin) void {
     if (on == core.s.suggest_on) return;
     core.s.setSuggest(on);
-    // A failure is logged; the choice holds for this run, the next launch falls back to on.
-    _ = prefs.setFlag(core.kv, .suggest, on);
+    // Unkept, the choice holds for this run; the next launch falls back to on.
+    prefs.keepFlag(core.kv, .suggest, on);
     if (origin == .here) core.touched(.suggest);
     core.redraw();
     // The menu's checkbox follows; never rebuilt inside its own click.

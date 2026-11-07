@@ -127,10 +127,10 @@ pub const Counts = struct {
         };
         var aw: std.Io.Writer.Allocating = .init(gpa);
         defer aw.deinit();
-        // best effort: as above.
+        // best effort: out of memory mid-list; a partial list would drop counts.
         for (mostOpened(list.items)) |l| aw.writer.print("{s}\t{d}\n", .{ l.key, l.count }) catch
             return null;
-        // best effort: as above.
+        // best effort: out of memory copying the list out; nothing is encoded.
         return aw.toOwnedSlice() catch null;
     }
 };

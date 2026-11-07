@@ -165,7 +165,7 @@ const Take = struct {
         const core = t.sy.core;
         const c = keys.Choice.parse(name) orelse return;
         if (c.eql(core.choice)) return;
-        _ = prefs.setHotkey(core.kv, c);
+        prefs.keepHotkey(core.kv, c);
         core.useKey(c);
     }
 
@@ -174,8 +174,8 @@ const Take = struct {
     }
 
     pub fn at(t: *Take, when: i64) void {
-        // A failure is logged; the next sync sends this machine's older time.
-        _ = prefs.setInt(t.sy.core.kv, .sync_at, when);
+        // Unkept, the next sync sends this machine's older time.
+        prefs.keepInt(t.sy.core.kv, .sync_at, when);
     }
 
     pub fn launches(t: *Take, list: []const settings.Launch) void {

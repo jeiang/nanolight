@@ -85,7 +85,14 @@ const FileAsk = struct {
             a.locations orelse "",
             a.exclusions orelse "",
             &a.found,
-        );
+        ) catch |e| switch (e) {
+            // Logged where mdfind failed.
+            error.Unavailable => false,
+            error.OutOfMemory => oom: {
+                std.log.warn("file search: out of memory", .{});
+                break :oom false;
+            },
+        };
         if (a.ok) a.found.icons();
         after.oneShot(0, a, done);
     }
@@ -118,6 +125,6 @@ pub fn load(core: *App) void {
 /// Settings' switch: file search on or off, kept for the next launch.
 pub fn set(core: *App, on: bool) void {
     core.s.setFiles(on);
-    // A failure is logged; file search follows the switch this run either way.
-    _ = prefs.setFlag(core.kv, .files, on);
+    // Unkept, file search follows the switch this run either way.
+    prefs.keepFlag(core.kv, .files, on);
 }
