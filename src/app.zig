@@ -185,8 +185,10 @@ pub const App = struct {
         if (welcome_up) a.o.pressed(showing);
         if (showing) {
             a.s.hid(clock.now());
-            // The hot key's press time goes with the panel (panel_x11.zig).
-            return shell.panel.lostKeys(w);
+            // The hot key's press time goes with the panel (panel_x11.zig);
+            // the Mac's `lostKeys` does nothing, so the window hides here.
+            shell.panel.lostKeys(w);
+            return w.hide();
         }
         Hook.run(a.hooks.showing);
         // Freed a key in System Settings, quit a launcher: look again.
