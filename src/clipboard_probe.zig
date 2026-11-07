@@ -7,7 +7,8 @@
 //!   clip-probe paste-files <path>... <seconds> serves a file list
 const std = @import("std");
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
+const Watcher = @import("clipboard_watcher.zig").Watcher;
 const clip = @import("text.zig").clip;
 
 var done = false;
@@ -55,7 +56,7 @@ pub fn main(init: std.process.Init) !void {
         .{},
     );
     const secs = try std.fmt.parseInt(u64, args[args.len - 1], 10);
-    var w: clipboard.Watcher = .{};
+    var w: Watcher = .{};
     var token: u8 = 0;
     w.start(.{ .ctx = &token, .observe = observe, .excluded = excluded }) catch |e| {
         return say("start failed: {t}: {s}", .{ e, w.status() orelse "" });

@@ -3,7 +3,7 @@
 //! entry, hides the panel, wakes the app that had the keys and sends it the
 //! paste keystroke. The OS's side is `B` (clipboard_mac.zig, clipboard_win.zig).
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
 
 const poll_ms = 500;
 /// Time for the woken app to take the keys before the keystroke reaches it.

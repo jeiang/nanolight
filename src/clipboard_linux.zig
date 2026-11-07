@@ -4,7 +4,7 @@
 //! else history is unavailable and says why. This file is the choice between
 //! them; what both share is clipboard_offer.zig.
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
 const log = @import("log.zig");
 const display = @import("display.zig");
 const x11 = @import("clipboard_x11.zig");
@@ -86,7 +86,7 @@ pub const Watcher = struct {
         return switch (w.backend) {
             inline .x11, .wl => |*b| b.copy(c),
             .none => blk: {
-                if (c.kind == .image) break :blk false;
+                if (c.kind.info().png) break :blk false;
                 nanoui.clipboard.writeText(c.text);
                 break :blk true;
             },

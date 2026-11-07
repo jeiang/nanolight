@@ -4,6 +4,8 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
+const types = @import("clipboard_types.zig");
+const Watcher = @import("clipboard_watcher.zig").Watcher;
 const clipboard_view = @import("clipboard_view.zig");
 const prefs = @import("prefs.zig");
 const clock = @import("clock.zig");
@@ -20,7 +22,7 @@ pub const Clip = struct {
     /// and without a data directory.
     dir: ?std.Io.Dir = null,
     store: ?clipboard.Store = null,
-    watcher: clipboard.Watcher = .{},
+    watcher: Watcher = .{},
     /// What the Clipboard History screen asks of the app; set with the store.
     host: ?clipboard_view.Host = null,
 
@@ -41,6 +43,7 @@ pub const Clip = struct {
         c.host = .{
             .ctx = c,
             .store = store,
+            .copy_only = !store.cfg.paste_plain_text,
             .status = status,
             .paste = paste,
             .copy = copy,
@@ -124,7 +127,7 @@ fn from(ctx: *anyopaque) *Clip {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn observe(ctx: *anyopaque, item: clipboard.Item) void {
+fn observe(ctx: *anyopaque, item: types.Item) void {
     const c = from(ctx);
     const store = if (c.store) |*s| s else return;
     if (store.add(item, clock.now())) if (c.core.s.showsClipboard()) c.core.redraw();
@@ -151,14 +154,14 @@ fn status(ctx: *anyopaque) ?[]const u8 {
     return if (store.on) null else "Clipboard history is off. Turn it on in Settings.";
 }
 
-fn paste(ctx: *anyopaque, hash: u64) clipboard.PasteResult {
+fn paste(ctx: *anyopaque, hash: u64) types.PasteResult {
     const c = from(ctx);
     const loaded = c.load(hash) orelse return .unreadable;
     defer if (loaded.owned) |b| c.core.app.gpa.free(b);
     return c.watcher.paste(loaded.content, .{ .ctx = c.core, .func = App.hide });
 }
 
-fn copy(ctx: *anyopaque, hash: u64) clipboard.PasteResult {
+fn copy(ctx: *anyopaque, hash: u64) types.PasteResult {
     const c = from(ctx);
     const loaded = c.load(hash) orelse return .unreadable;
     defer if (loaded.owned) |b| c.core.app.gpa.free(b);

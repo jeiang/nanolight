@@ -13,7 +13,6 @@ const script_commands = @import("script_commands.zig");
 const settings_panes = @import("settings_panes.zig");
 const web = @import("web.zig");
 const platform = @import("platform.zig");
-const clipboard = @import("clipboard.zig");
 const files = @import("files.zig");
 const files_view = @import("files_view.zig");
 const answers = @import("answers.zig");
@@ -910,7 +909,7 @@ fn settingsBody(_: *Nanolight, c: *ui.Context, p: Palette, _: usize, _: Row) voi
 }
 
 fn clipboardBody(_: *Nanolight, c: *ui.Context, p: Palette, _: usize, _: Row) void {
-    ownBody(c, p, clipboard.title, "Text, images and files you copied");
+    ownBody(c, p, chrome.clipboard_title, "Text, images and files you copied");
 }
 
 fn completionBody(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {

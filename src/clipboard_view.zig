@@ -9,6 +9,7 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const panel = @import("view.zig");
 const clipboard = @import("clipboard.zig");
+const types = @import("clipboard_types.zig");
 const search = @import("search.zig");
 const platform = @import("platform.zig");
 const clock = @import("clock.zig");
@@ -21,14 +22,16 @@ const Palette = @import("palette.zig").Palette;
 pub const Host = struct {
     ctx: *anyopaque,
     store: *clipboard.Store,
+    /// Return only copies, as ⌘↩ does (`paste_plain_text` off).
+    copy_only: bool,
     /// Why entries are not being recorded now (this system cannot, or it
     /// is switched off); null while they are.
     status: *const fn (ctx: *anyopaque) ?[]const u8,
     /// Return: writes the entry and pastes it where it can.
-    paste: *const fn (ctx: *anyopaque, hash: u64) clipboard.PasteResult,
-    /// ⌘↩: writes the entry only (Return too, with `paste_plain_text` off): `.copied`,
+    paste: *const fn (ctx: *anyopaque, hash: u64) types.PasteResult,
+    /// ⌘↩: writes the entry only (Return too, when `copy_only`): `.copied`,
     /// `.failed` or `.unreadable`.
-    copy: *const fn (ctx: *anyopaque, hash: u64) clipboard.PasteResult,
+    copy: *const fn (ctx: *anyopaque, hash: u64) types.PasteResult,
 };
 
 const visible_rows = 7;
@@ -136,7 +139,7 @@ pub const Screen = struct {
 
     fn paste(s: *Screen, h: *const Host) void {
         const e = s.selected(h) orelse return;
-        if (!h.store.cfg.paste_plain_text) return s.copy(h);
+        if (h.copy_only) return s.copy(h);
         const r = h.paste(h.ctx, e.hash);
         s.note = note(r);
     }
@@ -158,7 +161,7 @@ pub const Screen = struct {
             .bare = true,
             .size = 19,
             .width = .fill,
-            .placeholder = "Search " ++ clipboard.title ++ "…",
+            .placeholder = "Search " ++ chrome.clipboard_title ++ "…",
             .placeholder_color = p.placeholder(),
             .color = p.text,
         });
@@ -184,15 +187,12 @@ pub const Screen = struct {
             if (r.clicked()) {
                 if (s.sel == i) s.paste(h) else s.sel = i;
             }
-            chrome.tile(c, p, switch (e.kind) {
-                .text => "doc.text",
-                .image => "photo",
-                .file => "doc",
-            });
+            const look = lookOf(e.kind);
+            chrome.tile(c, p, look.symbol);
             var tb: [48]u8 = undefined;
             ui.text(
                 c,
-                c.print("{s}", .{title(&tb, e)}),
+                c.print("{s}", .{look.title(&tb, e)}),
                 .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis },
             );
             ui.spacer(c);
@@ -203,7 +203,7 @@ pub const Screen = struct {
                 .{ .size = 12, .color = p.sub.alpha(0.85), .tabular = true },
                 "{s}{s}{s} · {s}",
                 .{
-                    kindLabel(e.kind),
+                    look.label,
                     if (app.len > 0) " · " else "",
                     app,
                     clock.ago(&rb, now - e.at),
@@ -216,40 +216,7 @@ pub const Screen = struct {
         const box = ui.div(c).column().wFull().h(detail_h).px(20).py(12).gap(4).clip();
         defer box.end();
         const e = s.selected(h) orelse return;
-        var shown: usize = 0;
-        switch (e.kind) {
-            .image => {
-                var sb: [24]u8 = undefined;
-                ui.textf(
-                    c,
-                    .{ .size = 13, .color = p.text },
-                    "Image, {d} × {d} pixels, {s}",
-                    .{ e.width, e.height, sizeText(&sb, e.size) },
-                );
-            },
-            .text, .file => {
-                var lines = std.mem.splitScalar(u8, e.text, '\n');
-                while (lines.next()) |raw| {
-                    const line = std.mem.trimEnd(u8, raw, "\r");
-                    if (line.len == 0 and shown == 0) continue;
-                    if (shown == detail_lines) {
-                        ui.text(c, "…", .{ .size = 12.5, .color = p.sub });
-                        break;
-                    }
-                    ui.text(
-                        c,
-                        if (line.len == 0) " " else clip(line, 240),
-                        .{
-                            .size = 12.5,
-                            .mono = e.kind == .text,
-                            .color = p.text,
-                            .truncate = .ellipsis,
-                        },
-                    );
-                    shown += 1;
-                }
-            },
-        }
+        lookOf(e.kind).detail(c, p, e);
         ui.spacer(c);
         var rb: [24]u8 = undefined;
         ui.textf(
@@ -277,16 +244,16 @@ pub const Screen = struct {
         else if (hh) |h| {
             var cut = p.caption();
             cut.truncate = .ellipsis;
-            ui.textf(c, cut, clipboard.title ++ " · {d}", .{h.store.len()});
-        } else ui.text(c, clipboard.title, p.caption());
+            ui.textf(c, cut, chrome.clipboard_title ++ " · {d}", .{h.store.len()});
+        } else ui.text(c, chrome.clipboard_title, p.caption());
         ui.spacer(c);
         const h = hh orelse return;
-        const copy_only = !h.store.cfg.paste_plain_text;
-        if (!copy_only) {
+        if (!h.copy_only) {
             chrome.footerKey(c, p, "Paste", "↩", true);
             chrome.keySep(c, p);
         }
-        chrome.footerKey(c, p, "Copy", if (copy_only) "↩" else platform.mod ++ "↩", copy_only);
+        const copy_key = if (h.copy_only) "↩" else platform.mod ++ "↩";
+        chrome.footerKey(c, p, "Copy", copy_key, h.copy_only);
         chrome.keySep(c, p);
         chrome.footerKey(c, p, "Delete", platform.mod ++ "⌫", false);
         chrome.keySep(c, p);
@@ -303,7 +270,7 @@ fn empty(c: *ui.Context, p: Palette, said: []const u8) void {
 // ----- how an entry reads -----
 
 /// The footer's word on how a paste or a copy went; empty after a paste.
-pub fn note(r: clipboard.PasteResult) []const u8 {
+pub fn note(r: types.PasteResult) []const u8 {
     return switch (r) {
         .pasted => "",
         .copied => "Copied",
@@ -342,38 +309,96 @@ fn sizeText(buf: []u8, n: u64) []const u8 {
     return r catch "";
 }
 
-fn kindLabel(k: clipboard.Kind) []const u8 {
+/// How a kind reads: its row's symbol, its word, its one line for the list,
+/// and what the detail pane shows of it.
+const Look = struct {
+    symbol: []const u8,
+    label: []const u8,
+    title: *const fn (buf: []u8, e: clipboard.Entry) []const u8,
+    detail: *const fn (c: *ui.Context, p: Palette, e: clipboard.Entry) void,
+};
+
+fn lookOf(k: types.Kind) Look {
     return switch (k) {
-        .text => "Text",
-        .image => "Image",
-        .file => "File",
+        .text => .{
+            .symbol = "doc.text",
+            .label = "Text",
+            .title = textTitle,
+            .detail = textDetail,
+        },
+        .image => .{
+            .symbol = "photo",
+            .label = "Image",
+            .title = imageTitle,
+            .detail = imageDetail,
+        },
+        .file => .{
+            .symbol = "doc",
+            .label = "File",
+            .title = fileTitle,
+            .detail = fileDetail,
+        },
     };
 }
 
-/// One line for a list: a text's first line, an image's size, a file's name
-/// (and how many more).
-fn title(buf: []u8, e: clipboard.Entry) []const u8 {
-    switch (e.kind) {
-        .text => {
-            var lines = std.mem.splitScalar(u8, e.text, '\n');
-            while (lines.next()) |l| {
-                const t = std.mem.trim(u8, l, " \t\r");
-                if (t.len > 0) return clip(t, 200);
-            }
-            return "";
-        },
-        .image => return std.fmt.bufPrint(
-            buf,
-            "Image {d} × {d}",
-            .{ e.width, e.height },
-        ) catch "Image",
-        .file => {
-            const n = std.mem.count(u8, e.text, "\n") + 1;
-            const first = e.text[0 .. std.mem.indexOfScalar(u8, e.text, '\n') orelse e.text.len];
-            const name = std.fs.path.basename(first);
-            if (n == 1) return name;
-            return std.fmt.bufPrint(buf, "{s} and {d} more", .{ name, n - 1 }) catch name;
-        },
+/// Its first line that is not blank.
+fn textTitle(_: []u8, e: clipboard.Entry) []const u8 {
+    var lines = std.mem.splitScalar(u8, e.text, '\n');
+    while (lines.next()) |l| {
+        const t = std.mem.trim(u8, l, " \t\r");
+        if (t.len > 0) return clip(t, 200);
+    }
+    return "";
+}
+
+fn imageTitle(buf: []u8, e: clipboard.Entry) []const u8 {
+    return std.fmt.bufPrint(buf, "Image {d} × {d}", .{ e.width, e.height }) catch "Image";
+}
+
+/// The first file's name, and how many more.
+fn fileTitle(buf: []u8, e: clipboard.Entry) []const u8 {
+    const n = std.mem.count(u8, e.text, "\n") + 1;
+    const first = e.text[0 .. std.mem.indexOfScalar(u8, e.text, '\n') orelse e.text.len];
+    const name = std.fs.path.basename(first);
+    if (n == 1) return name;
+    return std.fmt.bufPrint(buf, "{s} and {d} more", .{ name, n - 1 }) catch name;
+}
+
+fn imageDetail(c: *ui.Context, p: Palette, e: clipboard.Entry) void {
+    var sb: [24]u8 = undefined;
+    ui.textf(
+        c,
+        .{ .size = 13, .color = p.text },
+        "Image, {d} × {d} pixels, {s}",
+        .{ e.width, e.height, sizeText(&sb, e.size) },
+    );
+}
+
+fn textDetail(c: *ui.Context, p: Palette, e: clipboard.Entry) void {
+    lineDetail(c, p, e, true);
+}
+
+fn fileDetail(c: *ui.Context, p: Palette, e: clipboard.Entry) void {
+    lineDetail(c, p, e, false);
+}
+
+/// Its first `detail_lines` lines, leading blank ones skipped.
+fn lineDetail(c: *ui.Context, p: Palette, e: clipboard.Entry, mono: bool) void {
+    var shown: usize = 0;
+    var lines = std.mem.splitScalar(u8, e.text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (line.len == 0 and shown == 0) continue;
+        if (shown == detail_lines) {
+            ui.text(c, "…", .{ .size = 12.5, .color = p.sub });
+            break;
+        }
+        ui.text(
+            c,
+            if (line.len == 0) " " else clip(line, 240),
+            .{ .size = 12.5, .mono = mono, .color = p.text, .truncate = .ellipsis },
+        );
+        shown += 1;
     }
 }
 
@@ -392,7 +417,7 @@ test "how entries read" {
         .size = 14,
         .at = 0,
     };
-    try testing.expectEqualStrings("hello", title(&buf, t));
+    try testing.expectEqualStrings("hello", lookOf(t.kind).title(&buf, t));
     const im: clipboard.Entry = .{
         .hash = 2,
         .kind = .image,
@@ -402,7 +427,7 @@ test "how entries read" {
         .height = 600,
         .at = 0,
     };
-    try testing.expectEqualStrings("Image 800 × 600", title(&buf, im));
+    try testing.expectEqualStrings("Image 800 × 600", lookOf(im.kind).title(&buf, im));
     const f: clipboard.Entry = .{
         .hash = 3,
         .kind = .file,
@@ -410,7 +435,7 @@ test "how entries read" {
         .size = 1,
         .at = 0,
     };
-    try testing.expectEqualStrings("c.txt and 1 more", title(&buf, f));
+    try testing.expectEqualStrings("c.txt and 1 more", lookOf(f.kind).title(&buf, f));
     try testing.expectEqualStrings("12 bytes", sizeText(&buf, 12));
     try testing.expectEqualStrings("34 KB", sizeText(&buf, 34 * 1024 + 5));
     try testing.expectEqualStrings("1.5 MB", sizeText(&buf, 3 << 19));

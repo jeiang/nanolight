@@ -18,7 +18,6 @@ const convert = @import("convert.zig");
 const rates_table = @import("rates_table.zig");
 const panes = @import("settings_panes.zig");
 const commands = @import("commands.zig");
-const clipboard = @import("clipboard.zig");
 const web = @import("web.zig");
 const suggest = @import("suggest.zig");
 const launchers = @import("launchers.zig");
@@ -175,7 +174,7 @@ pub const providers = std.enums.EnumArray(Kind, Provider).init(.{
     },
     .clipboard = .{
         .section = .local,
-        .action = "Open " ++ clipboard.title,
+        .action = "Open " ++ chrome.clipboard_title,
         .hint = "Open",
         .symbol = "doc.on.doc",
         .identity = .kind,
@@ -280,7 +279,7 @@ fn rankSettings(r: *Results, in: *const Input) void {
 /// of its name (not a stray letter or two).
 fn rankClipboard(r: *Results, in: *const Input) void {
     if (!in.clip_on) return;
-    const m = search.score(in.words, clipboard.title) orelse return;
+    const m = search.score(in.words, chrome.clipboard_title) orelse return;
     const named = in.words.len >= 3 and m.score >= search.min_loose;
     if (!named and !std.ascii.eqlIgnoreCase(in.words, "clip")) return;
     r.push(.{ .kind = .clipboard, .match = m });

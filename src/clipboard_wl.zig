@@ -8,7 +8,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const nanoui = @import("nanoui");
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
 const offer = @import("clipboard_offer.zig");
 const dl = @import("dl.zig");
 

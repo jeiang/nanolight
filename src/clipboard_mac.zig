@@ -5,7 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
-const clipboard = @import("clipboard.zig");
+const clipboard = @import("clipboard_types.zig");
 const log = @import("log.zig");
 
 extern "c" fn AXIsProcessTrusted() bool;
