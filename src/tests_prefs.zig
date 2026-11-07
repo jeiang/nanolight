@@ -138,36 +138,40 @@ test "recording a key: idle, recording, refused, and never without a recorder" {
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
+    const t = &rig.t;
     try rig.mount(.{ .host = prefs.host(), .screen = .settings });
-    const ui_s = &s.settings_ui;
     const keys = @import("keys.zig");
-    // Return on the shortcut row: recording, the recorder with it.
-    ui_s.activateSelected(s);
-    try std.testing.expectEqual(settings_view.KeyInput.recording, ui_s.key_input);
-    try std.testing.expect(prefs.recording);
+    const waiting = "Type a shortcut";
+    const refused = "Add ⌘, ⌥ or ⌃";
+    const enter: []const ui.TextOp = &.{.{ .command = .insert_newline }};
+    // Return on the shortcut row, the first: recording, the recorder with it.
+    support.press(t, enter);
+    try std.testing.expect(t.hasText(waiting) and prefs.recording);
     // A letter alone is refused; it still waits.
-    ui_s.took(s, keys.recorded(7, 0, 'x'));
-    try std.testing.expectEqual(settings_view.KeyInput.refused, ui_s.key_input);
-    try std.testing.expect(prefs.recording);
+    s.recorded(keys.recorded(7, 0, 'x'));
+    t.settle(1);
+    try std.testing.expect(t.hasText(refused) and prefs.recording);
     // ⌥X is taken: idle, the recorder stopped, the key applied.
-    ui_s.took(s, keys.recorded(7, keys.ns_opt, 'x'));
-    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    s.recorded(keys.recorded(7, keys.ns_opt, 'x'));
+    t.settle(1);
+    try std.testing.expect(!t.hasText(refused) and !t.hasText(waiting));
     try std.testing.expect(!prefs.recording);
     try std.testing.expect(prefs.applied.?.eql(.{ .code = 7, .mods = keys.option }));
     // Esc while recording: idle, nothing applied.
     prefs.applied = null;
-    ui_s.activateSelected(s);
-    ui_s.took(s, keys.recorded(keys.escape, 0, 0));
-    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
+    support.press(t, enter);
+    try std.testing.expect(t.hasText(waiting));
+    s.recorded(keys.recorded(keys.escape, 0, 0));
+    t.settle(1);
+    try std.testing.expect(!t.hasText(waiting));
     try std.testing.expect(prefs.applied == null and !prefs.recording);
     // A key pressed while idle is no one's.
-    ui_s.took(s, keys.recorded(7, keys.ns_opt, 'x'));
+    s.recorded(keys.recorded(7, keys.ns_opt, 'x'));
     try std.testing.expect(prefs.applied == null);
     // The recorder could not start: not recording.
     prefs.can_record = false;
-    ui_s.activateSelected(s);
-    try std.testing.expectEqual(settings_view.KeyInput.idle, ui_s.key_input);
-    try std.testing.expect(!prefs.recording);
+    support.press(t, enter);
+    try std.testing.expect(!t.hasText(waiting) and !prefs.recording);
 }
 
 test "Settings' header picks the panel's theme, and keeps it" {
@@ -242,42 +246,47 @@ test "the panel's height lands at once, and keeps Google's room between keys" {
     const s = &rig.s;
     const t = &rig.t;
     s.host = web.host();
-    s.host.?.resize = struct {
-        fn f(_: *anyopaque, _: f32) void {}
-    }.f;
+    // The heights the panel asks its window for.
+    const Asked = struct {
+        var h: f32 = 0;
+        fn f(_: *anyopaque, to: f32) void {
+            h = to;
+        }
+    };
+    s.host.?.resize = Asked.f;
     try rig.mount(.{ .dark = false, .settle = false });
     t.frame();
+    const empty = Asked.h;
     t.textOps(&.{.{ .insert = "liq" }});
     t.frame();
-    const bare = s.last_h;
+    const bare = Asked.h;
     // Google's rows: taller, in the one frame that lists them.
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
     s.answered("liq", &said);
     t.frame();
-    const full = s.last_h;
+    const full = Asked.h;
     try std.testing.expect(full > bare);
     // A key none of them begins with clears them, and the panel keeps
     // their room.
     t.textOps(&.{.{ .insert = "x" }});
     t.frame();
-    try std.testing.expectEqual(@as(usize, 0), s.web.n);
-    try std.testing.expectEqual(full, s.last_h);
+    try std.testing.expect(!t.hasText("liquid glass"));
+    try std.testing.expectEqual(full, Asked.h);
     // An answer to older words is no answer to these.
     s.answered("liq", null);
     t.frame();
-    try std.testing.expectEqual(full, s.last_h);
+    try std.testing.expectEqual(full, Asked.h);
     // No answer is coming: the room goes, at once.
     s.answered("liqx", null);
     t.frame();
-    try std.testing.expectEqual(bare, s.last_h);
+    try std.testing.expectEqual(bare, Asked.h);
     // Nothing is asked about an empty field, so nothing is kept for it.
     s.answered("liqx", &said);
     t.frame();
     t.textOps(&.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
     t.frame();
-    try std.testing.expectEqual(s.height(), s.last_h);
-    try std.testing.expectEqual(@as(f32, 0), s.held_h);
+    try std.testing.expectEqual(empty, Asked.h);
 }
 
 test "Google's answer landing after suggestions are turned off lists nothing" {
@@ -292,15 +301,16 @@ test "Google's answer landing after suggestions are turned off lists nothing" {
     t.frame();
     t.textOps(&.{.{ .insert = "liq" }});
     t.frame();
+    const bare = s.height();
     // Asked while on; turned off (the menu, Settings or sync) before it lands.
     s.setSuggest(false);
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
     s.answered("liq", &said);
     t.settle(1);
-    try std.testing.expectEqual(@as(usize, 0), s.web.n);
-    try std.testing.expect(!t.hasText("liquid glass"));
-    try std.testing.expectEqual(@as(f32, 0), s.held_h);
+    try std.testing.expect(!t.hasText("liquid") and !t.hasText("liquid glass"));
+    // No room kept for them.
+    try std.testing.expectEqual(bare, s.height());
     // Nor is it kept for when they come back on.
     var cached: suggest.List = .{};
     try std.testing.expect(!s.cache.lookup("liq", &cached));

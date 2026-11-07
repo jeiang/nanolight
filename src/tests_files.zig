@@ -175,7 +175,8 @@ test "cached path rows are filtered without directory IO" {
 }
 
 test "apps, panes, files and quicklinks share the window budget" {
-    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    // Panes are the Mac's alone; with them the rows fill the budget exactly.
+    const mac = @import("builtin").os.tag == .macos;
     const t = std.testing;
     var rig: Rig = undefined;
     rig.init(t.allocator);
@@ -225,11 +226,12 @@ test "apps, panes, files and quicklinks share the window budget" {
             else => {},
         }
     }
-    try t.expect(apps and panes and files and google);
+    try t.expect(apps and files and google);
+    try t.expectEqual(mac, panes);
     try t.expectEqual(results.Kind.file, s.rows()[0].kind);
     try t.expectEqual(results.max_quicklink_rows, links);
     try t.expectEqual(@as(usize, 3), heads);
-    try t.expectEqual(results.max_rows, s.rows().len);
+    if (mac) try t.expectEqual(results.max_rows, s.rows().len);
     try t.expect(s.height() <= chrome.max_height);
 }
 
@@ -311,6 +313,16 @@ fn rowOf(s: *const view.Nanolight, kind: results.Kind, text: []const u8) ?usize 
     return null;
 }
 
+/// ↓ until the row of `kind` showing `text` is selected.
+fn pick(rig: *Rig, kind: results.Kind, text: []const u8) !void {
+    const want = rowOf(&rig.s, kind, text) orelse return error.NoRow;
+    for (0..rig.s.rows().len) |_| {
+        if (rig.s.selection() == want) return;
+        _ = rig.t.shortcut(.{ .key = @import("nanoui").ui.Shortcut.down });
+    }
+    if (rig.s.selection() != want) return error.NotReached;
+}
+
 test "the selection stays on its row as files and completions land in any order" {
     const t = std.testing;
     const files = @import("files.zig");
@@ -319,21 +331,21 @@ test "the selection stays on its row as files and completions land in any order"
     defer rig.deinit();
     const s = &rig.s;
     s.setFiles(true);
-    s.query.set("report");
-    s.rebuild();
+    try rig.mount(.{});
+    @import("test_support.zig").retype(&rig.t, "report");
     var found: files.List = .{ .allocator = t.allocator };
     defer found.deinit();
     found.add("/tmp/report-a", false, .{ .score = 100 });
     found.add("/tmp/report-b", false, .{ .score = 50 });
     s.filesAnswered("report", &found);
     // A file picked, then completions land above nothing it had.
-    s.sel = rowOf(s, .file, "/tmp/report-b").?;
+    try pick(&rig, .file, "/tmp/report-b");
     var web: suggest.List = .{};
     for ([_][]const u8{ "report card", "report template" }) |q| web.push(q);
     s.answered("report", &web);
     try t.expectEqual(rowOf(s, .file, "/tmp/report-b"), s.selection());
     // A completion picked, then files land in another order.
-    s.sel = rowOf(s, .suggest, "report template").?;
+    try pick(&rig, .suggest, "report template");
     found.add("/tmp/report-c", false, .{ .score = 300 });
     found.add("/tmp/report-b", false, .{ .score = 200 });
     found.add("/tmp/report-a", false, .{ .score = 10 });
@@ -341,7 +353,7 @@ test "the selection stays on its row as files and completions land in any order"
     try t.expectEqual(rowOf(s, .suggest, "report template"), s.selection());
     // The picked file moved up: the selection goes with it.
     const a_was = rowOf(s, .file, "/tmp/report-a").?;
-    s.sel = a_was;
+    try pick(&rig, .file, "/tmp/report-a");
     found.add("/tmp/report-a", false, .{ .score = 900 });
     found.add("/tmp/report-c", false, .{ .score = 300 });
     s.filesAnswered("report", &found);
@@ -349,7 +361,7 @@ test "the selection stays on its row as files and completions land in any order"
     try t.expect(a_now != a_was);
     try t.expectEqual(@as(?usize, a_now), s.selection());
     // The picked completion is gone from the next answer: back to the top.
-    s.sel = rowOf(s, .suggest, "report card").?;
+    try pick(&rig, .suggest, "report card");
     web = .{};
     web.push("report template");
     s.answered("report", &web);

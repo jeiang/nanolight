@@ -749,58 +749,89 @@ test "System Settings' panes share the local results header and keep the panel's
     try t.expectEqual(@as(usize, 1), r.n);
 }
 
-test "a full list of apps, panes and files still fits, with every quicklink" {
-    if (!mac) return error.SkipZigTest;
-    const t = std.testing;
-    // Six apps match "ho", and so do three panes (Desktop & Dock, Sound,
-    // Keyboard): typing "hola" used to overflow the room left for Google.
-    // They share the local rows, ranked by match; every quicklink stays.
-    var ix = try testIndex(
-        t.allocator,
-        &.{ "Home", "Hopper", "Hotspot Shield", "Photos", "Shortcuts", "Photo Booth", "Phone" },
-    );
-    defer ix.deinit();
-    var r: Results = .{};
-    const words = [_][]const u8{ "hola", "hotmail", "hoy", "horoscopo" };
-    const local = max_rows - max_quicklink_rows - 1;
-    var in = input(&ix, "ho", &words);
-    r.build(in);
-    var counts = std.enums.EnumArray(Kind, usize).initFill(0);
-    for (r.slice()) |row| counts.set(row.kind, counts.get(row.kind) + 1);
-    try t.expect(counts.get(.pane) > 0);
-    try t.expectEqual(local, counts.get(.app) + counts.get(.pane) + counts.get(.command));
-    try t.expectEqual(@as(usize, max_quicklink_rows), counts.get(.quicklink));
-    try t.expectEqual(max_rows, r.n);
-    var heads: usize = 0;
-    for (0..r.n) |i| heads += @intFromBool(r.section(i) != null);
-    try t.expectEqual(@as(usize, 3), heads);
-    try t.expectEqual(Kind.quicklink, r.rows[r.n - 1].kind);
-    try t.expectEqual(@as(u32, 4), r.rows[r.n - 1].item);
-    // Files too, with no head of their own: a path typed out leads, and
-    // names that match worse give way to the apps and panes.
-    var found: files.List = .{ .allocator = t.allocator };
-    defer found.deinit();
+/// Seven apps that match "ho", and Google's words for it.
+const ho_apps: []const []const u8 =
+    &.{ "Home", "Hopper", "Hotspot Shield", "Photos", "Shortcuts", "Photo Booth", "Phone" };
+const ho_words = [_][]const u8{ "hola", "hotmail", "hoy", "horoscopo" };
+
+/// Files for "ho": a path typed out, and names that match worse.
+fn hoFiles(found: *files.List) !void {
     found.add("/tmp/ho", true, .{ .score = 2000 });
     for (1..files.max_rows) |i| {
         var path: [64]u8 = undefined;
         found.add(try std.fmt.bufPrint(&path, "/tmp/ho{d}", .{i}), false, .{ .score = 1 });
     }
+}
+
+fn heads(r: *const Results) usize {
+    var n: usize = 0;
+    for (0..r.n) |i| n += @intFromBool(r.section(i) != null);
+    return n;
+}
+
+test "a full list of apps and files keeps every quicklink, files with no head of their own" {
+    const t = std.testing;
+    var ix = try testIndex(t.allocator, ho_apps);
+    defer ix.deinit();
+    var r: Results = .{};
+    const local = max_rows - max_quicklink_rows - 1;
+    var in = input(&ix, "ho", &ho_words);
+    r.build(in);
+    var counts = std.enums.EnumArray(Kind, usize).initFill(0);
+    for (r.slice()) |row| counts.set(row.kind, counts.get(row.kind) + 1);
+    try t.expect(counts.get(.app) > 0);
+    try t.expect(counts.get(.app) + counts.get(.pane) + counts.get(.command) <= local);
+    try t.expectEqual(@as(usize, max_quicklink_rows), counts.get(.quicklink));
+    try t.expectEqual(@as(usize, 3), heads(&r));
+    const last = r.rows[r.n - 1];
+    try t.expectEqual(Kind.quicklink, last.kind);
+    try t.expectEqualStrings("X", in.quicklinks[last.item].name);
+    // A path typed out leads; names that match worse give way to the apps.
+    var found: files.List = .{ .allocator = t.allocator };
+    defer found.deinit();
+    try hoFiles(&found);
     in.found = &found;
     r.build(in);
     counts = .initFill(0);
     for (r.slice()) |row| counts.set(row.kind, counts.get(row.kind) + 1);
     try t.expectEqual(Kind.file, r.rows[0].kind);
     try t.expectEqual(@as(usize, 1), counts.get(.file));
+    try t.expectEqual(@as(usize, max_quicklink_rows), counts.get(.quicklink));
+    try t.expectEqual(@as(usize, 3), heads(&r));
+    r.build(input(&ix, "2+2", &.{}));
+    try t.expectEqual(@as(usize, 1), r.n);
+}
+
+test "apps, panes and files fill the local rows exactly, and still fit" {
+    // Panes: the Mac's alone.
+    if (!mac) return error.SkipZigTest;
+    const t = std.testing;
+    // Six apps match "ho", and so do three panes (Desktop & Dock, Sound,
+    // Keyboard): typing "hola" used to overflow the room left for Google.
+    // They share the local rows, ranked by match.
+    var ix = try testIndex(t.allocator, ho_apps);
+    defer ix.deinit();
+    var r: Results = .{};
+    const local = max_rows - max_quicklink_rows - 1;
+    var in = input(&ix, "ho", &ho_words);
+    r.build(in);
+    var counts = std.enums.EnumArray(Kind, usize).initFill(0);
+    for (r.slice()) |row| counts.set(row.kind, counts.get(row.kind) + 1);
+    try t.expect(counts.get(.pane) > 0);
+    try t.expectEqual(local, counts.get(.app) + counts.get(.pane) + counts.get(.command));
+    try t.expectEqual(max_rows, r.n);
+    var found: files.List = .{ .allocator = t.allocator };
+    defer found.deinit();
+    try hoFiles(&found);
+    in.found = &found;
+    r.build(in);
+    counts = .initFill(0);
+    for (r.slice()) |row| counts.set(row.kind, counts.get(row.kind) + 1);
     try t.expectEqual(
         local,
         counts.get(.app) + counts.get(.pane) + counts.get(.command) + counts.get(.file),
     );
-    try t.expectEqual(@as(usize, max_quicklink_rows), counts.get(.quicklink));
-    heads = 0;
-    for (0..r.n) |i| heads += @intFromBool(r.section(i) != null);
-    try t.expectEqual(@as(usize, 3), heads);
-    r.build(input(&ix, "2+2", &.{}));
-    try t.expectEqual(@as(usize, 1), r.n);
+    try t.expectEqual(max_rows, r.n);
 }
 
 test "a conversion is answered like math, with the rate under a currency's" {
