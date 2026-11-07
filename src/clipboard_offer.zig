@@ -6,7 +6,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
-const search = @import("search.zig");
+const percentEncode = @import("text.zig").percentEncode;
 
 pub fn env(name: [*:0]const u8) ?[]const u8 {
     const v = std.c.getenv(name) orelse return null;
@@ -263,7 +263,7 @@ fn urisFromPaths(gpa: std.mem.Allocator, paths: []const u8, sep: []const u8, end
         // Room for every byte escaped, so the encoder cannot run out.
         try out.ensureUnusedCapacity(gpa, p.len * 3);
         var w: std.Io.Writer = .fromArrayList(&out);
-        search.percentEncode(&w, p, .{ .keep = "/" }) catch unreachable;
+        percentEncode(&w, p, .{ .keep = "/" }) catch unreachable;
         out = w.toArrayList();
     }
     if (end and !first) try out.appendSlice(gpa, sep);

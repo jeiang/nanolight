@@ -4,6 +4,7 @@
 //! is the choice between them; what both share is clipboard_offer.zig.
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
+const log = @import("log.zig");
 const offer = @import("clipboard_offer.zig");
 const x11 = @import("clipboard_x11.zig");
 const wl = @import("clipboard_wl.zig");
@@ -33,7 +34,7 @@ pub const Watcher = struct {
             if (w.backend.wl.open()) |_| return w.opened("Wayland") else |e| {
                 w.backend.wl.close();
                 w.backend = .none;
-                clipboard.log(.warn, "nanolight: clipboard: Wayland: {t}", .{e});
+                log.warn("nanolight: clipboard: Wayland: {t}", .{e});
                 w.why = switch (e) {
                     error.NoDataControl => "This Wayland compositor has no data-control " ++
                         "protocol (GNOME has none), so clipboard history cannot watch it.",
@@ -47,7 +48,7 @@ pub const Watcher = struct {
             if (w.backend.x11.open()) |_| return w.opened("X11") else |e| {
                 w.backend.x11.close();
                 w.backend = .none;
-                clipboard.log(.warn, "nanolight: clipboard: X11: {t}", .{e});
+                log.warn("nanolight: clipboard: X11: {t}", .{e});
                 w.why = "Could not open the X11 display with libX11 and libXfixes.";
             }
         }
@@ -56,7 +57,7 @@ pub const Watcher = struct {
 
     fn opened(w: *Watcher, transport: []const u8) void {
         w.why = null;
-        clipboard.log(.info, "nanolight: clipboard: watching over {s}", .{transport});
+        log.info("nanolight: clipboard: watching over {s}", .{transport});
     }
 
     pub fn stop(w: *Watcher) void {

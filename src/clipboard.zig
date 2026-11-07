@@ -15,6 +15,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 const search = @import("search.zig");
+const clip = @import("text.zig").clip;
+const log = @import("log.zig");
 
 /// The feature's name, as its row and its screen say it.
 pub const title = "Clipboard History";
@@ -53,18 +55,6 @@ pub const Kind = enum {
 const Perm = Io.File.Permissions;
 pub const private_file: Perm = if (@hasDecl(Perm, "fromMode")) .fromMode(0o600) else .default_file;
 pub const private_dir: Perm = if (@hasDecl(Perm, "fromMode")) .fromMode(0o700) else .default_dir;
-
-/// The clipboard modules' log: silent under test, where the build fails a run that writes
-/// to stderr.
-pub fn log(comptime level: std.log.Level, comptime fmt: []const u8, args: anytype) void {
-    if (builtin.is_test) return;
-    switch (level) {
-        .err => std.log.err(fmt, args),
-        .warn => std.log.warn(fmt, args),
-        .info => std.log.info(fmt, args),
-        .debug => std.log.debug(fmt, args),
-    }
-}
 
 /// The most the history keeps of all its entries' content together (their `size`),
 /// whatever `max_entries` says (0 there limits only the count): past it, the oldest go first.
@@ -187,7 +177,7 @@ const DiskIn = struct {
 fn deleteIfThere(io: Io, dir: Io.Dir, name: []const u8) bool {
     dir.deleteFile(io, name) catch |e| {
         if (e == error.FileNotFound) return true;
-        log(.warn, "nanolight: clipboard: could not delete {s}: {t}", .{ name, e });
+        log.warn("nanolight: clipboard: could not delete {s}: {t}", .{ name, e });
         return false;
     };
     return true;
@@ -221,7 +211,7 @@ pub const Store = struct {
     pub fn turn(s: *Store, on: bool, kept: bool) void {
         if (kept or !on) s.on = on;
         if (!kept and !on)
-            log(.warn, "nanolight: clipboard history is off until Nanolight quits; " ++
+            log.warn("nanolight: clipboard history is off until Nanolight quits; " ++
                 "that could not be saved", .{});
     }
 
@@ -269,8 +259,7 @@ pub const Store = struct {
         if (content.len == 0 or (!item.kind.info().png and
             std.mem.trim(u8, content, " \t\r\n").len == 0)) return false;
         if (content.len > item.kind.cap()) {
-            log(
-                .info,
+            log.info(
                 "nanolight: clipboard: a {t} of {d} bytes is over the {d} byte limit; not kept",
                 .{ item.kind, content.len, item.kind.cap() },
             );
@@ -304,7 +293,7 @@ pub const Store = struct {
             content.len > inline_max;
         const shown = if (item.kind.info().png)
             ""
-        else if (spill) search.clip(content, preview_max) else content;
+        else if (spill) clip(content, preview_max) else content;
         const body = s.gpa.dupe(u8, shown) catch return null;
         const source = s.gpa.dupe(u8, item.source) catch {
             s.gpa.free(body);
@@ -321,7 +310,7 @@ pub const Store = struct {
             .at = now,
         };
         s.writeBlob(e, content) catch |err| {
-            log(.warn, "nanolight: clipboard: could not write a blob: {t}", .{err});
+            log.warn("nanolight: clipboard: could not write a blob: {t}", .{err});
             s.free(e);
             return null;
         };
@@ -355,7 +344,7 @@ pub const Store = struct {
     }
 
     fn indexNotWritten(e: anyerror) void {
-        log(.warn, "nanolight: clipboard: could not write index.json: {t}", .{e});
+        log.warn("nanolight: clipboard: could not write index.json: {t}", .{e});
     }
 
     /// All of `e`'s content, from its blob when it has one: a missing or
@@ -400,7 +389,7 @@ pub const Store = struct {
         if (s.dir) |dir| gone = deleteIfThere(s.io, dir, "index.json.corrupt") and gone;
         s.changed() catch |e| {
             // The old index still names what was copied: it must not stay.
-            log(.warn, "nanolight: clipboard: could not write index.json: {t}; deleting it", .{e});
+            log.warn("nanolight: clipboard: could not write index.json: {t}; deleting it", .{e});
             if (s.dir) |dir| gone = deleteIfThere(s.io, dir, "index.json") and gone;
         };
         if (!gone) return error.Incomplete;
@@ -468,7 +457,7 @@ pub const Store = struct {
         const min = search.min_loose_long;
         var best: ?search.Match = null;
         switch (e.kind) {
-            .text => best = search.scoreNamed(q, search.clip(e.text, match_max), &.{}, min),
+            .text => best = search.scoreNamed(q, clip(e.text, match_max), &.{}, min),
             .file => {
                 var lines = std.mem.splitScalar(u8, e.text, '\n');
                 while (lines.next()) |path| {
@@ -500,8 +489,7 @@ pub const Store = struct {
         const dir = s.dir orelse return;
         const limit: std.Io.Limit = .limited(max_index_bytes);
         const bytes = dir.readFileAlloc(s.io, "index.json", s.gpa, limit) catch |e| {
-            if (e != error.FileNotFound) log(
-                .warn,
+            if (e != error.FileNotFound) log.warn(
                 "nanolight: clipboard: index.json: {t}; starting empty",
                 .{e},
             );
@@ -517,8 +505,7 @@ pub const Store = struct {
             bytes,
             .{ .ignore_unknown_fields = true },
         ) catch {
-            log(
-                .warn,
+            log.warn(
                 "nanolight: clipboard: index.json is damaged; deleting it, starting empty",
                 .{},
             );
@@ -526,8 +513,7 @@ pub const Store = struct {
             return;
         };
         if (disk.v != format_version) {
-            log(
-                .warn,
+            log.warn(
                 "nanolight: clipboard: index.json is version {d}, not {d}; starting empty",
                 .{ disk.v, format_version },
             );
@@ -549,8 +535,7 @@ pub const Store = struct {
                 continue;
             };
         }
-        if (skipped > 0) log(
-            .warn,
+        if (skipped > 0) log.warn(
             "nanolight: clipboard: index.json: skipped {d} entries that did not read",
             .{skipped},
         );
@@ -607,7 +592,7 @@ pub const Store = struct {
     }
 
     fn sweepFailed(e: anyerror) bool {
-        log(.warn, "nanolight: clipboard: could not list blobs: {t}", .{e});
+        log.warn("nanolight: clipboard: could not list blobs: {t}", .{e});
         return false;
     }
 

@@ -6,7 +6,8 @@ const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
 const clipboard_view = @import("clipboard_view.zig");
 const prefs = @import("prefs.zig");
-const account = @import("account.zig");
+const clock = @import("clock.zig");
+const log = @import("log.zig");
 const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
 
@@ -33,7 +34,7 @@ pub const Clip = struct {
         const store = &c.store.?;
         store.on = prefs.flagOr(c.core.kv, gpa, .clipboard, store.cfg.enabled orelse true);
         store.config_ok = config_ok;
-        store.load(account.now());
+        store.load(clock.now());
         c.host = .{
             .ctx = c,
             .store = store,
@@ -91,14 +92,14 @@ pub const Clip = struct {
         const store = if (c.store) |*s| s else return;
         if (!store.config_ok) return;
         c.watcher.start(.{ .ctx = c, .observe = observe, .excluded = excluded }) catch |e|
-            clipboard.log(.warn, "nanolight: clipboard history could not start: {t}", .{e});
+            log.warn("nanolight: clipboard history could not start: {t}", .{e});
     }
 
     fn load(c: *Clip, hash: u64) ?clipboard.Loaded {
         const store = if (c.store) |*s| s else return null;
         const e = store.get(hash) orelse return null;
         return store.read(c.core.app.gpa, e.*) catch |err| {
-            clipboard.log(.warn, "nanolight: clipboard: could not read an entry: {t}", .{err});
+            log.warn("nanolight: clipboard: could not read an entry: {t}", .{err});
             return null;
         };
     }
@@ -123,7 +124,7 @@ fn from(ctx: *anyopaque) *Clip {
 fn observe(ctx: *anyopaque, item: clipboard.Item) void {
     const c = from(ctx);
     const store = if (c.store) |*s| s else return;
-    if (store.add(item, account.now())) if (c.core.s.showsClipboard()) c.core.redraw();
+    if (store.add(item, clock.now())) if (c.core.s.showsClipboard()) c.core.redraw();
 }
 
 fn excluded(ctx: *anyopaque, source: []const u8) bool {
@@ -134,7 +135,7 @@ fn excluded(ctx: *anyopaque, source: []const u8) bool {
 
 fn pruneTick(ctx: ?*anyopaque) callconv(.c) void {
     const c = from(ctx.?);
-    if (c.store) |*store| store.pruneOrWarn(account.now());
+    if (c.store) |*store| store.pruneOrWarn(clock.now());
     nanoui.App.after(prune_every_ms, c, pruneTick);
 }
 

@@ -9,7 +9,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const proc = @import("proc.zig");
 const sc = @import("script_commands.zig");
-const search = @import("search.zig");
+const percentEncode = @import("text.zig").percentEncode;
 const model = @import("raycast_model.zig");
 const windows = builtin.os.tag == .windows;
 
@@ -193,7 +193,7 @@ pub const Runner = struct {
             var enc: [2048]u8 = undefined;
             var w: std.Io.Writer = .fixed(&enc);
             // best effort: a value past `enc` is cut.
-            if (arg.percentEncoded) search.percentEncode(&w, v, .{}) catch {};
+            if (arg.percentEncoded) percentEncode(&w, v, .{}) catch {};
             argv.append(
                 a,
                 a.dupe(u8, if (arg.percentEncoded) w.buffered() else v) catch return,

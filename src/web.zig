@@ -2,7 +2,7 @@
 //! (config.toml's `[[quicklinks]]`, or synced), the addresses they open for
 //! what was typed, and which one is Google's, whose completions go with it.
 const std = @import("std");
-const search = @import("search.zig");
+const percentEncode = @import("text.zig").percentEncode;
 
 pub const Quicklink = struct {
     name: []const u8,
@@ -75,7 +75,7 @@ pub fn url(buf: []u8, template: []const u8, argument: []const u8) ?[]const u8 {
     var rest = template;
     while (std.mem.indexOf(u8, rest, mark)) |i| {
         w.writeAll(rest[0..i]) catch return null;
-        search.percentEncode(&w, std.mem.trim(u8, argument, " "), .{}) catch return null;
+        percentEncode(&w, std.mem.trim(u8, argument, " "), .{}) catch return null;
         rest = rest[i + mark.len ..];
     }
     w.writeAll(rest) catch return null;

@@ -7,6 +7,7 @@ const Quicklink = @import("web.zig").Quicklink;
 const Theme = @import("palette.zig").Theme;
 const keys = @import("keys.zig");
 const Choice = keys.Choice;
+const log = @import("log.zig");
 
 const Store = nanoui.kv.Store;
 
@@ -100,15 +101,10 @@ pub fn appliedKey(buf: *[applied_key_max]u8, file_key: []const u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}{s}", .{ applied_prefix, file_key }) catch unreachable;
 }
 
-/// Silent under test: the build fails a test run that writes to stderr.
-fn warn(comptime fmt: []const u8, args: anytype) void {
-    if (!@import("builtin").is_test) std.log.warn(fmt, args);
-}
-
 /// Writes `value` at `key`; false, and logged, when it could not be kept.
 pub fn put(kv: Store, key: []const u8, value: []const u8) bool {
     kv.set(key, value) catch |e| {
-        warn("nanolight: could not save {s}: {t}", .{ key, e });
+        log.warn("nanolight: could not save {s}: {t}", .{ key, e });
         return false;
     };
     return true;
@@ -118,7 +114,7 @@ pub fn put(kv: Store, key: []const u8, value: []const u8) bool {
 pub fn text(kv: Store, gpa: std.mem.Allocator, comptime k: Key) ?[]u8 {
     comptime std.debug.assert(spec(k).kind == .text);
     return kv.get(gpa, k.name()) catch |e| {
-        warn("nanolight: could not read {s}: {t}", .{ k.name(), e });
+        log.warn("nanolight: could not read {s}: {t}", .{ k.name(), e });
         return null;
     };
 }
@@ -138,7 +134,7 @@ pub fn flagOr(kv: Store, gpa: std.mem.Allocator, comptime k: Key, unset: bool) b
     const f = comptime spec(k).kind.flag;
     const v = kv.get(gpa, k.name()) catch |e| {
         const fallback = f.unreadable orelse unset;
-        warn("nanolight: could not read {s}: {t}; taken as {}", .{ k.name(), e, fallback });
+        log.warn("nanolight: could not read {s}: {t}; taken as {}", .{ k.name(), e, fallback });
         return fallback;
     } orelse return unset;
     defer gpa.free(v);
@@ -156,12 +152,12 @@ pub fn setFlag(kv: Store, comptime k: Key, on: bool) bool {
 pub fn int(kv: Store, gpa: std.mem.Allocator, comptime k: Key) i64 {
     comptime std.debug.assert(spec(k).kind == .int);
     const v = kv.get(gpa, k.name()) catch |e| {
-        warn("nanolight: could not read {s}: {t}", .{ k.name(), e });
+        log.warn("nanolight: could not read {s}: {t}", .{ k.name(), e });
         return 0;
     } orelse return 0;
     defer gpa.free(v);
     return std.fmt.parseInt(i64, v, 10) catch {
-        warn("nanolight: {s} is not a number: \"{s}\"", .{ k.name(), v });
+        log.warn("nanolight: {s} is not a number: \"{s}\"", .{ k.name(), v });
         return 0;
     };
 }
@@ -207,7 +203,7 @@ pub fn setHotkey(kv: Store, c: Choice) bool {
 /// `list` as it is kept; null, and logged, out of memory.
 pub fn quicklinksJson(gpa: std.mem.Allocator, list: []const Quicklink) ?[]u8 {
     return std.json.Stringify.valueAlloc(gpa, list, .{}) catch |e| {
-        warn("nanolight: could not keep the quicklinks: {t}", .{e});
+        log.warn("nanolight: could not keep the quicklinks: {t}", .{e});
         return null;
     };
 }
@@ -222,7 +218,7 @@ pub fn quicklinks(arena: std.mem.Allocator, kv: Store) []const Quicklink {
         json,
         .{ .ignore_unknown_fields = true },
     ) catch |e| {
-        warn("nanolight: {s} is not a quicklink list ({t}); using the built-in ones", .{
+        log.warn("nanolight: {s} is not a quicklink list ({t}); using the built-in ones", .{
             Key.quicklinks.name(),
             e,
         });

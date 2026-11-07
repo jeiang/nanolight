@@ -14,6 +14,7 @@ const account = @import("account.zig");
 const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 const Quicklink = @import("web.zig").Quicklink;
+const log = @import("log.zig");
 
 pub const max_bytes = 1 << 20;
 
@@ -108,11 +109,6 @@ pub const Problem = struct {
 
 pub const Error = error{ Invalid, OutOfMemory };
 
-/// Silent under test: the build fails a test run that writes to stderr.
-fn warn(comptime fmt: []const u8, args: anytype) void {
-    if (!@import("builtin").is_test) std.log.warn(fmt, args);
-}
-
 /// Reads the first config file `candidates` finds. Strings live as long as `arena`.
 pub fn load(
     arena: std.mem.Allocator,
@@ -174,34 +170,35 @@ fn loadFrom(
         const cwd = std.Io.Dir.cwd();
         const text = cwd.readFileAlloc(io, path, arena, .limited(max_bytes)) catch |e| {
             if (e == error.FileNotFound) continue;
-            std.log.warn("nanolight: {s}: {t}; using the defaults", .{ path, e });
+            log.warn("nanolight: {s}: {t}; using the defaults", .{ path, e });
             return .unusable;
         };
         var problem: Problem = .{};
         var c = parse(arena, text, &problem) catch |e| {
             if (e == error.OutOfMemory) return .unusable;
             if (problem.line > 0)
-                std.log.warn(
+                log.warn(
                     "nanolight: {s}:{d}: {s}; using the defaults",
                     .{ path, problem.line, problem.msg },
                 )
             else
-                std.log.warn("nanolight: {s}: {s}; using the defaults", .{ path, problem.msg });
+                log.warn("nanolight: {s}: {s}; using the defaults", .{ path, problem.msg });
             return .unusable;
         };
-        for (problem.ignored.items) |what| warn("nanolight: {s}: {s}; ignored", .{ path, what });
+        for (problem.ignored.items) |what|
+            log.warn("nanolight: {s}: {s}; ignored", .{ path, what });
         return .{ .file = absoluteScriptDirs(arena, io, &c, path) catch return .unusable };
     }
     // Unreadable counts as applied before: the defaults must not stand in for a lost file.
     const seen = kv.get(arena, prefs.Key.config_seen.name()) catch |e| {
-        warn(
+        log.warn(
             "nanolight: could not read {s}: {t}; clipboard history is paused",
             .{ prefs.Key.config_seen.name(), e },
         );
         return .unusable;
     };
     if (seen != null) {
-        warn("nanolight: no config.toml found, but one was applied before; " ++
+        log.warn("nanolight: no config.toml found, but one was applied before; " ++
             "clipboard history is paused until it is found", .{});
         return .unusable;
     }
@@ -348,7 +345,10 @@ fn fresh(store: nanoui.kv.Store, gpa: std.mem.Allocator, key: []const u8, value:
     var buf: [prefs.applied_key_max]u8 = undefined;
     const k = prefs.appliedKey(&buf, key);
     const old = store.get(gpa, k) catch |e| {
-        warn("nanolight: could not read {s}: {t}; the config's value is not applied", .{ k, e });
+        log.warn(
+            "nanolight: could not read {s}: {t}; the config's value is not applied",
+            .{ k, e },
+        );
         return false;
     } orelse return true;
     defer gpa.free(old);

@@ -11,7 +11,8 @@ const panel = @import("view.zig");
 const clipboard = @import("clipboard.zig");
 const search = @import("search.zig");
 const platform = @import("platform.zig");
-const account = @import("account.zig");
+const clock = @import("clock.zig");
+const clip = @import("text.zig").clip;
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;
 
@@ -172,7 +173,7 @@ pub const Screen = struct {
             return empty(c, p, if (why != null and h.store.len() == 0) why.? else none);
         }
         const first = if (s.sel >= visible_rows) s.sel + 1 - visible_rows else 0;
-        const now = account.now();
+        const now = clock.now();
         for (first..@min(s.n, first + visible_rows)) |i| {
             const e = h.store.at(s.found[i].index);
             ui.key(c, c.print("clip-row-{d}", .{i}));
@@ -205,7 +206,7 @@ pub const Screen = struct {
                     kindLabel(e.kind),
                     if (app.len > 0) " · " else "",
                     app,
-                    relative(&rb, now, e.at),
+                    clock.ago(&rb, now - e.at),
                 },
             );
         }
@@ -237,7 +238,7 @@ pub const Screen = struct {
                     }
                     ui.text(
                         c,
-                        if (line.len == 0) " " else search.clip(line, 240),
+                        if (line.len == 0) " " else clip(line, 240),
                         .{
                             .size = 12.5,
                             .mono = e.kind == .text,
@@ -258,7 +259,7 @@ pub const Screen = struct {
             .{
                 e.count,
                 if (e.count == 1) "" else "s",
-                relative(&rb, account.now(), e.at),
+                clock.ago(&rb, clock.now() - e.at),
             },
         );
     }
@@ -330,20 +331,6 @@ fn appName(source: []const u8) []const u8 {
     return s;
 }
 
-/// "just now", "5 min ago", "3 h ago", "2 d ago".
-fn relative(buf: []u8, now: i64, at: i64) []const u8 {
-    const d = @max(now - at, 0);
-    const r = if (d < 60)
-        std.fmt.bufPrint(buf, "just now", .{})
-    else if (d < std.time.s_per_hour)
-        std.fmt.bufPrint(buf, "{d} min ago", .{@divFloor(d, 60)})
-    else if (d < std.time.s_per_day)
-        std.fmt.bufPrint(buf, "{d} h ago", .{@divFloor(d, std.time.s_per_hour)})
-    else
-        std.fmt.bufPrint(buf, "{d} d ago", .{@divFloor(d, std.time.s_per_day)});
-    return r catch "";
-}
-
 /// "12 bytes", "34 KB", "1.5 MB".
 fn sizeText(buf: []u8, n: u64) []const u8 {
     const r = if (n < 1024)
@@ -371,7 +358,7 @@ fn title(buf: []u8, e: clipboard.Entry) []const u8 {
             var lines = std.mem.splitScalar(u8, e.text, '\n');
             while (lines.next()) |l| {
                 const t = std.mem.trim(u8, l, " \t\r");
-                if (t.len > 0) return search.clip(t, 200);
+                if (t.len > 0) return clip(t, 200);
             }
             return "";
         },
@@ -398,10 +385,6 @@ test "how entries read" {
     try testing.expectEqualStrings("chrome", appName("chrome.exe"));
     try testing.expectEqualStrings("firefox", appName("firefox"));
     try testing.expectEqualStrings("org.gnome", appName("org.gnome"));
-    try testing.expectEqualStrings("just now", relative(&buf, 100, 90));
-    try testing.expectEqualStrings("5 min ago", relative(&buf, 1000, 700));
-    try testing.expectEqualStrings("3 h ago", relative(&buf, 20000, 9000));
-    try testing.expectEqualStrings("2 d ago", relative(&buf, 200000, 20000));
     const t: clipboard.Entry = .{
         .hash = 1,
         .kind = .text,

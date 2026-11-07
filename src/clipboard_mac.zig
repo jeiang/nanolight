@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const clipboard = @import("clipboard.zig");
+const log = @import("log.zig");
 
 extern "c" fn AXIsProcessTrusted() bool;
 extern "c" fn AXIsProcessTrustedWithOptions(options: ?objc.Object) bool;
@@ -161,7 +162,7 @@ const Mac = struct {
     }
 
     fn notRead(kind: clipboard.Kind, e: anyerror) void {
-        clipboard.log(.info, "nanolight: clipboard: a copied {t} was not kept: {t}", .{ kind, e });
+        log.info("nanolight: clipboard: a copied {t} was not kept: {t}", .{ kind, e });
     }
 
     /// The app in front now, unless it is this one: where a paste goes.

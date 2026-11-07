@@ -8,7 +8,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
-const search = @import("search.zig");
+const clip = @import("text.zig").clip;
 
 var done = false;
 
@@ -33,7 +33,7 @@ fn observe(_: *anyopaque, item: clipboard.Item) void {
             .{
                 item.kind,
                 item.text.len,
-                std.zig.fmtString(search.clip(item.text, 80)),
+                std.zig.fmtString(clip(item.text, 80)),
                 item.source,
             },
         ),

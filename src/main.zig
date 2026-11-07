@@ -22,6 +22,7 @@ const platform = @import("platform.zig");
 const single = @import("single.zig");
 const panel = platform.panel;
 const account = @import("account.zig");
+const clock = @import("clock.zig");
 const config = @import("config.zig");
 const prefs = @import("prefs.zig");
 const App = @import("app.zig").App;
@@ -62,7 +63,7 @@ pub fn main(init: std.process.Init) !void {
     else
         config.load(cfg_arena.allocator(), init.io, init.environ_map, kv);
     const cfg = loaded.config();
-    config.apply(kv, init.gpa, loaded, account.now());
+    config.apply(kv, init.gpa, loaded, clock.now());
     // The key is the config's or the Nix module's: the welcome does not ask.
     // `config.parse` lets through only a hotkey this system can use.
     var o: Onboard = .{ .skip_key = nix_managed or cfg.hotkey != null };
@@ -100,7 +101,7 @@ fn run(
         .gpa = core.app.gpa,
         .io = core.app.io,
         .kv = core.kv,
-        .now = account.now,
+        .now = clock.now,
         .landed = .{ .ctx = core, .func = ratesLanded },
     } };
     defer money.deinit();
@@ -191,7 +192,7 @@ fn loadPreferences(s: *Nanolight, kv: nanoui.kv.Store, gpa: std.mem.Allocator) v
 /// or its menu shows it.
 fn openWindow(core: *App) !void {
     const s = core.s;
-    _ = s.show(account.now());
+    _ = s.show(clock.now());
     // The rows first, so a snapshot is as tall as the panel.
     s.rebuild();
     var options: nanoui.WindowOptions = .{
