@@ -13,11 +13,10 @@
 //! rows among the apps (`List`), their folder the package's name.
 //! script_run.zig runs one and shows what it prints.
 const std = @import("std");
-const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const app_scan = @import("app_scan.zig");
 const model = @import("raycast_model.zig");
-const windows = builtin.os.tag == .windows;
+const windows = @import("os.zig").windows;
 
 pub const Mode = enum { silent, compact, full_output, inline_ };
 

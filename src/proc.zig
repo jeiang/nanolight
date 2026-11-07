@@ -2,10 +2,9 @@
 //! it comes (nothing polls), for system commands (commands.zig) and
 //! script commands (script_run.zig).
 const std = @import("std");
-const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const assert = std.debug.assert;
-const windows = builtin.os.tag == .windows;
+const windows = @import("os.zig").windows;
 
 /// Where a child's output and its end go, on the main thread.
 pub const Sink = struct {

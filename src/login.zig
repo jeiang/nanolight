@@ -1,4 +1,4 @@
-//! Opening at login, each OS's (platform.zig's `Login`). Mac: the system's
+//! Opening at login, each OS's (shell.zig's `Login`). Mac: the system's
 //! login items (SMAppService, macOS 13 and later), which need the app to
 //! run from its bundle. Windows: a value under HKCU's Run key. Linux: an
 //! XDG autostart entry (~/.config/autostart/nanolight.desktop). `enabled`

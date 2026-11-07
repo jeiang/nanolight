@@ -1,10 +1,9 @@
 //! What a key choice reads as: "⌥ ⌘ Space" on the Mac, "Ctrl Alt Space" on
 //! a PC; the modifiers and the key alone, for key caps.
 const std = @import("std");
-const builtin = @import("builtin");
 const keys = @import("keys.zig");
 const Choice = keys.Choice;
-const mac = builtin.os.tag == .macos;
+const mac = @import("os.zig").mac;
 
 /// "⌥ ⌘ Space", "⌥ X": the modifiers, then the key. On a PC "Ctrl Alt Space".
 pub fn text(c: Choice) Text {

@@ -4,7 +4,7 @@
 //! are Settings' own.
 const Choice = @import("keys.zig").Choice;
 const prefs = @import("prefs.zig");
-const platform = @import("platform.zig");
+const shell = @import("shell.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Theme = @import("palette.zig").Theme;
 const App = @import("app.zig").App;
@@ -28,7 +28,7 @@ pub const Bind = struct {
             .choice = choice,
             .apply = apply,
             .record = record,
-            .login = platform.Login.enabled,
+            .login = shell.Login.enabled,
             .suggest = suggest,
             .files = files,
             .searches_out = searchesOut,

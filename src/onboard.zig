@@ -18,7 +18,7 @@ const keys = @import("keys.zig");
 const shortcut = @import("shortcut.zig");
 const shortcut_clash = @import("shortcut_clash.zig");
 const platform = @import("platform.zig");
-const mac = @import("builtin").os.tag == .macos;
+const mac = @import("os.zig").mac;
 const Choice = keys.Choice;
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;

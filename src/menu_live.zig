@@ -10,8 +10,6 @@ const account_live = @import("account_live.zig");
 const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
 const after = @import("after.zig");
-/// A Nix build: no updater, so no update item.
-const nix_managed = @import("build_options").nix_managed;
 
 pub const Menu = struct {
     core: *App,
@@ -67,7 +65,7 @@ fn rebuild(ctx: *anyopaque) void {
     const m = after.cast(*Menu, ctx);
     const t = m.tray orelse return;
     const Item = nanoui.menu.MenuItem;
-    const update = if (nix_managed) [_]Item{} else [_]Item{m.update.menuItem()};
+    const update = if (platform.updater) [_]Item{m.update.menuItem()} else [_]Item{};
     t.setMenu("Nanolight", &([_]Item{
         .{ .label = "Settings…", .accelerator = "Cmd+,", .click = .of(m, Menu.settings) },
         .{ .label = "Open Nanolight", .click = .of(m, Menu.show) },

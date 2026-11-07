@@ -6,12 +6,11 @@
 //! `fullOutput` everything, live. It drives the panel's screen with
 //! raycast_model.zig `Update`s.
 const std = @import("std");
-const builtin = @import("builtin");
 const proc = @import("proc.zig");
 const sc = @import("script_commands.zig");
 const percentEncode = @import("text.zig").percentEncode;
 const model = @import("raycast_model.zig");
-const windows = builtin.os.tag == .windows;
+const windows = @import("os.zig").windows;
 
 pub const Hooks = struct {
     ctx: *anyopaque,

@@ -600,7 +600,7 @@ pub const Results = struct {
     }
 };
 
-const mac = @import("builtin").os.tag == .macos;
+const mac = @import("os.zig").mac;
 const apps = @import("apps.zig");
 const launch_counts = @import("launch_counts.zig");
 const defaults = &web.default_quicklinks;

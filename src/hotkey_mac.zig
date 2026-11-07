@@ -77,6 +77,12 @@ pub fn unregister() void {
     current = null;
 }
 
+/// None: Carbon grants a key another app holds (`register`), so the
+/// system's shortcut table says instead (shortcut_clash.zig).
+pub fn taken(_: keys.Choice) bool {
+    return false;
+}
+
 fn fourcc(comptime s: *const [4]u8) u32 {
     return std.mem.readInt(u32, s, .big);
 }

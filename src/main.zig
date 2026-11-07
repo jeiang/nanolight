@@ -18,8 +18,9 @@ const Nanolight = @import("view.zig").Nanolight;
 const chrome = @import("chrome.zig");
 const Onboard = @import("onboard.zig").Onboard;
 const platform = @import("platform.zig");
+const shell = @import("shell.zig");
 const single = @import("single.zig");
-const panel = platform.panel;
+const panel = shell.panel;
 const account = @import("account.zig");
 const clock = @import("clock.zig");
 const config = @import("config.zig");
@@ -35,8 +36,6 @@ const account_live = @import("account_live.zig");
 const update_live = @import("update_live.zig");
 const menu_live = @import("menu_live.zig");
 const settings_bind = @import("settings_bind.zig");
-/// A Nix build: no updater and no login-item UI; the modules own both.
-const nix_managed = @import("build_options").nix_managed;
 const version = @import("build_options").version;
 
 pub fn main(init: std.process.Init) !void {
@@ -65,7 +64,7 @@ pub fn main(init: std.process.Init) !void {
     config.apply(kv, init.gpa, loaded, clock.now());
     // The key is the config's or the Nix module's: the welcome does not ask.
     // `config.parse` lets through only a hotkey this system can use.
-    var o: Onboard = .{ .skip_key = nix_managed or cfg.hotkey != null };
+    var o: Onboard = .{ .skip_key = !platform.key_ui or cfg.hotkey != null };
     var s: Nanolight = .{
         .index = &index,
         .tally = .{ .kv = kv },
@@ -174,7 +173,7 @@ fn answeredArgs(init: std.process.Init, args: []const [:0]const u8) !bool {
             try w.interface.flush();
             return true;
         }
-        if (std.mem.eql(u8, arg, "--toggle")) return platform.Single.send(.toggle);
+        if (std.mem.eql(u8, arg, "--toggle")) return shell.Single.send(.toggle);
     }
     return false;
 }
@@ -224,7 +223,7 @@ fn runShown(
     sync_cfg: account.Config,
 ) !void {
     // The newest launch is the one that stays; it hears `--toggle` (single.zig).
-    switch (platform.Single.claim(init.io, .{ .ctx = core, .func = App.command })) {
+    switch (shell.Single.claim(init.io, .{ .ctx = core, .func = App.command })) {
         .none => {},
         .quit => std.log.info("nanolight: asked an older copy to quit", .{}),
         .stayed => std.log.warn(
