@@ -180,7 +180,8 @@ pub const App = struct {
         if (welcome_up) a.o.pressed(showing);
         if (showing) {
             a.s.hid(clock.now());
-            return w.hide();
+            // The hot key's press time goes with the panel (panel_x11.zig).
+            return shell.panel.lostKeys(w);
         }
         Hook.run(a.hooks.showing);
         // Freed a key in System Settings, quit a launcher: look again.

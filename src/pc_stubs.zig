@@ -26,10 +26,11 @@ pub const ClickThrough = struct {
     pub fn update(_: *ClickThrough) void {}
 };
 
-/// No menu bar icon yet: `make` says so, and the menu's code keeps none.
+/// No menu bar icon yet: one that is never there, and whose menu is not
+/// drawn. The app starts as it does with one (`menu_live.start`).
 pub const Tray = struct {
     pub fn make(_: *nanoui.App, _: []const u8, _: []const u8) !Tray {
-        return error.Unavailable;
+        return .{};
     }
     pub fn visible(_: Tray) bool {
         return false;

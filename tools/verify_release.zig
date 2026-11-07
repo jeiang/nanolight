@@ -4,7 +4,7 @@
 //! each, that Gatekeeper takes them with the quarantine a browser leaves, and
 //! that the signed app runs and draws. Safe on a developer's Mac: files stay
 //! in a temporary folder, the app runs only headless (--nanoui-snapshot,
-//! never a window; it reads this Mac's settings, and writes none), and
+//! never a window; it reads no settings, and writes none), and
 //! what's quarantined is assessed, never run.
 //! `zig build verify-update` does what this can't: launches and updates for real.
 const std = @import("std");
