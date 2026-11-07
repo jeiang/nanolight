@@ -257,12 +257,6 @@ pub fn setQuicklinks(kv: Store, gpa: std.mem.Allocator, list: []const Quicklink)
     keepText(kv, .quicklinks, json);
 }
 
-/// Nanolight's data folder (config.toml, the clipboard, script commands, the rates).
-/// Caller frees it.
-pub fn dataDir(gpa: std.mem.Allocator) ![]u8 {
-    return nanoui.path(gpa, .data, app_facts.app_name);
-}
-
 // ----- tests -----
 
 const testing = std.testing;

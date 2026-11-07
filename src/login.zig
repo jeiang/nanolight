@@ -4,6 +4,7 @@
 //! XDG autostart entry (~/.config/autostart/nanolight.desktop). `enabled`
 //! says whether it opens at login; `set` changes it first.
 const std = @import("std");
+const paths = @import("paths.zig");
 const nanoui = @import("nanoui");
 
 pub const Mac = struct {
@@ -80,23 +81,9 @@ pub const Linux = struct {
         return std.Io.Threaded.global_single_threaded.io();
     }
 
-    fn entryPath(buf: []u8) ?[]const u8 {
-        if (std.c.getenv("XDG_CONFIG_HOME")) |d| return std.fmt.bufPrint(
-            buf,
-            "{s}/autostart/nanolight.desktop",
-            .{std.mem.span(d)},
-        ) catch null;
-        const home = std.c.getenv("HOME") orelse return null;
-        return std.fmt.bufPrint(
-            buf,
-            "{s}/.config/autostart/nanolight.desktop",
-            .{std.mem.span(home)},
-        ) catch null;
-    }
-
     pub fn enabled(set: ?bool) bool {
         var buf: [1024]u8 = undefined;
-        const path = entryPath(&buf) orelse return false;
+        const path = paths.autostartEntry(&buf) orelse return false;
         const cwd = std.Io.Dir.cwd();
         if (set) |on| {
             if (on) {

@@ -109,38 +109,16 @@ pub const Problem = struct {
 
 pub const Error = error{ Invalid, OutOfMemory };
 
-/// Reads the first config file `candidates` finds. Strings live as long as `arena`.
+/// Reads the first config file `paths.configCandidates` finds. Strings live as long as `arena`.
 pub fn load(
     arena: std.mem.Allocator,
     io: std.Io,
     env: *const std.process.Environ.Map,
     kv: nanoui.kv.Store,
 ) Loaded {
-    const data = prefs.dataDir(arena) catch null;
-    return loadFrom(arena, io, candidates(arena, env, data) catch return .unusable, kv);
-}
-
-/// Where a config may live, first match wins: `NANOLIGHT_CONFIG`, the data dir, the XDG config dir
-/// (home-manager's `xdg.configFile`), then `/etc/nanolight` (the NixOS and nix-darwin modules).
-fn candidates(
-    arena: std.mem.Allocator,
-    env: *const std.process.Environ.Map,
-    data_dir: ?[]const u8,
-) std.mem.Allocator.Error![]const []const u8 {
-    var out: std.ArrayList([]const u8) = .empty;
-    if (env.get("NANOLIGHT_CONFIG")) |p| try out.append(arena, p);
-    if (data_dir) |d| try out.append(arena, try std.fs.path.join(arena, &.{ d, "config.toml" }));
-    const xdg: ?[]const u8 = if (env.get("XDG_CONFIG_HOME")) |x|
-        (if (x.len > 0) x else null)
-    else
-        null;
-    if (xdg orelse (if (env.get("HOME")) |h|
-        try std.fs.path.join(arena, &.{ h, ".config" })
-    else
-        null)) |c|
-        try out.append(arena, try std.fs.path.join(arena, &.{ c, "nanolight", "config.toml" }));
-    try out.append(arena, "/etc/nanolight/config.toml");
-    return out.items;
+    const paths = @import("paths.zig");
+    const data = paths.dataDir(arena) catch null;
+    return loadFrom(arena, io, paths.configCandidates(arena, env, data) catch return .unusable, kv);
 }
 
 /// A script runs with its folder as the working directory, so a relative
@@ -836,28 +814,6 @@ test "a missing file is the defaults" {
     defer arena.deinit();
     const none = [_][]const u8{"/nonexistent/nanolight/config.toml"};
     try testing.expect(loadFrom(arena.allocator(), testing.io, &none, m.store()) == .defaults);
-}
-
-test "lookup order: env, data dir, XDG, /etc" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var env: std.process.Environ.Map = .init(testing.allocator);
-    defer env.deinit();
-    try env.put("NANOLIGHT_CONFIG", "/n/c.toml");
-    try env.put("XDG_CONFIG_HOME", "/x");
-    var got = try candidates(a, &env, "/d");
-    try testing.expectEqual(@as(usize, 4), got.len);
-    try testing.expectEqualStrings("/n/c.toml", got[0]);
-    try testing.expectEqualStrings("/d/config.toml", got[1]);
-    try testing.expectEqualStrings("/x/nanolight/config.toml", got[2]);
-    try testing.expectEqualStrings("/etc/nanolight/config.toml", got[3]);
-    var home: std.process.Environ.Map = .init(testing.allocator);
-    defer home.deinit();
-    try home.put("HOME", "/h");
-    got = try candidates(a, &home, "/d");
-    try testing.expectEqualStrings("/d/config.toml", got[0]);
-    try testing.expectEqualStrings("/h/.config/nanolight/config.toml", got[1]);
 }
 
 test "the first file that exists wins" {
