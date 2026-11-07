@@ -240,7 +240,7 @@ pub const Ext = struct {
         const acts: []const model.Action = if (v) |vv| vv.actions() else &.{};
         e.keys(c, v, acts);
         e.header(c, p, v);
-        ui.div(c).wFull().h(1).bg(p.hair).end();
+        chrome.hairline(c, p);
         const mid = ui.div(c).column().wFull().grow().clip();
         if (e.actions_open) {
             e.actionList(c, p, acts);

@@ -35,7 +35,6 @@ const raycast_view = @import("raycast_view.zig");
 const model = @import("raycast_model.zig");
 const Onboard = @import("onboard.zig").Onboard;
 const screen = @import("screen.zig");
-const config = @import("config.zig");
 const chrome = @import("chrome.zig");
 const calc_card = @import("calc_card.zig");
 const palette_mod = @import("palette.zig");
@@ -167,7 +166,7 @@ pub const Nanolight = struct {
     clip_ui: clipboard_view.Screen = .{},
     /// A script command's screen, drawn in place of the rows while it runs.
     script_ui: raycast_view.Ext = .{},
-    away: screen.Away = .{ .pop_after = (config.Config{}).pop_to_root_seconds },
+    away: screen.Away = .{},
 
     pub fn deinit(s: *Nanolight) void {
         s.found.deinit();
@@ -433,12 +432,12 @@ pub const Nanolight = struct {
             defer body.end();
             if (s.screen == .preview) {
                 // Under the page, until it draws.
-                ui.div(c).wFull().h(1).bg(p.hair).end();
+                chrome.hairline(c, p);
                 const wait = ui.div(c).wFull().h(chrome.webArea(h).h).center();
                 defer wait.end();
                 ui.text(c, "Searching Google…", p.waiting());
             } else if (s.res.n > 0) {
-                ui.div(c).wFull().h(1).bg(p.hair).end();
+                chrome.hairline(c, p);
                 s.list(c, p);
             }
             ui.spacer(c);
@@ -737,18 +736,19 @@ pub const Nanolight = struct {
             ui.icon(c, "gearshape", .{ .size = 13, .weight = .medium, .color = p.sub });
         }
         if (s.screen == .preview) {
-            chrome.footerKey(c, p, "Open in Browser", platform.mod ++ "↩", true);
-            chrome.keySep(c, p);
-            chrome.footerKey(c, p, "Close", "esc", false);
-            return;
+            return chrome.footerKeys(c, p, &.{
+                .{ .what = "Open in Browser", .key = platform.mod ++ "↩", .first = true },
+            });
         }
         if (s.res.n == 0) return;
         const sel = s.res.rows[s.res.actionable(s.sel)];
         if (row_views.get(sel.kind).footer) |says| {
             says(s, c, p, sel);
-        } else chrome.footerKey(c, p, results.providers.get(sel.kind).action, "↩", true);
-        chrome.keySep(c, p);
-        chrome.footerKey(c, p, "Close", "esc", false);
+            chrome.keySep(c, p);
+            chrome.closeKey(c, p);
+        } else chrome.footerKeys(c, p, &.{
+            .{ .what = results.providers.get(sel.kind).action, .key = "↩", .first = true },
+        });
     }
 
     /// Return on the selected row.
@@ -957,7 +957,7 @@ fn openApp(s: *Nanolight, _: *ui.Context, r: Row) void {
 fn openScript(s: *Nanolight, _: *ui.Context, r: Row) void {
     const x = s.scriptList()[r.item];
     s.opened(x.key);
-    s.go(if (x.file == null) .folder else .{ .script = r.item });
+    s.go(.{ .script = if (x.file == null) .folder else .{ .command = r.item } });
 }
 
 fn openFile(s: *Nanolight, _: *ui.Context, r: Row) void {

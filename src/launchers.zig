@@ -12,10 +12,6 @@ const search = @import("search.zig");
 const Counts = launch_counts.Counts;
 const Launch = @import("settings.zig").Launch;
 
-/// Each time one was opened lifts it this much, up to `max_launch_boost`.
-const launch_boost = 25;
-const max_launch_boost = 250;
-
 /// An app (its place in `apps.Index`) or a script command (in `sc.List`).
 pub const Item = union(enum) {
     app: u32,
@@ -124,7 +120,8 @@ pub const Launchers = struct {
                 .app => |i| apps.score(query, l.apps.apps.items[i]),
                 .script => |i| search.score(query, l.scripts[i].title),
             } orelse continue;
-            scored.score += @min(@as(i32, l.count(x)) * launch_boost, max_launch_boost);
+            const boost = @as(i32, l.count(x)) * search.launch_boost;
+            scored.score += @min(boost, search.max_launch_boost);
             top.offer(.{ .index = l.flat(x), .match = scored });
         }
         return top.n;

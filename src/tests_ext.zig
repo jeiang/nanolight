@@ -230,7 +230,7 @@ const Rig = struct {
 
     fn open(ctx: *anyopaque, target: Target) void {
         const r: *Rig = @ptrCast(@alignCast(ctx));
-        if (target == .script) r.script();
+        if (target == .script and target.script == .command) r.script();
     }
 
     fn hide(ctx: *anyopaque) void {

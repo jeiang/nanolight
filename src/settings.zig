@@ -21,6 +21,14 @@ pub const Launch = struct {
     count: u16,
 };
 
+/// A launch's name and path at most; one longer is dropped.
+const max_launch_name = 255;
+const max_launch_path = 512;
+
+fn launchFits(l: Launch) bool {
+    return l.name.len > 0 and l.name.len <= max_launch_name and l.path.len <= max_launch_path;
+}
+
 const max_quicklinks = 64;
 const max_quicklink_field = 512;
 
@@ -128,17 +136,28 @@ pub fn encode(gpa: std.mem.Allocator, s: Settings) ![]u8 {
     return std.json.Stringify.valueAlloc(gpa, s, .{});
 }
 
-/// A record's body, or null when it isn't one of ours. Past `counts.max`
-/// launches, the least opened apps are left out.
+/// A record's body, or null when it isn't one of ours. Launches out of
+/// bounds are dropped; past `counts.max`, the least opened apps are left out.
 pub fn decode(arena: std.mem.Allocator, body: []const u8) ?Settings {
     const options: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
     var s = std.json.parseFromSliceLeaky(Settings, arena, body, options) catch return null;
     if (s.v < schema_version_oldest or s.v > schema_version) return null;
     if (s.hotkey.len == 0 or s.hotkey.len > keys.name_max) return null;
-    s.launches = mostOpened(arena, s.launches) catch return null;
+    const fit = fitting(arena, s.launches) catch return null;
+    s.launches = mostOpened(arena, fit) catch return null;
     if (s.quicklinks.len > max_quicklinks) return null;
     for (s.quicklinks) |q| if (!fits(q)) return null;
     return s;
+}
+
+/// `launches` but those out of bounds.
+fn fitting(arena: std.mem.Allocator, launches: []const Launch) ![]const Launch {
+    for (launches) |l| {
+        if (!launchFits(l)) break;
+    } else return launches;
+    var kept: std.ArrayList(Launch) = .empty;
+    for (launches) |l| if (launchFits(l)) try kept.append(arena, l);
+    return kept.items;
 }
 
 /// The two, merged. `prefer_remote`: this Mac's first sync, where the
@@ -154,8 +173,7 @@ pub fn merge(
     inline for (choices) |f| @field(out, @tagName(f)) = @field(from, @tagName(f));
     var list: std.ArrayList(Launch) = .empty;
     for ([_][]const Launch{ local.launches, remote.launches }) |side| for (side) |l| {
-        if (l.name.len == 0 or l.name.len > 255) continue;
-        if (l.path.len > 512) continue;
+        if (!launchFits(l)) continue;
         for (list.items) |*have| {
             if (launchSame(have.*, l)) {
                 have.count = @max(have.count, l.count);
@@ -332,6 +350,28 @@ test "a record round-trips, and what isn't one isn't taken" {
             "{\"v\":2,\"hotkey\":\"cmd_space\",\"suggest\":false,\"at\":5,\"theme\":\"dark\"}",
         ) != null,
     );
+}
+
+test "a record's launches out of bounds are dropped, the rest kept" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const long_name: [max_launch_name + 1]u8 = @splat('n');
+    const long_path: [max_launch_path + 1]u8 = @splat('p');
+    const s: Settings = .{
+        .hotkey = "cmd_space",
+        .suggest = true,
+        .at = 1,
+        .launches = &.{
+            .{ .name = "", .count = 1 },
+            .{ .name = &long_name, .count = 2 },
+            .{ .name = "Safari", .path = &long_path, .count = 3 },
+            .{ .name = "Notes", .count = 4 },
+        },
+    };
+    const back = decode(a, try encode(a, s)).?;
+    try std.testing.expectEqual(@as(usize, 1), back.launches.len);
+    try std.testing.expectEqualStrings("Notes", back.launches[0].name);
 }
 
 test "a v1 record decodes with no quicklinks, and the quicklinks go with the later choice" {

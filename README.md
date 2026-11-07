@@ -239,13 +239,19 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | --- | --- |
 | `src/main.zig` | Startup: the arguments, the features wired to the panel, the app's loop |
 | `src/app.zig` | The app around the panel: its window, shown and hidden, its key and its welcome |
+| `src/app_facts.zig` | The app's facts its Mac verifiers (`tools/mac_verify.zig`) also rely on, spelled once |
 | `src/suggest_live.zig`, `src/files_live.zig`, `src/commands_live.zig` | The app's side of Google's completions, file search and system commands |
 | `src/menu_live.zig`, `src/update_live.zig`, `src/settings_bind.zig` | The menu bar icon and its menu, updates, and Settings' answers |
 | `src/view.zig`, `src/query.zig`, `src/screen.zig` | The panel: query, rows, footer, keys; the query's text, the words it is read as, and when the rows are built again; which screen is up, the one way between them, and how long each lasts once the panel goes |
-| `src/results.zig` | What a query lists, in order: one provider per kind of row, and the target Return opens |
+| `src/anchor.zig`, `src/answers.zig` | The selected row held across a refill of the list; Google's answers reaching the panel, their room kept until they land |
+| `src/chrome.zig`, `src/palette.zig`, `src/calc_card.zig` | What every screen lays out alike (sizes, the footer and its keys, section heads, a row's pieces, the keys that move a selection); the colors, light and dark, and the roles text plays; the math row |
+| `src/results.zig` | What a query lists, in order: one provider per kind of row, its cap, and the target Return opens |
 | `src/launchers.zig`, `src/launch_counts.zig` | The apps and script commands side by side, in one name order, and how often each was opened |
+| `src/apps.zig`, `src/app_scan.zig`, `src/icon_mac.zig` | The apps found, sorted, their icons asked for only when shown; what the index and each OS's backend share (the app row, the folder walk); the Finder's icon as PNG |
+| `src/files.zig`, `src/files_view.zig`, `src/spotlight.zig` | File search: the files found and a typed path's entries; their rows and Tab taking a path; Spotlight's index through `mdfind` (the Mac) |
 | `src/web.zig` | Quicklinks: the defaults, keywords, Google's, and the address a search opens |
-| `src/search.zig` | Text: fuzzy matching and ranking (allocation-free), UTF-8 cutting, URL escaping |
+| `src/search.zig` | Fuzzy matching and ranking (allocation-free): the tiers, and every score offset set against them |
+| `src/text.zig`, `src/clock.zig`, `src/log.zig` | UTF-8 cutting and URL escaping; wall-clock seconds and how long ago, in words; the log, silent under test |
 | `src/calc.zig` | The calculator, and the math read around a conversion's units |
 | `src/convert.zig` | Unit and currency conversion: the parser and unit table, money by the rates it is handed |
 | `src/rates_table.zig`, `src/rates.zig` | Currency rates: the table and its JSON; when to refetch it, its fetch and its copy on disk |
@@ -259,19 +265,22 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/after.zig` | Timers on the UI thread: once later, or once calls pause (debounce) |
 | `src/event_monitor.zig`, `src/clickthrough.zig` | AppKit's event monitors; clicks round the Mac's panel reaching what is under it |
 | `src/account.zig`, `src/account_live.zig` | The sync client: `[sync]`, the PUT and merge, the status line; the app's side (snapshot, merge, quicklinks) |
-| `src/sync_protocol.zig` | The sync wire both sides share: the path, headers, bearer prefix, account rule and size limits |
+| `src/sync_protocol.zig` | The sync wire both sides share: the path, methods, headers, bearer prefix, account rule and size limits |
 | `src/server.zig`, `src/server_protocol.zig`, `src/server_transport.zig`, `src/settings.zig` | `nanolight-server`: its command line; the protocol as a pure function, tokens, atomic records; the socket and its deadline; and the record both sides merge |
 | `src/raycast_model.zig`, `src/raycast_view.zig` | The panel's command screen (a script's output, arguments) |
-| `src/script_commands.zig`, `src/script_run.zig` | Raycast script commands, run in Zig |
+| `src/script_commands.zig`, `src/script_run.zig`, `src/script_live.zig` | Raycast script commands, run in Zig, and the app's side (the rows found again, one opened from its row) |
 | `src/clipboard_types.zig`, `src/clipboard.zig`, `src/clipboard_watcher.zig` | Clipboard history: what its parts share (kinds and their caps, a copied item, a paste's result); the store on disk, retention, search; and this OS's watcher, picked at compile time, with the contract every OS keeps |
 | `src/clipboard_mac.zig`, `src/clipboard_win.zig`, `src/clipboard_poll.zig` | The Mac's NSPasteboard and Windows' clipboard sequence (DIB-to-PNG), each read by the one change-count poll and paste (⌘V, Ctrl+V) in `clipboard_poll.zig` |
-| `src/clipboard_linux.zig`, `src/clipboard_x11.zig`, `src/clipboard_wl.zig`, `src/clipboard_offer.zig` | Linux's choice of transport, its X11 (XFixes, XTest) and Wayland (data-control, virtual keyboard) sides, and what both share: the read plan, the served formats, timeouts; `zig build clip-probe` runs them without the panel |
+| `src/clipboard_linux.zig`, `src/clipboard_x11.zig`, `src/clipboard_wl.zig`, `src/clipboard_offer.zig`, `src/clipboard_probe.zig` | Linux's choice of transport, its X11 (XFixes, XTest) and Wayland (data-control, virtual keyboard) sides, and what both share: the read plan, the served formats, timeouts; `zig build clip-probe` runs them without the panel |
 | `src/clipboard_view.zig`, `src/clipboard_live.zig` | The Clipboard History screen, and the app's side of it (the store, the watcher, Return and ⌘↩) |
-| `src/commands.zig` | System commands: each OS's table, the `PATH` check, ranking, running one |
+| `src/commands.zig` | System commands: each written once with each OS's argument lists, the `PATH` check, ranking, running one |
 | `src/proc.zig` | The child-process runner behind system and script commands: its output read as it comes, its end heard |
-| `src/toml.zig`, `src/config.zig` | `config.toml`: the TOML subset parser, the typed schema and loader, and how the file seeds settings |
+| `src/toml.zig`, `src/config.zig`, `src/check_config.zig` | `config.toml`: the TOML subset parser, the typed schema and loader, and how the file seeds settings; `zig build check-config`, which reads one as the app does |
+| `src/prefs.zig`, `src/paths.zig` | The app's own settings in the kv store (every key, its type and its default); paths as typed and shown, and where Nanolight keeps its files |
+| `src/settings_view.zig`, `src/settings_host.zig`, `src/settings_panes.zig` | Settings in the panel, and what it asks of the app; System Settings' panes, found by name (the Mac) |
 | `src/keys.zig`, `src/shortcut.zig` | The key that opens the panel as a value (the four offered, kept names, Carbon and AppKit codes), and how it reads |
 | `src/onboard.zig`, `src/shortcut_clash.zig`, `src/recorder.zig` | The welcome, which key is free, recording one's own |
+| `src/tests*.zig`, `src/test_support.zig`, `src/test_tmp.zig` | The tests: the parts, and the panel driven through a Tester (Clipboard History, script screens, file search, prefs); what they share, and a test's temporary folder as a path |
 | `flake.nix`, `nix/` | The packages, the NixOS, nix-darwin and home-manager modules, the server module, and the flake's checks |
 
 The icon is drawn by `tools/icon.zig` (`zig build icon`, on a Mac). The release tools are Zig too, in `tools/`, run as `zig build` steps.

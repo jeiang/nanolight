@@ -15,6 +15,7 @@ const prefs = @import("prefs.zig");
 const settings = @import("settings.zig");
 const Quicklink = @import("web.zig").Quicklink;
 const log = @import("log.zig");
+const Away = @import("screen.zig").Away;
 
 pub const max_bytes = 1 << 20;
 
@@ -26,7 +27,7 @@ pub const Config = struct {
     suggestions: ?bool = null,
     open_searches_in_browser: ?bool = null,
     show_in_menu_bar: ?bool = null,
-    pop_to_root_seconds: u32 = 90,
+    pop_to_root_seconds: u32 = Away.default_pop_after,
     apps: Apps = .{},
     script_commands: ScriptCommands = .{},
     /// Empty: the built-in ones.

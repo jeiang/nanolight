@@ -122,10 +122,15 @@ pub const Return = struct {
     }
 };
 
+/// The line across the panel between its parts.
+pub fn hairline(c: *ui.Context, p: Palette) void {
+    ui.div(c).wFull().h(1).bg(p.hair).end();
+}
+
 /// The footer's bar, under its hairline, with what the screen puts in it;
 /// the caller ends it.
 pub fn footer(c: *ui.Context, p: Palette) ui.Div {
-    ui.div(c).wFull().h(1).bg(p.hair).end();
+    hairline(c, p);
     return ui.div(c).row().wFull().h(footer_h).px(16).gap(8).itemsCenter();
 }
 
@@ -139,6 +144,26 @@ pub fn footerKey(c: *ui.Context, p: Palette, what: []const u8, key: []const u8, 
 /// The line between two of the footer's keys.
 pub fn keySep(c: *ui.Context, p: Palette) void {
     ui.div(c).w(1).h(14).bg(p.hair).end();
+}
+
+/// The footer's last key: Escape closes the screen.
+pub fn closeKey(c: *ui.Context, p: Palette) void {
+    footerKey(c, p, "Close", "esc", false);
+}
+
+pub const Key = struct {
+    what: []const u8,
+    key: []const u8,
+    first: bool = false,
+};
+
+/// A screen's own footer keys, a line between each, then Close.
+pub fn footerKeys(c: *ui.Context, p: Palette, keys: []const Key) void {
+    for (keys) |k| {
+        footerKey(c, p, k.what, k.key, k.first);
+        keySep(c, p);
+    }
+    closeKey(c, p);
 }
 
 /// A section's name, at the bottom of its head.

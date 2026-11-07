@@ -184,14 +184,14 @@ pub const Account = struct {
         ) catch return a.fail("out of memory");
         var headers = [_]nanoui.http.Header{
             .{ .name = protocol.authorization_header, .value = auth },
-            .{ .name = "Content-Type", .value = protocol.content_type },
+            .{ .name = protocol.content_type_header, .value = protocol.content_type },
             .{ .name = protocol.first_header, .value = protocol.first_value },
         };
         const first = a.firstHere();
         a.inflight = .{ .first = first, .sent_at = sent.at };
         a.send(a, .{
             .url = url,
-            .method = "PUT",
+            .method = protocol.method_put,
             .headers = headers[0..if (first) 3 else 2],
             .body = body,
             .timeout = timeout,

@@ -36,12 +36,26 @@ const typo_cost = 70;
 /// its name, and lights nothing in the name shown.
 const keyword_cost = 40;
 
+// The callers' offsets, set against the tiers above: retuning a tier
+// re-ranks what they lift or lower.
+/// Each time an app or script was opened lifts it this much, up to
+/// `max_launch_boost` (launchers.zig): a much-opened app can pass more
+/// than two tiers.
+pub const launch_boost = 25;
+pub const max_launch_boost = 250;
+/// A match through an app's pinyin scores one typo edit under its name's
+/// (apps.zig).
+pub const pinyin_cost = typo_cost;
+/// The app a thing was copied from matches this much under the thing
+/// (clipboard.zig).
+pub const source_cost = 100;
+
 /// Below this a match is letters in order or a typo: too loose for a
 /// short name that would list under nearly every query (a command, a pane).
 pub const min_loose = 500;
 /// `min_loose` for a long text: slack and the place a match starts lower
-/// one inside it to 480 (`tier.inside` - 2 * `max_slack`), still kept.
-pub const min_loose_long = 450;
+/// one inside it by up to 2 * `max_slack`, still kept, with some to spare.
+pub const min_loose_long = tier.inside - 2 * max_slack - 30;
 /// A path typed out in full: above every tier.
 pub const exact_path = 2000;
 

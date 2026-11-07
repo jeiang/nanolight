@@ -53,8 +53,6 @@ comptime {
 }
 /// How much of a text is matched against a search.
 const match_max = 160;
-/// The app a thing was copied from matches this much under the thing.
-const source_cost = 100;
 
 /// One thing that was copied.
 pub const Entry = struct {
@@ -434,7 +432,7 @@ pub const Store = struct {
             .image => {},
         }
         var via = search.scoreNamed(q, e.source, &.{}, min) orelse return best;
-        via.score -= source_cost;
+        via.score -= search.source_cost;
         keepBetter(&best, via);
         return best;
     }

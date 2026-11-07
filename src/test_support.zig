@@ -115,7 +115,7 @@ pub const Probe = struct {
         return switch (target) {
             .app, .url => |text| text,
             .pane => |i| @import("settings_panes.zig").urls[i],
-            .script, .folder => "",
+            .script => "",
         };
     }
     fn hide(ctx: *anyopaque) void {

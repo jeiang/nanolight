@@ -147,15 +147,12 @@ pub const Index = struct {
     }
 };
 
-/// A match through an app's pinyin scores this much under its name's.
-const pinyin_cost = 70;
-
 /// How well `query` names `app`: by its name, or by its pinyin.
 pub fn score(query: []const u8, app: App) ?search.Match {
     var m = search.score(query, app.name);
     if (app.pinyin.len > 0) if (search.scoreAscii(query, app.pinyin)) |mp| {
         var via = mp;
-        via.score -= pinyin_cost;
+        via.score -= search.pinyin_cost;
         via.n = 0;
         if (m == null or via.score > m.?.score) m = via;
     };
