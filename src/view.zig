@@ -9,7 +9,6 @@ const motion = ui.motion;
 const Index = @import("apps.zig").Index;
 const results = @import("results.zig");
 const launchers = @import("launchers.zig");
-const launch_counts = @import("launch_counts.zig");
 const script_commands = @import("script_commands.zig");
 const settings_panes = @import("settings_panes.zig");
 const web = @import("web.zig");
@@ -125,8 +124,8 @@ pub const Nanolight = struct {
     index: *Index,
     /// The script commands found, listed among the apps (script_live.zig).
     scripts: ?*script_commands.List = null,
-    /// How often each app and script command was opened (launchers.zig).
-    counts: launch_counts.Counts = .{},
+    /// How often each app and script command was opened, and where it is kept.
+    tally: launchers.Tally = .{},
     query: Query = .{},
     res: results.Results = .{},
     sel: usize = 0,
@@ -141,7 +140,6 @@ pub const Nanolight = struct {
     /// Each showing gets a new one: the panel comes in again.
     shown: u32 = 0,
     copied_at: f64 = -10,
-    kv: ?nanoui.kv.Store = null,
     spans: [results.max_rows][16]ui.Span = undefined,
     last_h: f32 = 0,
     /// The room the rows had, kept while Google is asked about the words
@@ -174,14 +172,14 @@ pub const Nanolight = struct {
 
     pub fn deinit(s: *Nanolight) void {
         s.found.deinit();
-        s.counts.deinit(s.index.gpa);
+        s.tally.deinit(s.index.gpa);
         s.query.deinit();
         s.script_ui.deinit();
     }
 
     /// The apps and script commands, and how often each was opened.
     pub fn launchable(s: *const Nanolight) launchers.Launchers {
-        return .{ .apps = s.index, .scripts = s.scriptList(), .counts = &s.counts };
+        return .{ .apps = s.index, .scripts = s.scriptList(), .counts = &s.tally.counts };
     }
 
     fn scriptList(s: *const Nanolight) []script_commands.Script {
@@ -189,8 +187,7 @@ pub const Nanolight = struct {
     }
 
     fn opened(s: *Nanolight, key: []const u8) void {
-        s.counts.bump(s.index.gpa, key);
-        if (s.kv) |kv| launchers.save(&s.counts, s.index.gpa, kv);
+        s.tally.bump(s.index.gpa, key);
     }
 
     pub fn setSuggest(s: *Nanolight, on: bool) void {

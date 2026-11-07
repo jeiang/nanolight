@@ -13,7 +13,6 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const apps = @import("apps.zig");
-const launchers = @import("launchers.zig");
 const Index = apps.Index;
 const Nanolight = @import("view.zig").Nanolight;
 const chrome = @import("chrome.zig");
@@ -69,12 +68,12 @@ pub fn main(init: std.process.Init) !void {
     var o: Onboard = .{ .skip_key = nix_managed or cfg.hotkey != null };
     var s: Nanolight = .{
         .index = &index,
-        .kv = kv,
+        .tally = .{ .kv = kv },
         .away = .{ .pop_after = cfg.pop_to_root_seconds },
     };
     defer s.deinit();
-    launchers.load(&s.counts, init.gpa, kv);
-    launchers.adopt(&s.counts, init.gpa, s.launchable());
+    s.tally.load(init.gpa);
+    s.tally.adopt(init.gpa, s.launchable());
     var core: App = .{
         .app = app,
         .s = &s,

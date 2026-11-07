@@ -127,7 +127,8 @@ test "the panel finds, moves, answers and hands off" {
         probe.opened[0..probe.opened_len],
     );
     try std.testing.expect(probe.hidden);
-    try std.testing.expectEqual(@as(u16, 1), s.counts.of("/Applications/System Settings.app"));
+    const settings_app = "/Applications/System Settings.app";
+    try std.testing.expectEqual(@as(u16, 1), s.tally.counts.of(settings_app));
 
     // ⌘2 opens the second row at once: Safari, under System Settings,
     // which was just opened.

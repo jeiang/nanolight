@@ -11,7 +11,6 @@ const web = @import("web.zig");
 const Quicklink = web.Quicklink;
 const keys = @import("keys.zig");
 const prefs = @import("prefs.zig");
-const launchers = @import("launchers.zig");
 const suggest_live = @import("suggest_live.zig");
 const App = @import("app.zig").App;
 
@@ -151,7 +150,7 @@ fn applySynced(ctx: *anyopaque, st: Settings) void {
     const core = sy.core;
     var take: Take = .{ .sy = sy };
     settings.apply(st, &take);
-    launchers.save(&core.s.counts, core.s.index.gpa, core.kv);
+    core.s.tally.save(core.s.index.gpa);
     core.s.query.invalidate();
     core.menuChanged();
     core.redraw();
@@ -183,7 +182,7 @@ const Take = struct {
         const here = s.launchable();
         for (list) |la| {
             const x = here.find(la.path, la.name) orelse continue;
-            s.counts.raise(s.index.gpa, here.key(x), la.count);
+            s.tally.raise(s.index.gpa, here.key(x), la.count);
         }
     }
 
