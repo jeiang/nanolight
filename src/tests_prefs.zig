@@ -4,6 +4,8 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const pipeline = @import("pipeline.zig");
+const Nanolight = @import("nanolight.zig").Nanolight;
 const chrome = @import("chrome.zig");
 const Theme = @import("palette.zig").Theme;
 const settings_view = @import("settings_view.zig");
@@ -40,7 +42,7 @@ test "on the Mac the panel's first frame is where it settles (issue #9)" {
     try std.testing.expect(own[0].y < own[1].y);
 }
 
-fn findRow(t: *ui.Tester, s: *view.Nanolight, words: []const u8) void {
+fn findRow(t: *ui.Tester, s: *Nanolight, words: []const u8) void {
     support.retype(t, words);
     while (!support.onFirstQuicklink(s)) _ = t.shortcut(.{ .key = ui.Shortcut.down });
 }
@@ -231,10 +233,10 @@ test "System Settings' panes open from the panel, which stays in its window (#12
     support.retype(t, "sound");
     var four: @import("suggest.zig").List = .{};
     for ([_][]const u8{ "sound 1", "sound 2", "sound 3", "sound 4" }) |w| four.push(w);
-    s.answered("sound", &four);
+    pipeline.answered(s, "sound", &four);
     t.settle(1);
     try std.testing.expect(t.hasText("System Settings"));
-    try std.testing.expect(s.height() <= chrome.max_height);
+    try std.testing.expect(view.height(s) <= chrome.max_height);
 }
 
 test "the panel's height lands at once, and keeps Google's room between keys" {
@@ -263,7 +265,7 @@ test "the panel's height lands at once, and keeps Google's room between keys" {
     // Google's rows: taller, in the one frame that lists them.
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
-    s.answered("liq", &said);
+    pipeline.answered(s, "liq", &said);
     t.frame();
     const full = Asked.h;
     try std.testing.expect(full > bare);
@@ -274,15 +276,15 @@ test "the panel's height lands at once, and keeps Google's room between keys" {
     try std.testing.expect(!t.hasText("liquid glass"));
     try std.testing.expectEqual(full, Asked.h);
     // An answer to older words is no answer to these.
-    s.answered("liq", null);
+    pipeline.answered(s, "liq", null);
     t.frame();
     try std.testing.expectEqual(full, Asked.h);
     // No answer is coming: the room goes, at once.
-    s.answered("liqx", null);
+    pipeline.answered(s, "liqx", null);
     t.frame();
     try std.testing.expectEqual(bare, Asked.h);
     // Nothing is asked about an empty field, so nothing is kept for it.
-    s.answered("liqx", &said);
+    pipeline.answered(s, "liqx", &said);
     t.frame();
     t.textOps(&.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
     t.frame();
@@ -301,16 +303,16 @@ test "Google's answer landing after suggestions are turned off lists nothing" {
     t.frame();
     t.textOps(&.{.{ .insert = "liq" }});
     t.frame();
-    const bare = s.height();
+    const bare = view.height(s);
     // Asked while on; turned off (the menu, Settings or sync) before it lands.
     s.setSuggest(false);
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
-    s.answered("liq", &said);
+    pipeline.answered(s, "liq", &said);
     t.settle(1);
     try std.testing.expect(!t.hasText("liquid") and !t.hasText("liquid glass"));
     // No room kept for them.
-    try std.testing.expectEqual(bare, s.height());
+    try std.testing.expectEqual(bare, view.height(s));
     // Nor is it kept for when they come back on.
     var cached: suggest.List = .{};
     try std.testing.expect(!s.cache.lookup("liq", &cached));

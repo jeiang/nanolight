@@ -2,7 +2,7 @@
 //! row runs it, a failure is said in the footer, success hides the panel.
 const std = @import("std");
 const commands = @import("commands.zig");
-const view = @import("view.zig");
+const Host = @import("host.zig").Host;
 const App = @import("app.zig").App;
 
 pub const Commands = struct {
@@ -26,7 +26,7 @@ pub const Commands = struct {
     }
 
     /// What the panel runs a command with, and lists the commands of.
-    pub fn entry(cm: *Commands) view.Host.Run {
+    pub fn entry(cm: *Commands) Host.Run {
         return .{ .ctx = cm, .func = run, .installed = &cm.runner.installed };
     }
 

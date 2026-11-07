@@ -2,7 +2,7 @@
 //! it runs: its arguments' form, or a detail (its output, or "Run X?"), with
 //! its actions in the footer (in key order, raycast_model.zig `return_at`;
 //! ⌘K/Ctrl+O all of them). What it shows comes from the runner
-//! (script_run.zig) as `Update`s, through view.zig's `Nanolight.scriptScreen`;
+//! (script_run.zig) as `Update`s, through nanolight.zig's `Nanolight.scriptScreen`;
 //! keys and choices go back to it as `Event`s.
 const std = @import("std");
 const nanoui = @import("nanoui");
@@ -227,7 +227,7 @@ pub const Ext = struct {
         }
     }
 
-    /// The command, as the screen up (view.zig `Nanolight.draw`).
+    /// The command, as the screen up (view.zig `draw`).
     pub fn draw(e: *Ext, c: *ui.Context, p: Palette) void {
         // Nodes of the last frame are gone: what it drew from can go too.
         assert(!e.rendering);

@@ -6,7 +6,8 @@ const nanoui = @import("nanoui");
 const sc = @import("script_commands.zig");
 const apps = @import("apps.zig");
 const config = @import("config.zig");
-const Target = @import("results.zig").Target;
+const Target = @import("host.zig").Target;
+const pipeline = @import("pipeline.zig");
 const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
 const Opens = @import("app.zig").Opens;
@@ -19,7 +20,7 @@ pub const Scripts = struct {
     /// Where apps and script commands are looked for, besides the usual places.
     cfg: *const config.Config,
     /// Raycast script commands, run by Nanolight itself (script_run.zig), on
-    /// the panel's script screen (view.zig `Nanolight.scriptScreen`).
+    /// the panel's script screen (nanolight.zig `Nanolight.scriptScreen`).
     runner: Runner,
     /// The script commands found, listed among the apps (the panel's `scripts`).
     list: sc.List,
@@ -66,7 +67,7 @@ pub const Scripts = struct {
     }
 
     /// A command's row was chosen: it runs in the panel, which stays up
-    /// (results.zig `Target.opensScreen`).
+    /// (host.zig `Target.opensScreen`).
     fn start(sx: *Scripts, target: Target) void {
         const gpa = sx.core.app.gpa;
         switch (target) {
@@ -110,7 +111,7 @@ pub const Scripts = struct {
         const s = sx.core.s;
         s.tally.adopt(s.index.gpa, s.launchable());
         s.query.invalidate();
-        s.rebuild();
+        pipeline.rebuild(s);
         sx.core.redraw();
     }
 };

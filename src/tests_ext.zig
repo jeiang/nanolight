@@ -6,12 +6,13 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const Nanolight = @import("nanolight.zig").Nanolight;
 const chrome = @import("chrome.zig");
 const support = @import("test_support.zig");
 const model = @import("raycast_model.zig");
 const rv = @import("raycast_view.zig");
 const script_commands = @import("script_commands.zig");
-const Target = @import("results.zig").Target;
+const Target = @import("host.zig").Target;
 
 /// What a host was told, in order; a field's value copied, as it lives
 /// only until the runner returns.
@@ -169,7 +170,7 @@ const Answering = struct {
 const Rig = struct {
     panel: support.Rig,
     /// The panel and its Tester, as the tests name them.
-    s: *view.Nanolight,
+    s: *Nanolight,
     t: *ui.Tester,
     host: Answering,
     /// Settings' answers, for the tests that open it.
@@ -495,7 +496,7 @@ test "a script's icon outlives the index it came from" {
     // A window whose image cache starts empty, as after an eviction, reads
     // the icon's bytes again.
     var t: ui.Tester = undefined;
-    try t.init(gpa, .init(r.s, view.Nanolight.view), .{
+    try t.init(gpa, .init(r.s, view.window), .{
         .width = chrome.width,
         .height = chrome.max_height,
         .dark = true,

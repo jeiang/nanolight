@@ -14,7 +14,9 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const apps = @import("apps.zig");
 const Index = apps.Index;
-const Nanolight = @import("view.zig").Nanolight;
+const Nanolight = @import("nanolight.zig").Nanolight;
+const view = @import("view.zig");
+const pipeline = @import("pipeline.zig");
 const chrome = @import("chrome.zig");
 const Onboard = @import("onboard.zig").Onboard;
 const platform = @import("platform.zig");
@@ -192,22 +194,22 @@ fn openWindow(core: *App) !void {
     const s = core.s;
     _ = s.show(clock.now());
     // The rows first, so a snapshot is as tall as the panel.
-    s.rebuild();
+    pipeline.rebuild(s);
     var options: nanoui.WindowOptions = .{
         .title = "Nanolight",
         .width = chrome.width,
-        .height = s.height(),
+        .height = view.height(s),
         .resizable = false,
         .visible = false,
         .on_key = .{ .ctx = core, .func = App.keyChanged },
-        .content = .{ .view = .init(s, Nanolight.view) },
+        .content = .{ .view = .init(s, view.window) },
     };
     panel.adjust(&options);
     // Headless (snapshots): the panel alone; `setup`, which leaves room
     // round it, never runs.
     if (core.app.flags.hidden) {
         options.width = chrome.width;
-        options.height = s.height();
+        options.height = view.height(s);
     }
     core.window = try core.app.newWindow(options);
 }
@@ -243,10 +245,10 @@ fn runShown(
 }
 
 /// The rates arrived (or could not be had): the panel redoes its conversion,
-/// the selection kept (`Nanolight.refill`).
+/// the selection kept (`pipeline.refill`).
 fn ratesLanded(ctx: *anyopaque) void {
     const core = App.from(ctx);
-    core.s.refill(.rates);
+    pipeline.refill(core.s, .rates);
     core.redraw();
 }
 

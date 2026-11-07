@@ -6,7 +6,7 @@ const nanoui = @import("nanoui");
 const clipboard = @import("clipboard.zig");
 const types = @import("clipboard_types.zig");
 const Watcher = @import("clipboard_watcher.zig").Watcher;
-const clipboard_view = @import("clipboard_view.zig");
+const Host = @import("host.zig").Host.Clipboard;
 const prefs = @import("prefs.zig");
 const paths = @import("paths.zig");
 const clock = @import("clock.zig");
@@ -25,7 +25,7 @@ pub const Clip = struct {
     store: ?clipboard.Store = null,
     watcher: Watcher = .{},
     /// What the Clipboard History screen asks of the app; set with the store.
-    host: ?clipboard_view.Host = null,
+    host: ?Host = null,
 
     /// Opens the store in `<data dir>/clipboard` and, when history is on,
     /// starts the watcher. Without that folder history stays off (logged).
@@ -60,7 +60,7 @@ pub const Clip = struct {
     }
 
     /// The panel's Clipboard History: null without history.
-    pub fn entry(c: *Clip) ?*const clipboard_view.Host {
+    pub fn entry(c: *Clip) ?*const Host {
         return if (c.host) |*h| h else null;
     }
 

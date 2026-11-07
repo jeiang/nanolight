@@ -4,6 +4,8 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const view = @import("view.zig");
+const pipeline = @import("pipeline.zig");
+const max_query_bytes = @import("nanolight.zig").max_query_bytes;
 const chrome = @import("chrome.zig");
 const support = @import("test_support.zig");
 const Rig = support.Rig;
@@ -203,20 +205,20 @@ test "a pending currency card is not the default row, and Return acts on the sea
     _ = t.shortcut(.{ .key = ui.Shortcut.down });
     feed.begin(1);
     feed.fail();
-    s.refill(.rates);
+    pipeline.refill(s, .rates);
     t.settle(1);
     try std.testing.expectEqual(results.Kind.calc, s.rows()[0].kind);
     try std.testing.expectEqual(@as(?usize, 1), s.selection());
     try std.testing.expect(t.hasText("Rates unavailable"));
     // A retry on its way is not a failure.
     feed.begin(1 + rates.retry_after);
-    s.refill(.rates);
+    pipeline.refill(s, .rates);
     t.settle(1);
     try std.testing.expect(t.hasText("Loading rates…"));
     // The rates land: the card is the answer, and selected.
     const body = "{\"date\":\"2026-11-03\",\"usd\":{\"usd\":1,\"ttd\":6.785}}";
     feed.landed(rates_table.Rates.parse(gpa, body).?, 1 + rates.retry_after);
-    s.refill(.rates);
+    pipeline.refill(s, .rates);
     t.settle(1);
     try std.testing.expectEqual(results.Kind.calc, s.rows()[0].kind);
     try std.testing.expectEqual(@as(?usize, 0), s.selection());
@@ -251,17 +253,17 @@ test "a long paste is cut to the longest query, on a character boundary, a whole
     const t = &rig.t;
     try rig.mount(.{ .height = 480 });
     // A file path as long as any found one is kept whole.
-    var path: [view.max_query_bytes]u8 = undefined;
+    var path: [max_query_bytes]u8 = undefined;
     path[0] = '/';
     @memset(path[1..], 'a');
     press(t, &.{.{ .insert = &path }});
     try std.testing.expectEqualStrings(&path, s.query.text());
     press(t, &.{ .{ .command = .select_all }, .{ .command = .delete_backward } });
-    var paste: [view.max_query_bytes + 1]u8 = undefined;
-    @memset(paste[0 .. view.max_query_bytes - 1], '(');
-    @memcpy(paste[view.max_query_bytes - 1 ..], "é");
+    var paste: [max_query_bytes + 1]u8 = undefined;
+    @memset(paste[0 .. max_query_bytes - 1], '(');
+    @memcpy(paste[max_query_bytes - 1 ..], "é");
     press(t, &.{.{ .insert = &paste }});
-    try std.testing.expectEqual(view.max_query_bytes - 1, s.query.text().len);
+    try std.testing.expectEqual(max_query_bytes - 1, s.query.text().len);
     t.settle(1);
     try std.testing.expect(s.rows().len > 0);
 }
@@ -290,7 +292,7 @@ test "Google's completions land below, and a search shows in the panel" {
     try std.testing.expectEqual(@as(u32, 2), s.selected().?.item);
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid glass", "liquid glass apple" }) |w| said.push(w);
-    s.answered("liquid gl", &said);
+    pipeline.answered(s, "liquid gl", &said);
     t.settle(1);
     try std.testing.expect(t.hasText("Search"));
     try std.testing.expect(t.hasText("liquid glass apple"));
@@ -328,7 +330,7 @@ test "Google's completions land below, and a search shows in the panel" {
     );
     t.settle(2);
     try std.testing.expect(t.hasText("Open in Browser"));
-    try std.testing.expectEqual(chrome.max_height, s.height());
+    try std.testing.expectEqual(chrome.max_height, view.height(s));
     try std.testing.expect(!web.probe.hidden);
     // Escape: the page gone, and the panel with it.
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
@@ -412,7 +414,7 @@ test "each welcome step fits the room its height gives it" {
     const t = &rig.t;
     s.open(.{ .welcome = &o });
     try rig.mount(.{ .screen = .none });
-    try std.testing.expect(fitsPanel(t, s.height()));
+    try std.testing.expect(fitsPanel(t, view.height(s)));
     if (@import("builtin").os.tag == .macos) {
         const sys = [_]shortcut_clash.SystemKey{
             .{ .id = .spotlight, .enabled = true, .key = keys.space, .mods = keys.ns_cmd },
@@ -421,7 +423,7 @@ test "each welcome step fits the room its height gives it" {
         o.choice = .cmd_space;
         t.settle(1);
         try std.testing.expect(!o.clash().clear());
-        try std.testing.expect(fitsPanel(t, s.height()));
+        try std.testing.expect(fitsPanel(t, view.height(s)));
     }
     // Hooks only once started (the system's shortcuts are not read in
     // tests), asking about login: the last step's tallest.
@@ -436,13 +438,13 @@ test "each welcome step fits the room its height gives it" {
     t.key(.enter);
     t.settle(1);
     try std.testing.expect(t.containsText(" now"));
-    try std.testing.expect(fitsPanel(t, s.height()));
+    try std.testing.expect(fitsPanel(t, view.height(s)));
     o.pressed(true);
     o.pressed(false);
     t.settle(2);
     try std.testing.expect(t.hasText("You're set."));
     try std.testing.expect(t.hasText("Open Nanolight when you log in"));
-    try std.testing.expect(fitsPanel(t, s.height()));
+    try std.testing.expect(fitsPanel(t, view.height(s)));
 }
 
 test "a screen over the welcome skips it once, without its key" {
@@ -606,7 +608,7 @@ test "settings opens from ⌘,, from typing, and from the gear" {
     press(t, &.{.{ .command = .insert_newline }});
     try std.testing.expectEqual(@as(u8, 2), prefs.suggest_sets);
     try std.testing.expect(s.suggest_on);
-    try std.testing.expect(s.height() <= chrome.max_height);
+    try std.testing.expect(view.height(s) <= chrome.max_height);
 }
 
 test "the panel never outgrows its window, which is never resized" {
@@ -622,18 +624,18 @@ test "the panel never outgrows its window, which is never resized" {
     var tallest: f32 = 0;
     for ([_][]const u8{ "", "a", "s", "ma", "2^10 * 3", "1+a", "liquid glass" }) |q| {
         s.query.set(q);
-        s.rebuild();
-        tallest = @max(tallest, s.height());
+        pipeline.rebuild(s);
+        tallest = @max(tallest, view.height(s));
     }
     try std.testing.expect(tallest <= chrome.max_height);
     // "a" fills every app row there is, and Google's completions the
     // rest: the bound is the real one.
     s.query.set("a");
-    s.rebuild();
+    pipeline.rebuild(s);
     var four: @import("suggest.zig").List = .{};
     for ([_][]const u8{ "a1", "a2", "a3", "a4" }) |w| four.push(w);
-    s.answered("a", &four);
-    try std.testing.expectEqual(chrome.max_height, s.height());
+    pipeline.answered(s, "a", &four);
+    try std.testing.expectEqual(chrome.max_height, view.height(s));
 }
 
 fn settingsRig(rig: *Rig, prefs: *Prefs) !void {

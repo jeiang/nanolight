@@ -3,7 +3,8 @@ const std = @import("std");
 const files = @import("files.zig");
 const prefs = @import("prefs.zig");
 const suggest = @import("suggest.zig");
-const view = @import("view.zig");
+const Host = @import("host.zig").Host;
+const pipeline = @import("pipeline.zig");
 const platform = @import("platform.zig");
 const paths = @import("paths.zig");
 const after = @import("after.zig");
@@ -24,7 +25,7 @@ pub const Files = struct {
     busy: bool = false,
 
     /// What the panel asks for files with.
-    pub fn entry(f: *Files) view.Host.Ask {
+    pub fn entry(f: *Files) Host.Ask {
         return .{ .ctx = f, .func = ask };
     }
 
@@ -108,7 +109,7 @@ const FileAsk = struct {
         defer a.destroy();
         f.busy = false;
         if (a.ok and a.epoch == f.epoch) {
-            f.core.s.filesAnswered(a.text[0..a.len], &a.found);
+            pipeline.filesAnswered(f.core.s, a.text[0..a.len], &a.found);
             f.core.redraw();
         }
         f.send();
