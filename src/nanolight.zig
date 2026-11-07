@@ -23,6 +23,7 @@ const screen = @import("screen.zig");
 const chrome = @import("chrome.zig");
 const Theme = @import("palette.zig").Theme;
 const Host = @import("host.zig").Host;
+const Toggle = @import("toggles.zig").Toggle;
 const Row = results.Row;
 
 /// The longest query kept: a longer paste is cut here, as math, ranking and
@@ -93,8 +94,9 @@ pub const Nanolight = struct {
     found: files.List = .{},
     /// Google's completions: whether to ask, those listed, the answers.
     suggest_on: bool = true,
-    /// The quicklinks listed under the apps (config.toml, or synced).
-    quicklinks: []const web.Quicklink = &web.default_quicklinks,
+    /// The quicklinks from config.toml or sync (in `account_live.Sync`'s arena);
+    /// empty for the built-in ones (`links`).
+    quicklinks: []const web.Quicklink = &.{},
     web: suggest.List = .{},
     cache: suggest.Cache = .{},
     /// Currency rates and their fetching (rates.zig).
@@ -125,17 +127,38 @@ pub const Nanolight = struct {
         return if (s.scripts) |l| l.items.items else &.{};
     }
 
+    /// The quicklinks listed under the apps.
+    pub fn links(s: *const Nanolight) []const web.Quicklink {
+        return if (s.quicklinks.len > 0) s.quicklinks else &web.default_quicklinks;
+    }
+
     pub fn opened(s: *Nanolight, key: []const u8) void {
         s.tally.bump(s.index.gpa, key);
     }
 
-    pub fn setSuggest(s: *Nanolight, on: bool) void {
-        s.suggest_on = on;
-        s.query.invalidate();
+    /// What switch `t` is when the panel owns it (suggestions, file search,
+    /// searches in the browser); null for another owner's.
+    pub fn switchOn(s: *const Nanolight, t: Toggle) ?bool {
+        return switch (t) {
+            .suggest => s.suggest_on,
+            .files => s.files_on,
+            .browser => s.searches_out,
+            .login, .menu_bar, .clipboard => null,
+        };
     }
 
-    pub fn setFiles(s: *Nanolight, on: bool) void {
-        s.files_on = on;
+    /// Switch `t` made `on`, when the panel owns it (`switchOn`). The rows
+    /// follow the suggestions and file search, not where searches open.
+    pub fn turn(s: *Nanolight, t: Toggle, on: bool) void {
+        switch (t) {
+            .suggest => s.suggest_on = on,
+            .files => s.files_on = on,
+            .browser => {
+                s.searches_out = on;
+                return;
+            },
+            .login, .menu_bar, .clipboard => return,
+        }
         s.query.invalidate();
     }
 

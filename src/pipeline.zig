@@ -98,7 +98,7 @@ fn buildRows(s: *Nanolight, status: rates_table.Status) bool {
         .words = s.query.words(),
         .from = s.launchable(),
         .starters = s.starters,
-        .quicklinks = s.quicklinks,
+        .quicklinks = s.links(),
         .completions = s.web.slices(&said),
         .rates = status,
         .clip_on = s.hasClipboard(),

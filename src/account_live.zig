@@ -21,9 +21,7 @@ pub const Sync = struct {
     /// Null in headless runs.
     acct: ?account.Account = null,
     label: [192]u8 = undefined,
-    /// The quicklinks from the config or sync, empty for the built-in ones
-    /// (`setQuicklinks`), and the arena they live in.
-    quicklinks: []const Quicklink = &.{},
+    /// The arena `Nanolight.quicklinks` lives in (`setQuicklinks`).
     arena: ?*std.heap.ArenaAllocator = null,
 
     pub fn deinit(sy: *Sync) void {
@@ -72,7 +70,8 @@ pub const Sync = struct {
             gpa.destroy(arena);
             return false;
         };
-        if (settings.sameQuicklinks(keep, sy.quicklinks)) {
+        const s = sy.core.s;
+        if (settings.sameQuicklinks(keep, s.quicklinks)) {
             arena.deinit();
             gpa.destroy(arena);
             return false;
@@ -82,9 +81,7 @@ pub const Sync = struct {
             gpa.destroy(old);
         }
         sy.arena = arena;
-        sy.quicklinks = keep;
-        const s = sy.core.s;
-        s.quicklinks = if (keep.len > 0) keep else &web.default_quicklinks;
+        s.quicklinks = keep;
         s.query.invalidate();
         return true;
     }
@@ -133,7 +130,7 @@ const Here = struct {
     }
 
     pub fn suggest(h: *Here, _: std.mem.Allocator) bool {
-        return h.sy.core.s.suggest_on;
+        return h.sy.core.toggles.get(.suggest);
     }
 
     pub fn at(h: *Here, arena: std.mem.Allocator) i64 {
@@ -145,7 +142,7 @@ const Here = struct {
     }
 
     pub fn quicklinks(h: *Here, _: std.mem.Allocator) []const Quicklink {
-        return h.sy.quicklinks;
+        return h.sy.core.s.quicklinks;
     }
 };
 
@@ -169,8 +166,7 @@ const Take = struct {
         const core = t.sy.core;
         const c = keys.Choice.parse(name) orelse return;
         if (c.eql(core.choice)) return;
-        prefs.keepHotkey(core.kv, c);
-        core.useKey(c);
+        core.setKey(c, .synced);
     }
 
     pub fn suggest(t: *Take, on: bool) void {
@@ -193,7 +189,9 @@ const Take = struct {
 
     pub fn quicklinks(t: *Take, list: []const Quicklink) void {
         const sy = t.sy;
-        if (sy.setQuicklinks(list)) prefs.setQuicklinks(sy.core.kv, sy.core.app.gpa, sy.quicklinks);
+        if (sy.setQuicklinks(list)) {
+            prefs.setQuicklinks(sy.core.kv, sy.core.app.gpa, sy.core.s.quicklinks);
+        }
     }
 };
 

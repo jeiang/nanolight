@@ -42,6 +42,7 @@ const settings_bind = @import("settings_bind.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
 const Host = @import("host.zig").Host;
 const version = @import("build_options").version;
+const app_name = @import("app_facts.zig").app_name;
 
 pub fn main(init: std.process.Init) !void {
     var arena: std.heap.ArenaAllocator = .init(init.gpa);
@@ -50,7 +51,7 @@ pub fn main(init: std.process.Init) !void {
     panel.prepare();
     const app = try nanoui.App.create(
         init,
-        .{ .name = "Nanolight", .quit_on_last_window_closed = false },
+        .{ .name = app_name, .quit_on_last_window_closed = false },
     );
     defer app.destroy();
     // A headless run is no one's: neither their config nor their settings.
@@ -233,7 +234,7 @@ fn windowOptions(core: *App, sized: Sized) nanoui.WindowOptions {
     // The rows first, so a snapshot is as tall as the panel.
     pipeline.rebuild(s);
     var options: nanoui.WindowOptions = .{
-        .title = "Nanolight",
+        .title = app_name,
         .width = chrome.width,
         .height = view.height(s),
         .resizable = false,

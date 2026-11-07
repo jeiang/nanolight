@@ -325,7 +325,7 @@ test "Google's answer landing after suggestions are turned off lists nothing" {
     t.frame();
     const bare = view.height(s);
     // Asked while on; turned off (the menu, Settings or sync) before it lands.
-    s.setSuggest(false);
+    s.turn(.suggest, false);
     var said: suggest.List = .{};
     for ([_][]const u8{ "liquid", "liquid glass" }) |w| said.push(w);
     pipeline.answered(s, "liq", &said);

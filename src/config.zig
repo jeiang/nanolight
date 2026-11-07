@@ -76,6 +76,28 @@ const seeds = [_]Seed{
     .{ .key = "clipboard.enabled", .rule = .{ .toggle = .clipboard } },
 };
 
+// Every switch config.toml names is seeded, and every seed is a key the
+// file has: a switch added with its key but no seed would parse and do
+// nothing.
+comptime {
+    for (std.enums.values(Toggle)) |t| {
+        const key = t.row().config orelse continue;
+        var found = false;
+        for (seeds) |s| {
+            if (std.mem.eql(u8, s.key, key)) found = true;
+        }
+        if (!found) @compileError("config.toml's " ++ key ++ " seeds no switch");
+    }
+    for (seeds) |s| {
+        if (s.rule == .toggle) {
+            const key = s.rule.toggle.row().config orelse "";
+            if (!std.mem.eql(u8, key, s.key)) {
+                @compileError("seed " ++ s.key ++ " is not its switch's config key");
+            }
+        }
+    }
+}
+
 pub const Loaded = union(enum) {
     /// No file, and none was applied before: the defaults, which seed nothing.
     defaults,

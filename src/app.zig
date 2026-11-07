@@ -26,6 +26,7 @@ const settings = @import("settings.zig");
 const after = @import("after.zig");
 const PageKey = @import("preview.zig").Key;
 const Setter = @import("toggles.zig").Setter;
+const Origin = @import("toggles.zig").Origin;
 
 /// A menu's item waits for the menu: it closes first, then the panel
 /// takes the keys.
@@ -289,11 +290,16 @@ pub const App = struct {
         a.redraw();
     }
 
-    pub fn apply(ctx: *anyopaque, choice: keys.Choice) void {
-        const a = from(ctx);
+    /// The one way the key changes (Settings, the welcome, a sync): kept,
+    /// registered, synced when chosen `here`.
+    pub fn setKey(a: *App, choice: keys.Choice, origin: Origin) void {
         prefs.keepHotkey(a.kv, choice);
         a.useKey(choice);
-        a.touched(.hotkey);
+        if (origin == .here) a.touched(.hotkey);
+    }
+
+    fn apply(ctx: *anyopaque, choice: keys.Choice) void {
+        from(ctx).setKey(choice, .here);
     }
 
     fn fix(ctx: *anyopaque, clash: shortcut_clash.Clash) void {

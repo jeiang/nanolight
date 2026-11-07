@@ -9,6 +9,7 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const Query = @import("query.zig").Query;
 const Host = @import("host.zig").Host.Clipboard;
+const app_name = @import("app_facts.zig").app_name;
 const clipboard = @import("clipboard.zig");
 const types = @import("clipboard_types.zig");
 const search = @import("search.zig");
@@ -258,8 +259,8 @@ pub fn note(r: types.PasteResult) []const u8 {
     return switch (r) {
         .pasted => "",
         .copied => "Copied",
-        .copied_no_permission => "Copied. Allow Nanolight in Privacy & Security > Accessibility " ++
-            "to paste.",
+        .copied_no_permission => "Copied. Allow " ++ app_name ++
+            " in Privacy & Security > Accessibility to paste.",
         .copied_unsupported => "Copied. Pasting is not supported on this system yet.",
         .failed => "Could not write the clipboard.",
         .unreadable => "Could not read this entry: its saved content is gone or damaged.",

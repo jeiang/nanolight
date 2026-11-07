@@ -2,7 +2,8 @@
 //! spelled once: build.zig hands this file to the tools as a module, so a
 //! change here reaches them, and a rename breaks their build, not a CI run.
 
-/// The folder nanoui keeps the app's data and its updater's cache in.
+/// The app's name, as it shows it; nanoui keeps the app's data and its
+/// updater's cache in a folder of this name.
 pub const app_name = "Nanolight";
 /// The panel's width, inside its window's shadow margin.
 pub const panel_width = 680;

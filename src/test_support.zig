@@ -335,20 +335,10 @@ pub const Prefs = struct {
         if (set) |on| {
             p.sets.getPtr(t).* += 1;
             p.on.set(t, on);
-            if (p.nl) |s| switch (t) {
-                .suggest => s.setSuggest(on),
-                .files => s.setFiles(on),
-                .browser => s.searches_out = on,
-                .login, .menu_bar, .clipboard => {},
-            };
+            if (p.nl) |s| s.turn(t, on);
         }
         const s = p.nl orelse return p.on.get(t);
-        return switch (t) {
-            .suggest => s.suggest_on,
-            .files => s.files_on,
-            .browser => s.searches_out,
-            .login, .menu_bar, .clipboard => p.on.get(t),
-        };
+        return s.switchOn(t) orelse p.on.get(t);
     }
     fn theme(ctx: *anyopaque, set: ?Theme) Theme {
         const p: *Prefs = @ptrCast(@alignCast(ctx));

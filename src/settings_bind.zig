@@ -42,9 +42,9 @@ pub const Bind = struct {
         };
     }
 
-    /// How the menu's checkbox and sync change a switch (`App.toggles`).
+    /// How the menu's checkbox and sync read and change a switch (`App.toggles`).
     pub fn setter(b: *Bind) toggles.Setter {
-        return .{ .ctx = b, .func = setFrom };
+        return .{ .ctx = b, .func = setFrom, .read = getFrom };
     }
 
     /// Every switch this build shows, as kept (or its owner's or prefs'
@@ -80,11 +80,8 @@ pub const Bind = struct {
 
     /// What the switch's owner says.
     fn get(b: *const Bind, t: Toggle) bool {
-        const s = b.core.s;
         return switch (t) {
-            .suggest => s.suggest_on,
-            .files => s.files_on,
-            .browser => s.searches_out,
+            .suggest, .files, .browser => b.core.s.switchOn(t).?,
             .login => shell.Login.enabled(b.core.app.io, null),
             .menu_bar => b.menu.iconShown(),
             .clipboard => b.clip.recording(),
@@ -102,11 +99,8 @@ pub const Bind = struct {
 
     /// The switch's owner made to match `on`, `kept` when it was kept.
     fn own(b: *Bind, t: Toggle, on: bool, kept: bool) void {
-        const s = b.core.s;
         switch (t) {
-            .suggest => s.setSuggest(on),
-            .files => s.setFiles(on),
-            .browser => s.searches_out = on,
+            .suggest, .files, .browser => b.core.s.turn(t, on),
             .login => _ = shell.Login.enabled(b.core.app.io, on),
             .menu_bar => b.menu.showIcon(on),
             .clipboard => b.clip.turn(on, kept),
@@ -123,7 +117,7 @@ fn choice(ctx: *anyopaque) Choice {
 }
 
 fn apply(ctx: *anyopaque, c: Choice) void {
-    App.apply(from(ctx).core, c);
+    from(ctx).core.setKey(c, .here);
 }
 
 fn record(ctx: *anyopaque, on: bool) bool {
@@ -138,6 +132,10 @@ fn toggle(ctx: *anyopaque, t: Toggle, set: ?bool) bool {
 
 fn setFrom(ctx: *anyopaque, t: Toggle, on: bool, origin: toggles.Origin) void {
     from(ctx).set(t, on, origin);
+}
+
+fn getFrom(ctx: *anyopaque, t: Toggle) bool {
+    return from(ctx).get(t);
 }
 
 fn theme(ctx: *anyopaque, set: ?Theme) Theme {

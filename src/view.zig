@@ -23,6 +23,7 @@ const calc_card = @import("calc_card.zig");
 const pipeline = @import("pipeline.zig");
 const nanolight = @import("nanolight.zig");
 const Nanolight = nanolight.Nanolight;
+const app_name = @import("app_facts.zig").app_name;
 const Target = @import("host.zig").Target;
 const palette_mod = @import("palette.zig");
 const Palette = palette_mod.Palette;
@@ -330,7 +331,7 @@ fn footer(s: *Nanolight, c: *ui.Context, p: Palette) void {
         p.caption(),
         "{s} · {d} apps",
         .{
-            if (s.note.len > 0) s.note else "Nanolight",
+            if (s.note.len > 0) s.note else app_name,
             s.index.apps.items.len + s.scriptList().len,
         },
     );
@@ -377,8 +378,9 @@ fn activateOut(s: *Nanolight, c: *ui.Context) void {
 /// the host can show it there, else in the browser.
 fn searchWith(s: *Nanolight, ql: u16, words: []const u8, in_panel: bool) void {
     const h = s.host;
-    if (ql >= s.quicklinks.len) return;
-    const link = s.quicklinks[ql];
+    const links = s.links();
+    if (ql >= links.len) return;
+    const link = links[ql];
     const u = web.url(&s.preview_buf, link.url, words) orelse {
         std.log.warn("nanolight: the address of {s} for these words is too long", .{link.name});
         return;
@@ -522,7 +524,7 @@ fn ownBody(c: *ui.Context, p: Palette, title: []const u8, detail: []const u8) vo
 }
 
 fn settingsBody(_: *Nanolight, c: *ui.Context, p: Palette, _: usize, _: Row) void {
-    ownBody(c, p, "Nanolight Settings", "Shortcut, sync, updates");
+    ownBody(c, p, app_name ++ " Settings", "Shortcut, sync, updates");
 }
 
 fn clipboardBody(_: *Nanolight, c: *ui.Context, p: Palette, _: usize, _: Row) void {
@@ -540,7 +542,7 @@ fn completionBody(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) v
 }
 
 fn quicklinkBody(s: *Nanolight, c: *ui.Context, p: Palette, _: usize, r: Row) void {
-    const ql = s.quicklinks[r.item];
+    const ql = s.links()[r.item];
     ui.textf(
         c,
         .{ .size = 13.5, .weight = .medium, .color = p.text, .truncate = .ellipsis },
@@ -555,7 +557,7 @@ fn quicklinkFooter(s: *Nanolight, c: *ui.Context, p: Palette, r: Row) void {
     var cut = p.action();
     cut.truncate = .ellipsis;
     const action = results.providers.get(.quicklink).action;
-    ui.textf(c, cut, "{s} {s}", .{ action, s.quicklinks[r.item].name });
+    ui.textf(c, cut, "{s} {s}", .{ action, s.links()[r.item].name });
     ui.kbd(c, "↩");
 }
 

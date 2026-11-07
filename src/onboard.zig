@@ -12,6 +12,7 @@
 //! an `Outcome`.
 const std = @import("std");
 const nanoui = @import("nanoui");
+const app_name = @import("app_facts.zig").app_name;
 const ui = nanoui.ui;
 const motion = ui.motion;
 const keys = @import("keys.zig");
@@ -161,7 +162,7 @@ pub const Onboard = struct {
             defer t.end();
             ui.text(
                 c,
-                "Welcome to Nanolight",
+                "Welcome to " ++ app_name,
                 .{ .size = 22, .weight = .semibold, .color = p.text, .tracking = -0.3 },
             );
             ui.text(
@@ -436,7 +437,7 @@ pub const Onboard = struct {
                 .{ .size = 12.5, .color = p.sub },
             );
         }
-        if (asks_login and ui.toggle(c, "Open Nanolight when you log in", &o.login)) {
+        if (asks_login and ui.toggle(c, "Open " ++ app_name ++ " when you log in", &o.login)) {
             o.login = o.hooks.login(o.hooks.ctx, o.login);
         }
         return null;

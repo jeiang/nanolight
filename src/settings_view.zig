@@ -17,6 +17,7 @@ const Choice = key_choice.Choice;
 const chrome = @import("chrome.zig");
 const Palette = @import("palette.zig").Palette;
 const Theme = @import("palette.zig").Theme;
+const app_name = @import("app_facts.zig").app_name;
 const platform = @import("platform.zig");
 
 /// Recording a key of one's own: not, waiting for one, or waiting after
@@ -84,7 +85,7 @@ fn switches(comptime section: toggles.Section) []const Part {
 
 /// What Settings lists, top to bottom.
 const groups = [_]Group{
-    .{ .heading = "Open Nanolight with", .parts = &.{.chips} },
+    .{ .heading = "Open " ++ app_name ++ " with", .parts = &.{.chips} },
     .{ .heading = "Search", .parts = switches(.search) },
     .{ .heading = "This " ++ platform.machine, .parts = switches(.machine) },
     .{
@@ -332,7 +333,7 @@ pub const Settings = struct {
                 .version => ui.textf(
                     c,
                     .{ .size = 12.5, .color = p.sub },
-                    "Nanolight {s}",
+                    app_name ++ " {s}",
                     .{s.version},
                 ),
             },
@@ -455,7 +456,7 @@ pub const Settings = struct {
             else
                 "Check for Updates",
             .welcome => "Show Welcome Again",
-            .quit => "Quit Nanolight",
+            .quit => "Quit " ++ app_name,
         };
         const on = isSel(rows, s.sel, .{ .button = b });
         ui.key(c, @tagName(b));

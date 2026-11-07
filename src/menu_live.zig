@@ -9,6 +9,7 @@ const account_live = @import("account_live.zig");
 const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
 const after = @import("after.zig");
+const app_name = @import("app_facts.zig").app_name;
 
 pub const Menu = struct {
     core: *App,
@@ -21,7 +22,7 @@ pub const Menu = struct {
 
     /// The icon, unless Settings took it away.
     pub fn start(m: *Menu) !void {
-        m.tray = try shell.Tray.make(m.core.app, "magnifyingglass", "Nanolight");
+        m.tray = try shell.Tray.make(m.core.app, "magnifyingglass", app_name);
         if (!m.wanted) m.showIcon(false);
     }
 
@@ -67,18 +68,18 @@ fn rebuild(ctx: *anyopaque) void {
     const t = m.tray orelse return;
     const Item = nanoui.menu.MenuItem;
     const update = if (platform.updater) [_]Item{m.update.menuItem()} else [_]Item{};
-    t.menu("Nanolight", &([_]Item{
+    t.menu(app_name, &([_]Item{
         .{ .label = "Settings…", .accelerator = "Cmd+,", .click = .of(m, Menu.settings) },
-        .{ .label = "Open Nanolight", .click = .of(m, Menu.show) },
+        .{ .label = "Open " ++ app_name, .click = .of(m, Menu.show) },
         .{ .label = "Welcome…", .click = .of(m, Menu.welcome) },
         .{
             .label = "Google Suggestions",
             .kind = .checkbox,
-            .checked = m.core.s.suggest_on,
+            .checked = m.core.toggles.get(.suggest),
             .click = .of(m, Menu.suggestions),
         },
         .separator,
         m.sync.menuItem(),
         .separator,
-    } ++ update ++ [_]Item{.{ .label = "Quit Nanolight", .role = .quit }}));
+    } ++ update ++ [_]Item{.{ .label = "Quit " ++ app_name, .role = .quit }}));
 }

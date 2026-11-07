@@ -16,7 +16,7 @@ test "files share the local results' head and fit the original window" {
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
-    s.setFiles(true);
+    s.turn(.files, true);
     try rig.apps(&.{ "Safari", "Mail", "Maps", "Calendar", "Calculator", "System Settings Alpha" });
     // "settings" keeps Nanolight's Settings first; "a" matches all six apps.
     for ([_][]const u8{ "settings", "a" }) |q| {
@@ -63,11 +63,11 @@ test "files share the local results' head and fit the original window" {
             // Every quicklink still follows, X's last, and one search for what was typed.
             const last = s.res.slice()[s.res.slice().len - 1];
             try std.testing.expectEqual(results.Kind.quicklink, last.kind);
-            try std.testing.expectEqualStrings("X", s.quicklinks[last.item].name);
+            try std.testing.expectEqualStrings("X", s.links()[last.item].name);
             var google: usize = 0;
             for (s.res.slice()) |row| {
                 const named = row.kind == .quicklink and
-                    std.mem.eql(u8, s.quicklinks[row.item].name, "Google");
+                    std.mem.eql(u8, s.links()[row.item].name, "Google");
                 if (named) google += 1;
             }
             try std.testing.expectEqual(@as(usize, 1), google);
@@ -192,7 +192,7 @@ test "apps, panes, files and quicklinks share the window budget" {
     rig.init(t.allocator);
     defer rig.deinit();
     const s = &rig.s;
-    s.setFiles(true);
+    s.turn(.files, true);
     for (0..results.max_apps) |i| {
         var name: [64]u8 = undefined;
         try rig.apps(&.{try std.fmt.bufPrint(&name, "Login {d}", .{i})});
@@ -283,7 +283,7 @@ test "file answers move icons only for the current enabled query" {
     rig.init(t.allocator);
     defer rig.deinit();
     const s = &rig.s;
-    s.setFiles(true);
+    s.turn(.files, true);
     s.query.set("report");
     pipeline.rebuild(s);
     var found: files.List = .{ .allocator = t.allocator };
@@ -294,10 +294,10 @@ test "file answers move icons only for the current enabled query" {
     pipeline.filesAnswered(s, "stale", &found);
     try t.expectEqual(@as(usize, 1), found.n);
     try t.expectEqual(@as(usize, 0), s.found.n);
-    s.setFiles(false);
+    s.turn(.files, false);
     pipeline.filesAnswered(s, "report", &found);
     try t.expectEqual(@as(usize, 1), found.n);
-    s.setFiles(true);
+    s.turn(.files, true);
     pipeline.filesAnswered(s, "report", &found);
     try t.expectEqual(@as(usize, 0), found.n);
     // Moved, not copied (files.List.replace): the panel holds the worker's bytes.
@@ -340,7 +340,7 @@ test "the selection stays on its row as files and completions land in any order"
     rig.init(t.allocator);
     defer rig.deinit();
     const s = &rig.s;
-    s.setFiles(true);
+    s.turn(.files, true);
     try rig.mount(.{});
     @import("test_support.zig").retype(&rig.t, "report");
     var found: files.List = .{ .allocator = t.allocator };
@@ -408,7 +408,7 @@ test "a query the answer card takes is not searched for as a file" {
     var asks: FileAsks = .{};
     const s = &rig.s;
     s.host = asks.host();
-    s.setFiles(true);
+    s.turn(.files, true);
     // Math typed so far, and conversions: the card shows, no search starts.
     const cards = [_][]const u8{
         "2 + 3",
@@ -440,7 +440,7 @@ test "a tab or line break pasted round the words reads as the words, to rows and
     var asks: FileAsks = .{};
     const s = &rig.s;
     s.host = asks.host();
-    s.setFiles(true);
+    s.turn(.files, true);
     // Math: the card shows, and no file is looked for.
     s.query.set("2 + 3\t");
     pipeline.rebuild(s);

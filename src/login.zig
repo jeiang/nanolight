@@ -6,6 +6,7 @@
 const std = @import("std");
 const paths = @import("paths.zig");
 const nanoui = @import("nanoui");
+const app_name = @import("app_facts.zig").app_name;
 
 pub const Mac = struct {
     const objc = nanoui.objc;
@@ -28,7 +29,7 @@ pub const Windows = struct {
     const L = std.unicode.utf8ToUtf16LeStringLiteral;
     const hkcu: *anyopaque = @ptrFromInt(0x80000001);
     const run_key = L("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-    const value = L("Nanolight");
+    const value = L(app_name);
     const reg_sz: u32 = 1;
     const rrf_rt_reg_sz: u32 = 2;
     extern "advapi32" fn RegSetKeyValueW(
@@ -89,8 +90,8 @@ pub const Linux = struct {
                 var entry: [2048]u8 = undefined;
                 const text = std.fmt.bufPrint(
                     &entry,
-                    "[Desktop Entry]\nType=Application\nName=Nanolight\nComment=A launcher, on " ++
-                        "Alt Space\nExec=\"{s}\"\nIcon=nanolight\n" ++
+                    "[Desktop Entry]\nType=Application\nName=" ++ app_name ++
+                        "\nComment=A launcher, on Alt Space\nExec=\"{s}\"\nIcon=nanolight\n" ++
                         "X-GNOME-Autostart-enabled=true\nNoDisplay=true\n",
                     .{exe[0..@intCast(n)]},
                 ) catch return false;

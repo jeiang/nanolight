@@ -6,6 +6,7 @@
 //! `hotkey_win.register`, whichever runs first.
 const std = @import("std");
 const single = @import("single.zig");
+const app_name = @import("app_facts.zig").app_name;
 
 pub const HWND = *opaque {};
 const HINSTANCE = ?*anyopaque;
@@ -51,7 +52,7 @@ extern "kernel32" fn GetModuleHandleW(?[*:0]const u16) callconv(.winapi) HINSTAN
 
 const wm_hotkey: u32 = 0x0312;
 
-const class_name = std.unicode.utf8ToUtf16LeStringLiteral("NanolightMessages");
+const class_name = std.unicode.utf8ToUtf16LeStringLiteral(app_name ++ "Messages");
 /// HWND_MESSAGE: the parent of message-only windows.
 const message_parent: HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, -3))));
 

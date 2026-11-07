@@ -19,17 +19,15 @@ const Kind = types.Kind;
 const Item = types.Item;
 const Content = types.Content;
 
-/// Where a kind's content is kept: its blob's extension, and when the content goes there.
-const Blob = struct {
-    ext: *const [blob_ext_len]u8,
-    when: enum { always, when_long, never },
-};
+/// When a kind's content is kept in a blob rather than the index. The blob's
+/// extension follows its content (`Kind.info().png`).
+const Blob = enum { always, when_long, never };
 
 fn blobOf(k: Kind) Blob {
     return switch (k) {
-        .text => .{ .ext = "txt", .when = .when_long },
-        .image => .{ .ext = "png", .when = .always },
-        .file => .{ .ext = "txt", .when = .never },
+        .text => .when_long,
+        .image => .always,
+        .file => .never,
     };
 }
 
@@ -105,13 +103,13 @@ const blob_name_len = blob_dir.len + "/".len + 16 + ".".len + blob_ext_len;
 
 /// The file that holds `e`'s content, in `buf`; null when the index holds it all.
 fn blobName(e: Entry, buf: *[blob_name_len]u8) ?[]const u8 {
-    const b = blobOf(e.kind);
-    switch (b.when) {
+    switch (blobOf(e.kind)) {
         .always => {},
         .when_long => if (e.text.len >= e.size) return null,
         .never => return null,
     }
-    return std.fmt.bufPrint(buf, blob_dir ++ "/{x:0>16}.{s}", .{ e.hash, b.ext }) catch unreachable;
+    const ext: *const [blob_ext_len]u8 = if (e.kind.info().png) "png" else "txt";
+    return std.fmt.bufPrint(buf, blob_dir ++ "/{x:0>16}.{s}", .{ e.hash, ext }) catch unreachable;
 }
 
 const DiskEntry = struct {
@@ -254,7 +252,7 @@ pub const Store = struct {
     }
 
     fn make(s: *Store, item: Item, h: u64, content: []const u8, now: i64) ?Entry {
-        const spill = blobOf(item.kind).when == .when_long and s.dir != null and
+        const spill = blobOf(item.kind) == .when_long and s.dir != null and
             content.len > inline_max;
         const shown = if (item.kind.info().png)
             ""

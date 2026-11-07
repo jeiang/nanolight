@@ -25,20 +25,28 @@ pub const Toggle = enum {
                 .section = .search,
                 .pref = .suggest,
                 .syncs = .suggest,
+                .config = "suggestions",
             },
             .files => .{ .title = "File Search", .section = .search, .pref = .files },
             .browser => .{
                 .title = "Open Searches in Browser",
                 .section = .search,
                 .pref = .searches_out,
+                .config = "open_searches_in_browser",
             },
             // The system keeps it (`shell.Login`).
             .login => .{ .title = "Open at Login", .section = .machine, .pref = null },
-            .menu_bar => .{ .title = "Show in Menu Bar", .section = .machine, .pref = .menu_bar },
+            .menu_bar => .{
+                .title = "Show in Menu Bar",
+                .section = .machine,
+                .pref = .menu_bar,
+                .config = "show_in_menu_bar",
+            },
             .clipboard => .{
                 .title = "Record Copied Items",
                 .section = .clipboard,
                 .pref = .clipboard,
+                .config = "clipboard.enabled",
             },
         };
     }
@@ -78,6 +86,8 @@ pub const Row = struct {
     pref: ?prefs.Key,
     /// The synced field it is: changed here, it syncs (`settings.choices`).
     syncs: ?settings.Field = null,
+    /// Its key in config.toml, which seeds it (`config.zig`'s `seeds`).
+    config: ?[]const u8 = null,
 };
 
 /// Settings' group a switch is listed in, in `Toggle`'s order.
@@ -87,14 +97,19 @@ pub const Section = enum { search, machine, clipboard };
 pub const Origin = enum { here, synced };
 
 /// The one way a switch changes (settings_bind.zig `Bind.set`): kept, its
-/// owner told, synced when it syncs. For what is not Settings: the menu's
-/// checkbox, a sync.
+/// owner told, synced when it syncs; and what its owner says it is. For
+/// what is not Settings: the menu's checkbox, a sync.
 pub const Setter = struct {
     ctx: *anyopaque,
     func: *const fn (ctx: *anyopaque, t: Toggle, on: bool, origin: Origin) void,
+    read: *const fn (ctx: *anyopaque, t: Toggle) bool,
 
     pub fn set(s: Setter, t: Toggle, on: bool, origin: Origin) void {
         s.func(s.ctx, t, on, origin);
+    }
+
+    pub fn get(s: Setter, t: Toggle) bool {
+        return s.read(s.ctx, t);
     }
 };
 
