@@ -15,6 +15,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Io = std.Io;
+const app_facts = @import("app_facts");
 const command = @import("command.zig");
 const mac_verify = @import("mac_verify.zig");
 const release = @import("release.zig");
@@ -30,7 +31,7 @@ pub const Options = struct {
 };
 
 /// The panel's window is a shadow's margin bigger than it all round.
-const panel_width = mac_verify.panel_width;
+const panel_width = app_facts.panel_width;
 /// The patch watched: inside the word, and clear of the caret at either end.
 const patch_left = 56;
 const patch_top = 14;

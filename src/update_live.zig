@@ -18,8 +18,9 @@ const App = @import("app.zig").App;
 const Hook = @import("app.zig").Hook;
 const after = @import("after.zig");
 const build = @import("build_options");
+const app_facts = @import("app_facts.zig");
 
-const idle_ms = 10 * 1000;
+const idle_ms = app_facts.restart_idle_ms;
 
 pub const Update = struct {
     core: *App,
@@ -38,7 +39,7 @@ pub const Update = struct {
             .repo = build.repo,
             .asset = build.asset,
             .version = build.version,
-            .name = "Nanolight",
+            .name = app_facts.app_name,
             .changed = .{ .ctx = u, .func = changed },
         }) catch return;
         u.started = updater;

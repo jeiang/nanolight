@@ -224,7 +224,7 @@ zig build test      # search, math, suggestions and the panel, through nanoui's 
 zig build run       # build and open it
 zig build app       # zig-out/Nanolight.app, for /Applications
 zig build server    # zig-out/bin/nanolight-server, the sync server
-zig build package -Dversion=0.1.0   # a release's files in zig-out/package (a tag, v0.1.0, works too): the Mac's signed app, disk image and update, Windows' zip, Linux's tarballs, each build's debug symbols, manifest.json
+zig build package -Dversion=0.1.0   # a release's files in zig-out/package (a tag, v0.1.0, works too): the Mac's signed app, disk image and update, Windows' zip, Linux's tarballs, each build's debug symbols, manifest.json, and the release's notes (notes.md)
 zig build -Dtarget=x86_64-windows-gnu   # any target from any machine
 nix build .#nanolight .#nanolight-server  # the Nix packages (see Nix)
 zig build -Dnix=true                    # a Nix-managed build: no updater, no Open at Login (the Nix modules own startup)

@@ -1,38 +1,46 @@
 //! What the Mac's verifiers (verify_release, verify_update, verify_typing)
-//! share: fetching, waiting, AppleScript, and the app's facts they rely on.
-//! Each of the app's facts names where the app or nanoui sets it: changed
-//! there and not here, a verifier fails with a timeout, not a reason.
+//! share: fetching, waiting, AppleScript, and nanoui's facts they rely on.
+//! The app's own facts come from it (`app_facts`, `keys`); each of nanoui's
+//! names where nanoui sets it: changed there and not here, a verifier fails
+//! with a timeout, not a reason.
 const std = @import("std");
 const assert = std.debug.assert;
 const Io = std.Io;
+const app_facts = @import("app_facts");
+const app_keys = @import("keys");
 const command = @import("command.zig");
 const release = @import("release.zig");
 
-// ----- the app's facts -----
+// ----- the facts -----
 
 /// The defaults domain the app's settings are kept in: its bundle id (nanoui's kv).
 pub const domain = release.bundle_id;
-/// src/shortcut.zig `onboarded_key`: "1" once the welcome is done.
-pub const onboarded_key = "nanolight.onboarded";
-/// src/shortcut.zig `store_key`: the hotkey, as `Choice.name` writes it.
-pub const hotkey_key = "nanolight.hotkey";
-/// ⌃⌥⌘N as src/shortcut.zig's `Choice.name` writes it, `key:<code>:<mods>:<char>`:
-/// key code 45, Carbon's control, option and command, and 'n'.
-pub const hotkey_chord = "key:45:6400:110";
+/// The key the verifiers set, then press: ⌃⌥⌘N (key code 45, which types 'n').
+const hotkey: app_keys.Choice = .{
+    .code = 45,
+    .mods = app_keys.control | app_keys.option | app_keys.cmd,
+    .ch = 'n',
+};
+/// As the app keeps it, under `app_facts.hotkey_key`.
+pub const hotkey_chord = chord: {
+    var buffer: [app_keys.name_max]u8 = undefined;
+    const name = hotkey.name(&buffer);
+    const kept = name[0..name.len].*;
+    break :chord &kept;
+};
 /// The same key, as System Events presses it.
-pub const hotkey_keys = "key code 45 using {control down, option down, command down}";
-/// src/view.zig `width`: the panel, inside its window's shadow margin.
-pub const panel_width = 680;
+pub const hotkey_keys = std.fmt.comptimePrint(
+    "key code {d} using {{control down, option down, command down}}",
+    .{hotkey.code},
+);
 /// nanoui's `Updater.Options.first_ms`: the first check, after launch.
 pub const first_check_ms = 20 * 1000;
-/// src/main.zig's `autoRestart(.idle_ms)`: away this long, an update restarts.
-pub const restart_idle_ms = 10 * 1000;
 /// nanoui's `Auto.away_ms`: in sight, an update waits for no input this long.
 pub const away_ms = 5 * 60 * 1000;
 /// nanoui's update.zig: the feed read instead of the GitHub release's.
 pub const feed_env = "NANOUI_UPDATE_FEED";
 /// nanoui's update.zig: `~/Library/Caches/<name>`, its updates in `updates/<version>`.
-pub const cache_folder = "Library/Caches/" ++ release.app_name;
+pub const cache_folder = "Library/Caches/" ++ app_facts.app_name;
 
 /// The folder nanoui's updater keeps `version` in, under `cache`.
 pub fn stagedFolder(arena: std.mem.Allocator, cache: []const u8, version: []const u8) []const u8 {

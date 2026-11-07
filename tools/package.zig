@@ -7,6 +7,7 @@
 //!   nanolight-linux-aarch64.tar.gz    the same, for 64-bit Arm
 //!   nanolight-*-symbols.*             each build's debug symbols (the programs are stripped)
 //!   manifest.json, <file>.sha256      the update feed, written once from all of the above
+//!   notes.md                          the release's notes, for its page (not attached)
 //!
 //! Each Windows and Linux archive holds one folder, nanolight-<version>-<os>-<arch>. The
 //! app's updater (nanoui's update_portable.zig) finds the program in it, checks it says its
@@ -141,6 +142,9 @@ pub fn main(init: std.process.Init) !void {
         .report = &report.interface,
     });
     try report.interface.flush();
+    var notes: Io.Writer.Allocating = .init(arena);
+    try release.writeNotes(&notes.writer, plan.version);
+    try out.writeFile(io, .{ .sub_path = release.notes_name, .data = notes.written() });
 }
 
 // ----- the Mac -----
@@ -382,7 +386,7 @@ fn writeFeed(arena: std.mem.Allocator, io: Io, out: Io.Dir, options: FeedOptions
         const sum = try release.sha256File(io, out, name);
         var line: Io.Writer.Allocating = .init(arena);
         try release.writeSumLine(&line.writer, sum, name);
-        const sum_name = try std.fmt.allocPrint(arena, "{s}.sha256", .{name});
+        const sum_name = try std.mem.concat(arena, u8, &.{ name, release.sum_suffix });
         try out.writeFile(io, .{ .sub_path = sum_name, .data = line.written() });
         try options.report.writeAll(line.written());
         if (!update) continue;
@@ -444,7 +448,7 @@ test "the feed names every update made, Mac's and the others', and sums every fi
     const windows_sum = release.sha256Hex(files[0][0]);
     try std.testing.expectEqualStrings(&windows_sum, manifest.sum(files[0][0]).?);
     try std.testing.expectEqual(null, manifest.sum(release.macos_disk_image));
-    const side_name = release.macos_disk_image ++ ".sha256";
+    const side_name = release.macos_disk_image ++ release.sum_suffix;
     const side = try tmp.dir.readFileAlloc(io, side_name, arena, .limited(256));
     const disk_image_sum = release.sha256Hex(release.macos_disk_image);
     try std.testing.expectEqualStrings(&disk_image_sum, release.parseSumLine(side).?);

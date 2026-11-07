@@ -7,6 +7,7 @@ const Quicklink = @import("web.zig").Quicklink;
 const Theme = @import("palette.zig").Theme;
 const keys = @import("keys.zig");
 const Choice = keys.Choice;
+const app_facts = @import("app_facts.zig");
 
 const Store = nanoui.kv.Store;
 
@@ -75,8 +76,11 @@ fn spec(k: Key) Spec {
             .name = "nanolight.clipboard.enabled",
             .kind = .{ .flag = .{ .unset = true, .unreadable = false } },
         },
-        .onboarded => .{ .name = "nanolight.onboarded", .kind = .{ .flag = .{ .unset = false } } },
-        .hotkey => .{ .name = "nanolight.hotkey", .kind = .text },
+        .onboarded => .{
+            .name = app_facts.onboarded_key,
+            .kind = .{ .flag = .{ .unset = false } },
+        },
+        .hotkey => .{ .name = app_facts.hotkey_key, .kind = .text },
         .theme => .{ .name = "nanolight.theme", .kind = .text },
         .quicklinks => .{ .name = "nanolight.quicklinks", .kind = .text },
         .sync_at => .{ .name = "nanolight.sync.at", .kind = .int },
@@ -242,7 +246,7 @@ pub fn setQuicklinks(kv: Store, gpa: std.mem.Allocator, list: []const Quicklink)
 /// Nanolight's data folder (config.toml, the clipboard, script commands, the rates).
 /// Caller frees it.
 pub fn dataDir(gpa: std.mem.Allocator) ![]u8 {
-    return nanoui.path(gpa, .data, "Nanolight");
+    return nanoui.path(gpa, .data, app_facts.app_name);
 }
 
 // ----- tests -----

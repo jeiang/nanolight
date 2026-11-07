@@ -29,7 +29,7 @@ in
     buildInputs = lib.optionals stdenv.hostPlatform.isLinux dlopened;
 
     # Nix's sandbox has no macOS SDK for the Mac's release tools' frameworks.
-    zigBuildFlags = ["-Dnix=true" "-Dmac-tools=false" "-Dversion=${source.version}"];
+    zigBuildFlags = ["-Dnix=true" "-Dmac-tools=false"];
     zigCheckFlags = ["-Dnix=true" "-Dmac-tools=false"];
     doCheck = true;
 

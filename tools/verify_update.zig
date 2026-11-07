@@ -16,6 +16,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Io = std.Io;
+const app_facts = @import("app_facts");
 const command = @import("command.zig");
 const feed_server = @import("feed_server.zig");
 const mac_verify = @import("mac_verify.zig");
@@ -38,11 +39,11 @@ const crash_head_lines = 60;
 /// long has had its chance to update, or to die.
 const first_check_past_ms = mac_verify.first_check_ms + 5_000;
 /// After the update is fetched: time to check it, and for the restart.
-const restart_past_ms = mac_verify.restart_idle_ms + 15_000;
+const restart_past_ms = app_facts.restart_idle_ms + 15_000;
 /// After an update: past the new copy's own first check.
 const settled_ms = mac_verify.first_check_ms + 10_000;
 /// Put away, a copy updates once its check and the restart are past.
-const put_away_within_s = (mac_verify.first_check_ms + mac_verify.restart_idle_ms) / 1000 + 60;
+const put_away_within_s = (mac_verify.first_check_ms + app_facts.restart_idle_ms) / 1000 + 60;
 /// Left open, it waits for nobody to be at the Mac.
 const left_open_within_s = mac_verify.away_ms / 1000 + 180;
 
@@ -196,7 +197,7 @@ fn welcome(s: *Session) !void {
 
 fn onboarded(s: *Session) !bool {
     const read = try command.capture(s.arena, s.io, &.{
-        "defaults", "read", mac_verify.domain, mac_verify.onboarded_key,
+        "defaults", "read", mac_verify.domain, app_facts.onboarded_key,
     }, .{});
     return read.ok() and std.mem.eql(u8, read.line(), "1");
 }
@@ -561,8 +562,8 @@ fn install(s: *Session, tag: []const u8) !void {
     try Io.Dir.cwd().deleteTree(s.io, s.cache);
     _ = try command.capture(s.arena, s.io, &.{ "defaults", "delete", mac_verify.domain }, .{});
     try command.run(s.io, &.{
-        "defaults",            "write",   mac_verify.domain,
-        mac_verify.hotkey_key, "-string", mac_verify.hotkey_chord,
+        "defaults",           "write",   mac_verify.domain,
+        app_facts.hotkey_key, "-string", mac_verify.hotkey_chord,
     });
     const unpacked = try unpack(s, tag);
     const unpacked_app = try std.fs.path.join(s.arena, &.{ unpacked, release.bundle_name });
@@ -576,7 +577,7 @@ fn install(s: *Session, tag: []const u8) !void {
 /// Someone past the welcome, as nearly everyone an update reaches is.
 fn returning(s: *Session) !void {
     try command.run(s.io, &.{
-        "defaults", "write", mac_verify.domain, mac_verify.onboarded_key, "-string", "1",
+        "defaults", "write", mac_verify.domain, app_facts.onboarded_key, "-string", "1",
     });
 }
 
