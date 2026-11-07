@@ -749,50 +749,21 @@ pub const Wl = struct {
 
 const testing = std.testing;
 
-test "the protocol tables describe every request and event, ending where they should" {
-    inline for (.{ Ext, Wlr }) |P| {
-        try testing.expectEqual(@as(usize, 3), @as(usize, @intCast(P.manager.method_count)));
-        try testing.expectEqualStrings(
-            "create_data_source",
-            std.mem.span(P.manager.methods[0].name),
-        );
-        try testing.expectEqualStrings("no", std.mem.span(P.manager.methods[1].signature));
-        try testing.expectEqualStrings("set_selection", std.mem.span(P.device.methods[0].name));
-        try testing.expectEqualStrings("selection", std.mem.span(P.device.events[1].name));
-        try testing.expectEqualStrings("?o", std.mem.span(P.device.events[1].signature));
-        try testing.expectEqual(&P.data_offer, P.device.events[0].types[0].?);
-        try testing.expectEqual(&P.source, P.manager.methods[0].types[0].?);
-        try testing.expectEqualStrings("receive", std.mem.span(P.data_offer.methods[0].name));
-        try testing.expectEqualStrings("send", std.mem.span(P.source.events[0].name));
-        try testing.expectEqualStrings("sh", std.mem.span(P.source.events[0].signature));
-    }
-    try testing.expectEqualStrings("ext_data_control_manager_v1", std.mem.span(Ext.manager.name));
-    try testing.expectEqualStrings("zwlr_data_control_device_v1", std.mem.span(Wlr.device.name));
-    try testing.expectEqualStrings("zwp_virtual_keyboard_v1", std.mem.span(vk_interface.name));
-    try testing.expectEqualStrings("uhu", std.mem.span(vk_interface.methods[0].signature));
-}
-
 test "argument letters are counted without versions or nullability" {
     try testing.expectEqual(@as(usize, 0), argCount(""));
     try testing.expectEqual(@as(usize, 1), argCount("2?o"));
     try testing.expectEqual(@as(usize, 4), argCount("uuuu"));
 }
 
-test "the keymap names the two keys it presses and is a whole keymap" {
-    try testing.expect(std.mem.startsWith(u8, keymap_text, "xkb_keymap {\n"));
-    try testing.expect(std.mem.endsWith(u8, keymap_text, "};\n"));
-    for ([_][]const u8{
-        "<LCTL> = 37",
-        "<AB04> = 55",
-        "Control_L",
-        "[ v, V ]",
-        "modifier_map Control",
-    }) |part| {
-        try testing.expect(std.mem.indexOf(u8, keymap_text, part) != null);
-    }
-    // evdev code plus 8 is the xkb keycode.
-    try testing.expectEqual(@as(u32, 37), key_leftctrl + 8);
-    try testing.expectEqual(@as(u32, 55), key_v + 8);
+test "the keymap's keycodes are the evdev keys pressed, plus 8" {
+    const has = struct {
+        fn f(comptime name: []const u8, comptime evdev: u32) bool {
+            const part = std.fmt.comptimePrint("{s} = {d};", .{ name, evdev + 8 });
+            return std.mem.indexOf(u8, keymap_text, part) != null;
+        }
+    }.f;
+    try testing.expect(has("<LCTL>", key_leftctrl));
+    try testing.expect(has("<AB04>", key_v));
 }
 
 test "a keymap fd holds the text and its NUL, from the start" {

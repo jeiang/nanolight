@@ -398,10 +398,15 @@ test "panes are found by name and by the words people use (#12)" {
     // Not for loose letters, nor one letter.
     try t.expectEqual(@as(usize, 0), rank("saf", &here, &out));
     try t.expectEqual(@as(usize, 0), rank("w", &here, &out));
-    try t.expectEqualStrings(url_prefix ++ "com.apple.LoginItems-Settings.extension", urls[13]);
+    // A pane's address is the one beside it in `urls`.
+    try t.expect(rank("login items", &here, &out) > 0);
+    try t.expectEqualStrings(
+        url_prefix ++ "com.apple.LoginItems-Settings.extension",
+        urls[out[0].index],
+    );
     // Not Shell.appex, which every macOS has: that is com.apple.Shell, so
     // it would say nothing about whether this pane is here.
-    try std.testing.expectEqualStrings("GeneralSettings", all[8].appex);
+    try std.testing.expectEqualStrings("GeneralSettings", named("General").appex);
 }
 
 test "every pane's extension is on this Mac's macOS, or is known not to be" {

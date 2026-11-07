@@ -460,18 +460,18 @@ test "a script too big to read isn't run, since its header could ask first" {
     var probe: u8 = 0;
     var r = quiet(&kept, &probe);
     defer r.deinit();
-    var buf: [128]u8 = undefined;
-    const dir = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}/", .{tmp.sub_path});
-    var path_buf: [160]u8 = undefined;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir = try @import("test_tmp.zig").path(&buf, &tmp);
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
 
     // Read whole, it asks before it runs.
-    const small = try std.fmt.bufPrint(&path_buf, "{s}wipe.sh", .{dir});
+    const small = try std.fmt.bufPrint(&path_buf, "{s}/wipe.sh", .{dir});
     r.start(.{ .file = small, .title = "Wipe" });
     try t.expect(kept.open and r.proc.live == null);
     try t.expect(std.mem.indexOf(u8, kept.view.?.detail.body.markdown, "Run Wipe?") != null);
 
     // Unread, it says so and doesn't run.
-    r.start(.{ .file = try std.fmt.bufPrint(&path_buf, "{s}big.sh", .{dir}), .title = "Wipe" });
+    r.start(.{ .file = try std.fmt.bufPrint(&path_buf, "{s}/big.sh", .{dir}), .title = "Wipe" });
     try t.expect(kept.open and r.proc.live == null);
     try t.expectEqualStrings("Couldn't read the script.", kept.note());
     try t.expect(std.mem.indexOf(u8, kept.view.?.detail.body.markdown, "Couldn't read") != null);
@@ -493,9 +493,10 @@ test "a dropdown's pick is kept and shown in the form; a typed value is only kep
     var probe: u8 = 0;
     var r = quiet(&kept, &probe);
     defer r.deinit();
-    var buf: [160]u8 = undefined;
-    const dir = ".zig-cache/tmp/";
-    const path = try std.fmt.bufPrint(&buf, "{s}{s}/hi.sh", .{ dir, tmp.sub_path });
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir = try @import("test_tmp.zig").path(&dir_buf, &tmp);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try std.fmt.bufPrint(&buf, "{s}/hi.sh", .{dir});
     r.start(.{ .file = path, .title = "Greet" });
     const asked = kept.view.?.form.fields;
     try t.expectEqual(@as(usize, 3), asked.len);

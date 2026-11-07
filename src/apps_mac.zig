@@ -189,8 +189,8 @@ test "a scan finds bundles down to its depth, hidden folders passed over" {
     try tmp.dir.createDirPath(t.io, "Suite/Inner.app");
     try tmp.dir.createDirPath(t.io, "Suite/Deeper/Deep.app");
     try tmp.dir.createDirPath(t.io, ".hidden/Hidden.app");
-    var buf: [128]u8 = undefined;
-    const root = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try @import("test_tmp.zig").path(&buf, &tmp);
     for ([_]u8{ 1, app_scan.max_scan_depth }) |depth| {
         var arena: std.heap.ArenaAllocator = .init(t.allocator);
         defer arena.deinit();

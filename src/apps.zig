@@ -199,8 +199,8 @@ test "a second look tells an app installed since from no change (#15)" {
     var tmp = t.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(t.io, "Applications/Alpha.app");
-    var buf: [128]u8 = undefined;
-    const home = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const home = try @import("test_tmp.zig").path(&buf, &tmp);
     var env: Env = .init(t.allocator);
     defer env.deinit();
     try env.put("HOME", home);

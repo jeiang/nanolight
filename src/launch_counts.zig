@@ -175,5 +175,11 @@ test "past the cap, the least opened counts are dropped" {
     defer t.allocator.free(text);
     try t.expectEqual(@as(usize, max), std.mem.count(u8, text, "\n"));
     try t.expect(std.mem.indexOf(u8, text, "Safari") == null);
-    try t.expect(std.mem.startsWith(u8, text, "/gone/521.app\t522\n"));
+    var first: [64]u8 = undefined;
+    // The most opened of those stored leads.
+    try t.expect(std.mem.startsWith(
+        u8,
+        text,
+        try std.fmt.bufPrint(&first, "/gone/{d}.app\t{d}\n", .{ max + 9, max + 10 }),
+    ));
 }

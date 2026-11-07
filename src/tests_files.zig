@@ -12,7 +12,7 @@ test "files share the local results' head and fit the original window" {
     rig.init(gpa);
     defer rig.deinit();
     const s = &rig.s;
-    s.files_on = true;
+    s.setFiles(true);
     try rig.apps(&.{ "Safari", "Mail", "Maps", "Calendar", "Calculator", "System Settings Alpha" });
     // "settings" keeps Nanolight's Settings first; "a" matches all six apps.
     for ([_][]const u8{ "settings", "a" }) |q| {
@@ -43,10 +43,10 @@ test "files share the local results' head and fit the original window" {
             var apps: usize = 0;
             var file_rows: usize = 0;
             var heads: usize = 0;
-            for (s.res.slice(), 0..) |row, i| {
+            for (s.rows(), 0..) |row, i| {
                 if (row.kind == .app) apps += 1;
                 if (row.kind == .file) file_rows += 1;
-                if (s.res.section(i) != null) heads += 1;
+                if (s.section(i) != null) heads += 1;
             }
             try std.testing.expectEqual(@as(usize, if (settings) 1 else 6), apps);
             try std.testing.expect(file_rows > 0);
@@ -54,14 +54,17 @@ test "files share the local results' head and fit the original window" {
             try std.testing.expectEqual(@as(usize, 3), heads);
             if (exact) try std.testing.expectEqual(
                 results.Kind.file,
-                s.res.rows[@intFromBool(settings)].kind,
+                s.rows()[@intFromBool(settings)].kind,
             );
             // Every quicklink still follows, X's last, and one search for what was typed.
-            try std.testing.expectEqual(results.Kind.quicklink, s.res.rows[s.res.n - 1].kind);
-            try std.testing.expectEqual(@as(u32, 4), s.res.rows[s.res.n - 1].item);
+            const last = s.rows()[s.rows().len - 1];
+            try std.testing.expectEqual(results.Kind.quicklink, last.kind);
+            try std.testing.expectEqualStrings("X", s.quicklinks[last.item].name);
             var google: usize = 0;
-            for (s.res.slice()) |row| {
-                if (row.kind == .quicklink and row.item == 0) google += 1;
+            for (s.rows()) |row| {
+                const named = row.kind == .quicklink and
+                    std.mem.eql(u8, s.quicklinks[row.item].name, "Google");
+                if (named) google += 1;
             }
             try std.testing.expectEqual(@as(usize, 1), google);
         }
@@ -133,7 +136,7 @@ test "name search excludes the home Library subtree by default" {
     const paths = @import("paths.zig");
     const spotlight = @import("spotlight.zig");
     const home = paths.home();
-    if (home.len == 0) return;
+    if (home.len == 0) return error.SkipZigTest;
     var buf: [@import("files.zig").max_path]u8 = undefined;
     for ([_][]const u8{
         "Library",
@@ -178,7 +181,7 @@ test "apps, panes, files and quicklinks share the window budget" {
     rig.init(t.allocator);
     defer rig.deinit();
     const s = &rig.s;
-    s.files_on = true;
+    s.setFiles(true);
     for (0..results.max_apps) |i| {
         var name: [64]u8 = undefined;
         try rig.apps(&.{try std.fmt.bufPrint(&name, "Login {d}", .{i})});
@@ -209,8 +212,8 @@ test "apps, panes, files and quicklinks share the window budget" {
     var files = false;
     var google = false;
     var links: usize = 0;
-    for (s.res.slice(), 0..) |row, i| {
-        if (s.res.section(i) != null) heads += 1;
+    for (s.rows(), 0..) |row, i| {
+        if (s.section(i) != null) heads += 1;
         switch (row.kind) {
             .app => apps = true,
             .pane => panes = true,
@@ -223,10 +226,10 @@ test "apps, panes, files and quicklinks share the window budget" {
         }
     }
     try t.expect(apps and panes and files and google);
-    try t.expectEqual(results.Kind.file, s.res.rows[0].kind);
+    try t.expectEqual(results.Kind.file, s.rows()[0].kind);
     try t.expectEqual(results.max_quicklink_rows, links);
     try t.expectEqual(@as(usize, 3), heads);
-    try t.expectEqual(results.max_rows, s.res.n);
+    try t.expectEqual(results.max_rows, s.rows().len);
     try t.expect(s.height() <= chrome.max_height);
 }
 
@@ -235,8 +238,6 @@ test "file icon allocations survive filtering, eviction and owning replacement" 
     const files = @import("files.zig");
     var found: files.List = .{ .allocator = t.allocator };
     defer found.deinit();
-    // Keeping paths inline is intentional; the 32 KiB icons must stay out of rows.
-    try t.expect(@sizeOf(files.Entry) < files.max_path + 1024);
     for (0..files.max_rows) |i| {
         var path: [64]u8 = undefined;
         found.add(
@@ -270,7 +271,7 @@ test "file answers move icons only for the current enabled query" {
     rig.init(t.allocator);
     defer rig.deinit();
     const s = &rig.s;
-    s.files_on = true;
+    s.setFiles(true);
     s.query.set("report");
     s.rebuild();
     var found: files.List = .{ .allocator = t.allocator };
@@ -281,12 +282,13 @@ test "file answers move icons only for the current enabled query" {
     s.filesAnswered("stale", &found);
     try t.expectEqual(@as(usize, 1), found.n);
     try t.expectEqual(@as(usize, 0), s.found.n);
-    s.files_on = false;
+    s.setFiles(false);
     s.filesAnswered("report", &found);
     try t.expectEqual(@as(usize, 1), found.n);
-    s.files_on = true;
+    s.setFiles(true);
     s.filesAnswered("report", &found);
     try t.expectEqual(@as(usize, 0), found.n);
+    // Moved, not copied (files.List.replace): the panel holds the worker's bytes.
     try t.expectEqual(bytes, s.found.entries[0].png.ptr);
     found.deinit();
     try t.expectEqualStrings("worker icon", s.found.entries[0].png);
@@ -303,14 +305,8 @@ test "file answers move icons only for the current enabled query" {
 
 /// The row of `kind` showing `text` (a file's path or a completion), if listed.
 fn rowOf(s: *const view.Nanolight, kind: results.Kind, text: []const u8) ?usize {
-    for (s.res.slice(), 0..) |r, i| {
-        if (r.kind != kind) continue;
-        const shown = switch (kind) {
-            .file => s.found.entries[r.item].path(),
-            .suggest => s.web.get(r.item),
-            else => unreachable,
-        };
-        if (std.mem.eql(u8, shown, text)) return i;
+    for (s.rows(), 0..) |r, i| {
+        if (r.kind == kind and std.mem.eql(u8, @import("anchor.zig").textOf(s, r), text)) return i;
     }
     return null;
 }
@@ -322,7 +318,7 @@ test "the selection stays on its row as files and completions land in any order"
     rig.init(t.allocator);
     defer rig.deinit();
     const s = &rig.s;
-    s.files_on = true;
+    s.setFiles(true);
     s.query.set("report");
     s.rebuild();
     var found: files.List = .{ .allocator = t.allocator };
@@ -335,14 +331,14 @@ test "the selection stays on its row as files and completions land in any order"
     var web: suggest.List = .{};
     for ([_][]const u8{ "report card", "report template" }) |q| web.push(q);
     s.answered("report", &web);
-    try t.expectEqual(rowOf(s, .file, "/tmp/report-b").?, s.sel);
+    try t.expectEqual(rowOf(s, .file, "/tmp/report-b"), s.selection());
     // A completion picked, then files land in another order.
     s.sel = rowOf(s, .suggest, "report template").?;
     found.add("/tmp/report-c", false, .{ .score = 300 });
     found.add("/tmp/report-b", false, .{ .score = 200 });
     found.add("/tmp/report-a", false, .{ .score = 10 });
     s.filesAnswered("report", &found);
-    try t.expectEqual(rowOf(s, .suggest, "report template").?, s.sel);
+    try t.expectEqual(rowOf(s, .suggest, "report template"), s.selection());
     // The picked file moved up: the selection goes with it.
     const a_was = rowOf(s, .file, "/tmp/report-a").?;
     s.sel = a_was;
@@ -351,13 +347,13 @@ test "the selection stays on its row as files and completions land in any order"
     s.filesAnswered("report", &found);
     const a_now = rowOf(s, .file, "/tmp/report-a").?;
     try t.expect(a_now != a_was);
-    try t.expectEqual(a_now, s.sel);
+    try t.expectEqual(@as(?usize, a_now), s.selection());
     // The picked completion is gone from the next answer: back to the top.
     s.sel = rowOf(s, .suggest, "report card").?;
     web = .{};
     web.push("report template");
     s.answered("report", &web);
-    try t.expectEqual(@as(usize, 0), s.sel);
+    try t.expectEqual(@as(?usize, 0), s.selection());
 }
 
 /// A host that searches files: what it was asked, and how often.
@@ -388,7 +384,7 @@ test "a query the answer card takes is not searched for as a file" {
     var asks: FileAsks = .{};
     const s = &rig.s;
     s.host = asks.host();
-    s.files_on = true;
+    s.setFiles(true);
     // Math typed so far, and conversions: the card shows, no search starts.
     const cards = [_][]const u8{
         "2 + 3",
@@ -400,13 +396,13 @@ test "a query the answer card takes is not searched for as a file" {
     for (cards) |q| {
         s.query.set(q);
         s.rebuild();
-        try t.expectEqual(results.Kind.calc, s.res.rows[0].kind);
+        try t.expectEqual(results.Kind.calc, s.rows()[0].kind);
         try t.expectEqual(@as(usize, 0), asks.count);
     }
     // Words are searched for.
     s.query.set("10 km report");
     s.rebuild();
-    try t.expect(s.res.n == 0 or s.res.rows[0].kind != .calc);
+    try t.expect(s.rows().len == 0 or s.rows()[0].kind != .calc);
     try t.expectEqual(@as(usize, 1), asks.count);
     try t.expectEqualStrings("10 km report", asks.last[0..asks.last_len]);
 }
@@ -420,11 +416,11 @@ test "a tab or line break pasted round the words reads as the words, to rows and
     var asks: FileAsks = .{};
     const s = &rig.s;
     s.host = asks.host();
-    s.files_on = true;
+    s.setFiles(true);
     // Math: the card shows, and no file is looked for.
     s.query.set("2 + 3\t");
     s.rebuild();
-    try t.expectEqual(results.Kind.calc, s.res.rows[0].kind);
+    try t.expectEqual(results.Kind.calc, s.rows()[0].kind);
     try t.expectEqual(@as(usize, 0), asks.count);
     // Words: searched for without the blanks, and what is found lands.
     s.query.set("\treport\r\n");

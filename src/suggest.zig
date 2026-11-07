@@ -249,6 +249,11 @@ test "a shorter answer stands in, cut to what still fits" {
         var b: [16]u8 = undefined;
         c.put(std.fmt.bufPrint(&b, "q{d}", .{i}) catch unreachable, &said);
     }
-    try std.testing.expect(!c.lookup("liquid gl", &out) or out.n == 0);
-    try std.testing.expect(c.lookup("q63", &out));
+    try std.testing.expect(!c.lookup("liquid gl", &out));
+    try std.testing.expectEqual(@as(usize, 0), out.n);
+    var last: [16]u8 = undefined;
+    try std.testing.expect(c.lookup(
+        std.fmt.bufPrint(&last, "q{d}", .{Cache.slots - 1}) catch unreachable,
+        &out,
+    ));
 }

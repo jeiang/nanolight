@@ -126,7 +126,7 @@ pub const Probe = struct {
 
 /// The selected row is the first quicklink: the search for what was typed.
 pub fn onFirstQuicklink(s: *const view.Nanolight) bool {
-    const r = s.res.rows[s.sel];
+    const r = s.selected() orelse return false;
     return r.kind == .quicklink and r.item == 0;
 }
 
@@ -194,6 +194,9 @@ pub const Web = struct {
         w.page_len = u.len;
     }
 };
+
+/// What `Prefs` says of sync: Settings shows the host's words as they are.
+pub const sync_status = "Sync: as the test host says";
 
 /// A host that records what Settings asked it to do.
 pub const Prefs = struct {
@@ -303,7 +306,7 @@ pub const Prefs = struct {
         return p.clip_clear_ok;
     }
     fn syncStatus(_: *anyopaque) []const u8 {
-        return @import("account_live.zig").off_text;
+        return sync_status;
     }
     fn ver(_: *anyopaque) []const u8 {
         return @import("build_options").version;

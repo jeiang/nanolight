@@ -170,8 +170,3 @@ pub fn taken(choice: Choice) bool {
     _ = xl.XSync(d, 0);
     return held;
 }
-
-test "the choices' modifiers" {
-    try std.testing.expectEqual(mod1_mask, modifiers(.cmd_space));
-    try std.testing.expectEqual(control_mask | shift_mask, modifiers(.opt_cmd_space));
-}

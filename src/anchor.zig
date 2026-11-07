@@ -24,8 +24,7 @@ pub const Anchor = struct {
     /// The row selected in `s`, if any.
     pub fn of(s: *const Nanolight) Anchor {
         var a: Anchor = .{};
-        if (s.sel >= s.res.n) return a;
-        const r = s.res.rows[s.sel];
+        const r = s.selected() orelse return a;
         a.row = r;
         const text = textOf(s, r);
         assert(text.len <= max_text);
@@ -54,7 +53,7 @@ pub const Anchor = struct {
 };
 
 /// The file's path or the completion's words; empty for the rest.
-fn textOf(s: *const Nanolight, r: Row) []const u8 {
+pub fn textOf(s: *const Nanolight, r: Row) []const u8 {
     const identity = results.providers.get(r.kind).identity;
     return switch (identity) {
         .path => s.found.entries[r.item].path(),

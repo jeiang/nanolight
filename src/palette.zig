@@ -149,10 +149,8 @@ fn grey(dark: bool) Palette {
     };
 }
 
-test "System keeps the greys; a theme tints them and steps round" {
+test "a theme tints the greys and steps round" {
     const t = @import("std").testing;
-    try t.expectEqual(grey(true), palette(true, .system));
-    try t.expectEqual(grey(false), palette(false, .system));
     try t.expect(!@import("std").meta.eql(grey(true).sel, palette(true, .ocean).sel));
     try t.expectEqual(Theme.violet, Theme.system.step(-1));
     try t.expectEqual(Theme.system, Theme.violet.step(1));

@@ -146,6 +146,12 @@ test "the runtime flag is read from codesign's flags line, as grep 'flags=.*runt
     const info = "Identifier=x\nCodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1\n";
     const flags = lineWith(info, "flags=").?;
     try std.testing.expect(hasAfter(flags, "flags=", "runtime"));
-    try std.testing.expect(!hasAfter("flags=0x0(none) runtime_not_here", "flags=", "kernel"));
+    try std.testing.expect(!hasAfter(
+        "CodeDirectory v=20400 size=1 flags=0x0(none) hashes=1",
+        "flags=",
+        "runtime",
+    ));
+    // Only after the flags: grep's `flags=.*runtime` reads it no other way.
+    try std.testing.expect(!hasAfter("runtime=1 flags=0x0(none)", "flags=", "runtime"));
     try std.testing.expectEqual(null, lineWith(info, "Timestamp="));
 }

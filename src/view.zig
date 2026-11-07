@@ -26,6 +26,7 @@ const rates_table = @import("rates_table.zig");
 const search = @import("search.zig");
 const settings_view = @import("settings_view.zig");
 const SettingsHost = @import("settings_host.zig").SettingsHost;
+const key_choice = @import("keys.zig");
 const Row = results.Row;
 const Kind = results.Kind;
 const Target = results.Target;
@@ -321,6 +322,31 @@ pub const Nanolight = struct {
                 if (s.screen == .script) s.leave(.closed);
             },
         }
+    }
+
+    /// The rows listed, top first.
+    pub fn rows(s: *const Nanolight) []const Row {
+        return s.res.slice();
+    }
+
+    /// The head over row `i`, where a section starts.
+    pub fn section(s: *const Nanolight, i: usize) ?[]const u8 {
+        return s.res.section(i);
+    }
+
+    /// Where the selection is among `rows`; null when none are listed.
+    pub fn selection(s: *const Nanolight) ?usize {
+        return if (s.sel < s.res.n) s.sel else null;
+    }
+
+    pub fn selected(s: *const Nanolight) ?Row {
+        const i = s.selection() orelse return null;
+        return s.res.rows[i];
+    }
+
+    /// A key the host's recorder caught for Settings' shortcut.
+    pub fn recorded(s: *Nanolight, r: key_choice.Recorded) void {
+        s.settings_ui.took(s, r);
     }
 
     pub fn height(s: *const Nanolight) f32 {

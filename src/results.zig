@@ -718,7 +718,9 @@ test "Google's completions go with the quicklink that is Google, wherever it is"
     try t.expectEqual(@as(?u16, 2), r.google);
     try t.expectEqual(Kind.suggest, r.rows[3].kind);
     try t.expectEqual(@as(usize, 5), r.n);
-    try t.expectEqualStrings("Quicklinks", r.section(3) orelse "Quicklinks");
+    // The completions sit under Google's head, with none of their own.
+    try t.expect(r.section(0) != null);
+    try t.expect(r.section(3) == null and r.section(4) == null);
     r.build(.{ .words = "pizza", .from = only(&ix), .quicklinks = ql[0..2], .completions = words });
     try t.expect(r.google == null);
     try t.expectEqual(@as(usize, 2), r.n);

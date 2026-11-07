@@ -270,7 +270,7 @@ pub const App = struct {
 
     fn recorded(ctx: *anyopaque, r: keys.Recorded) void {
         const a = from(ctx);
-        a.s.settings_ui.took(a.s, r);
+        a.s.recorded(r);
         a.redraw();
     }
 

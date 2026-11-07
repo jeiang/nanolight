@@ -333,10 +333,13 @@ test "a merge that outgrows the stored limit sheds apps and stays readable" {
     defer arena.deinit();
     const a = arena.allocator();
     const tokens = try testTokens(a);
-    const pad = try a.alloc(u8, 480);
-    @memset(pad, 'x');
+    // Control bytes are sent escaped, six bytes each: a few PUTs' apps,
+    // each body under the request limit, merge past the stored one.
+    const pad = try a.alloc(u8, 400);
+    @memset(pad, 0x01);
+    const per_put = 100;
     for (0..3) |k| {
-        const launches = try a.alloc(settings.Launch, 450);
+        const launches = try a.alloc(settings.Launch, per_put);
         for (launches, 0..) |*l, i| l.* = .{
             .name = "App",
             .path = try std.fmt.allocPrint(a, "/Applications/{d}/{d:0>3}/{s}", .{ k, i, pad }),
@@ -362,6 +365,12 @@ test "a merge that outgrows the stored limit sheds apps and stays readable" {
             .{ .method = "GET", .path = protocol.path, .authorization = bearer },
         );
         try testing.expectEqual(@as(u16, 200), got.status);
+        const kept = settings.decode(a, got.body).?;
+        try testing.expectEqualStrings("cmd_space", kept.hotkey);
+        try testing.expect(kept.launches.len > 0);
+        // All of them, until they no longer fit.
+        if (k < 2) try testing.expectEqual(per_put * (k + 1), kept.launches.len);
+        if (k == 2) try testing.expect(kept.launches.len < per_put * 3);
     }
 }
 

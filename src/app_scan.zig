@@ -178,8 +178,8 @@ test "a walk looks in folders down to its depth, without recursion" {
     var tmp = t.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(t.io, "a/b/c");
-    var buf: [128]u8 = undefined;
-    const root = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try @import("test_tmp.zig").path(&buf, &tmp);
     const Seen = struct {
         names: [4][]const u8 = undefined,
         n: usize = 0,

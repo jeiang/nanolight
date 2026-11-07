@@ -433,8 +433,8 @@ test "a folder named in config.toml is scanned for script commands, a folder dow
     try tmp.dir.createDirPath(t.io, "sub/old");
     try tmp.dir.writeFile(t.io, .{ .sub_path = "sub/near.sh", .data = header ++ "One Down\n" });
     try tmp.dir.writeFile(t.io, .{ .sub_path = "sub/old/far.sh", .data = header ++ "Two Down\n" });
-    var buf: [128]u8 = undefined;
-    const path = try std.fmt.bufPrint(&buf, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try @import("test_tmp.zig").path(&buf, &tmp);
     var l: List = .init(t.allocator);
     defer l.deinit();
     scanDir(&l, &.{}, path);

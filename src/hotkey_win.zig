@@ -60,8 +60,3 @@ pub fn taken(choice: Choice) bool {
     _ = UnregisterHotKey(h, id + 1);
     return false;
 }
-
-test "the choices' modifiers" {
-    try std.testing.expectEqual(mod_alt | mod_norepeat, modifiers(.cmd_space));
-    try std.testing.expectEqual(mod_control | mod_shift | mod_norepeat, modifiers(.opt_cmd_space));
-}

@@ -914,11 +914,12 @@ test "a relative config path still gives absolute script command dirs" {
         .{ .sub_path = "a.toml", .data = "[script_commands]\ndirs = [\"scripts\"]\n" },
     );
     const a = arena.allocator();
-    const paths = [_][]const u8{
-        try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path, "a.toml" }),
-    };
-    const c = loadFrom(a, testing.io, &paths, m.store()).file;
     const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
+    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, ".", a);
+    const relative = try std.fs.path.relativeAlloc(a, cwd, null, cwd, dir);
+    const paths = [_][]const u8{try std.fs.path.join(a, &.{ relative, "a.toml" })};
+    try testing.expect(!std.fs.path.isAbsolute(paths[0]));
+    const c = loadFrom(a, testing.io, &paths, m.store()).file;
     try testing.expectEqualStrings(
         try std.fs.path.join(a, &.{ dir, "scripts" }),
         c.script_commands.dirs[0],

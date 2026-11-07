@@ -60,8 +60,7 @@ pub fn rebuild(s: *Nanolight) void {
 /// The file selected while a path is typed, its place among those found:
 /// Tab takes its path (`takeFile`) rather than the faint completion.
 pub fn tabFile(s: *const Nanolight) ?u32 {
-    if (s.sel >= s.res.n) return null;
-    const r = s.res.rows[s.sel];
+    const r = s.selected() orelse return null;
     if (r.kind != .file or !paths.isPath(s.query.words())) return null;
     return r.item;
 }

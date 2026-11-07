@@ -100,6 +100,21 @@ fn opened(t: *ui.Tester, s: *view.Nanolight) void {
     t.settle(1);
 }
 
+/// Whether the footer shows `note`: whole, or cut to the panel's width.
+fn showsNote(t: *ui.Tester, note: []const u8) bool {
+    const cut = "…";
+    for (t.ctx.nodes.items) |n| switch (n.content) {
+        .text => |tx| {
+            if (std.mem.eql(u8, tx.str, note)) return true;
+            if (!std.mem.endsWith(u8, tx.str, cut)) continue;
+            const kept = std.mem.trimEnd(u8, tx.str[0 .. tx.str.len - cut.len], " ");
+            if (kept.len > "Copied. ".len and std.mem.startsWith(u8, note, kept)) return true;
+        },
+        else => {},
+    };
+    return false;
+}
+
 test "the row appears for clip and clipboard, only with a host, and opens the screen" {
     const gpa = testing.allocator;
     var f: Fake = .{};
@@ -161,11 +176,13 @@ test "the screen lists newest first with type, app and time, and the selection's
     // Down to the image: its size is the detail.
     try testing.expect(t.shortcut(.{ .key = S.down }));
     try testing.expect(t.hasText("Image, 800 × 600 pixels, 3 bytes"));
-    // ^J and ^K move too.
+    // ^J and ^K move too: ⌘↩ copies the one they land on.
     try testing.expect(t.shortcut(.{ .key = 'j', .ctrl = true }));
-    try testing.expectEqual(@as(usize, 2), s.clip_ui.sel);
+    try testing.expect(t.shortcut(.{ .key = S.enter, .cmd = true }));
+    try testing.expectEqual(f.store.at(2).hash, f.copied.?);
     try testing.expect(t.shortcut(.{ .key = 'k', .ctrl = true }));
-    try testing.expectEqual(@as(usize, 1), s.clip_ui.sel);
+    try testing.expect(t.shortcut(.{ .key = S.enter, .cmd = true }));
+    try testing.expectEqual(f.store.at(1).hash, f.copied.?);
     // The screen fits the panel.
     try testing.expect(s.height() <= chrome.max_height);
 }
@@ -184,11 +201,11 @@ test "typing searches text, file names and apps; Esc closes the screen and the p
     try rig.mount(.{ .host = f.host() });
     opened(t, s);
     support.press(t, &.{.{ .insert = "report" }});
-    try testing.expectEqual(@as(usize, 1), s.clip_ui.n);
-    try testing.expect(t.hasText("report.pdf") and !t.hasText("hello world"));
+    try testing.expect(t.hasText("report.pdf"));
+    try testing.expect(!t.hasText("hello world") and !t.hasText("Image 800 × 600"));
     support.retype(t, "preview");
-    try testing.expectEqual(@as(usize, 1), s.clip_ui.n);
     try testing.expect(t.hasText("Image 800 × 600"));
+    try testing.expect(!t.hasText("hello world") and !t.hasText("report.pdf"));
     support.retype(t, "nothing like it");
     try testing.expect(t.hasText("No matches."));
     // Esc leaves the screen and hides the panel, the query cleared for the rows.
@@ -229,7 +246,6 @@ test "Return pastes the selection, ⌘↩ copies it, ⌘⌫ deletes it" {
     try testing.expect(t.shortcut(.{ .key = 0x7f, .cmd = true }));
     try testing.expectEqual(@as(usize, 3), f.store.len());
     try testing.expect(f.store.get(second) == null);
-    try testing.expectEqual(@as(usize, 3), s.clip_ui.n);
     t.settle(1);
     try testing.expect(t.hasText("Deleted"));
     try testing.expect(!t.hasText("Image 800 × 600"));
@@ -248,14 +264,20 @@ test "a paste that could only copy says why in the footer, and the panel stays" 
     const t = &rig.t;
     try rig.mount(.{ .host = f.host() });
     opened(t, s);
-    for ([_]clipboard.PasteResult{ .copied_no_permission, .copied_unsupported, .failed }) |r| {
-        f.result = r;
+    for ([_]struct { clipboard.PasteResult, []const u8 }{
+        .{
+            .copied_no_permission,
+            "Copied. Allow Nanolight in Privacy & Security > Accessibility to paste.",
+        },
+        .{ .copied_unsupported, "Copied. Pasting is not supported on this system yet." },
+        .{ .failed, "Could not write the clipboard." },
+    }) |case| {
+        f.result = case[0];
         f.hidden = false;
         support.press(t, &.{.{ .command = .insert_newline }});
         try testing.expect(!f.hidden and s.screen == .clipboard);
-        try testing.expectEqualStrings(clipboard_view.note(r), s.clip_ui.note);
+        try testing.expect(showsNote(t, case[1]));
     }
-    try testing.expect(t.hasText(clipboard_view.note(.failed)));
     // With paste_plain_text off, Return is a copy.
     f.store.cfg.paste_plain_text = false;
     f.copied = null;
@@ -304,14 +326,14 @@ test "the screen survives a hide inside pop_to_root_seconds, search text include
     const t = &rig.t;
     try rig.mount(.{ .host = f.host() });
     opened(t, s);
-    s.query.set("acme");
+    support.press(t, &.{.{ .insert = "acme" }});
     s.hid(1000);
     try testing.expect(!s.show(1000 + s.away.pop_after));
     try testing.expect(s.screen == .clipboard);
+    try testing.expectEqualStrings("acme", s.query.text());
     // Other keys delete too: Ctrl+Backspace on GTK, Ctrl+D on Windows.
     const before = f.store.len();
-    s.query.clear();
-    t.settle(1);
+    support.retype(t, "");
     try testing.expect(t.shortcut(.{ .key = 0x08, .cmd = true }));
     try testing.expect(t.shortcut(.{ .key = 'd', .cmd = true }));
     try testing.expectEqual(before - 2, f.store.len());
@@ -340,11 +362,9 @@ test "an entry added while the screen is open appears at once" {
     try testing.expect(t.hasText("fresh copy"));
     try testing.expect(t.hasText("Text · firefox · just now"));
     // The selection stayed on the image, which moved down a row.
-    try testing.expectEqual(@as(usize, 2), s.clip_ui.sel);
-    try testing.expectEqual(
-        image,
-        f.store.at(s.clip_ui.found[s.clip_ui.sel].index).hash,
-    );
+    try testing.expect(t.shortcut(.{ .key = S.enter, .cmd = true }));
+    try testing.expectEqual(image, f.copied.?);
+    try testing.expect(t.hasText("Image, 800 × 600 pixels, 3 bytes"));
 }
 
 test "Settings: the clipboard rows toggle recording and clear the history" {

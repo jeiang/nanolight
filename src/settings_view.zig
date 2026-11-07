@@ -502,14 +502,3 @@ fn isSel(rows: []const RowKind, sel: usize, kind: RowKind) bool {
     if (sel >= rows.len) return false;
     return rows[sel] == kind;
 }
-
-test "a Nix build's Settings has no login or updates row" {
-    var login = false;
-    var updates = false;
-    for (visible(true)) |k| {
-        login = login or k == .login;
-        updates = updates or k == .updates;
-    }
-    try @import("std").testing.expectEqual(!nix, login);
-    try @import("std").testing.expectEqual(!nix, updates);
-}

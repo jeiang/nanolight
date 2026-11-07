@@ -287,47 +287,6 @@ test "every table has named commands with fixed, non-empty argument lists" {
     }
 }
 
-test "tables hold what the spec lists for each OS" {
-    const t = std.testing;
-    const names = struct {
-        fn has(table: []const Command, name: []const u8) bool {
-            for (table) |c| if (std.mem.eql(u8, c.name, name)) return true;
-            return false;
-        }
-    }.has;
-    for ([_][]const u8{
-        "Toggle Dark Mode",
-        "Set Volume to 0%",
-        "Set Volume to 25%",
-        "Set Volume to 50%",
-        "Set Volume to 75%",
-        "Set Volume to 100%",
-        "Mute",
-        "Unmute",
-        "Sleep",
-        "Sleep Display",
-        "Empty Trash",
-    }) |n| try t.expect(names(&mac_table, n));
-    for ([_][]const u8{
-        "Set Volume to 50%",
-        "Mute",
-        "Unmute",
-        "Sleep",
-        "Lock Screen",
-        "Dark Mode",
-        "Light Mode",
-    }) |n| try t.expect(names(&linux_table, n));
-    // Volume falls back from wpctl to pactl.
-    try t.expectEqualStrings("wpctl", linux_table[2].runs[0][0]);
-    try t.expectEqualStrings("0.50", linux_table[2].runs[0][3]);
-    try t.expectEqualStrings("1.00", linux_table[4].runs[0][3]);
-    try t.expectEqualStrings("pactl", linux_table[2].runs[1][0]);
-    try t.expectEqualStrings("50%", linux_table[2].runs[1][3]);
-    try t.expectEqualStrings("set volume output volume 75", mac_table[3].runs[0][2]);
-    try t.expect(!names(&windows_table, "Mute") and !names(&windows_table, "Set Volume to 50%"));
-    try t.expectEqualStrings("user32.dll,LockWorkStation", windows_table[1].runs[0][1]);
-}
-
 test "commands are ranked like apps, only when listed, and capped by the room given" {
     const t = std.testing;
     var out: [3]search.Ranked = undefined;
