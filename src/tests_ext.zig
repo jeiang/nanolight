@@ -275,8 +275,10 @@ test "a script's output shows every line, and Escape closes it and the panel" {
     try std.testing.expect(r.t.hasText("Linux 6.17 on x86_64"));
     try std.testing.expect(r.t.hasText("Up: 3 min"));
     try std.testing.expect(r.t.hasText("/dev/vda1 10G 2G"));
-    // Its lines are as tall as its height says.
-    try std.testing.expectEqual(rv.output_line_h, r.t.findText("Up: 3 min").?.h);
+    // Its lines are as tall as its height says, in the Mac's font: elsewhere
+    // the font is whichever is installed.
+    if (@import("builtin").os.tag == .macos)
+        try std.testing.expectEqual(rv.output_line_h, r.t.findText("Up: 3 min").?.h);
     _ = r.t.shortcut(.{ .key = ui.Shortcut.escape });
     try std.testing.expect(r.heard(.pop) and r.hidden and r.s.screen != .script);
     // The search has the keys again.

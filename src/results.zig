@@ -785,13 +785,15 @@ test "a full list of apps and files keeps every quicklink, files with no head of
     var counts = std.enums.EnumArray(Kind, usize).initFill(0);
     for (r.slice()) |row| counts.set(row.kind, counts.get(row.kind) + 1);
     try t.expect(counts.get(.app) > 0);
-    try t.expect(counts.get(.app) + counts.get(.pane) + counts.get(.command) <= local);
+    const others = counts.get(.app) + counts.get(.pane) + counts.get(.command);
+    try t.expect(others <= local);
     try t.expectEqual(@as(usize, max_quicklink_rows), counts.get(.quicklink));
     try t.expectEqual(@as(usize, 3), heads(&r));
     const last = r.rows[r.n - 1];
     try t.expectEqual(Kind.quicklink, last.kind);
     try t.expectEqualStrings("X", in.quicklinks[last.item].name);
-    // A path typed out leads; names that match worse give way to the apps.
+    // A path typed out leads; names that match worse give way to the apps,
+    // and fill what room they leave (none on the Mac, whose panes match too).
     var found: files.List = .{ .allocator = t.allocator };
     defer found.deinit();
     try hoFiles(&found);
@@ -800,7 +802,9 @@ test "a full list of apps and files keeps every quicklink, files with no head of
     counts = .initFill(0);
     for (r.slice()) |row| counts.set(row.kind, counts.get(row.kind) + 1);
     try t.expectEqual(Kind.file, r.rows[0].kind);
-    try t.expectEqual(@as(usize, 1), counts.get(.file));
+    const kept: usize = @min(others, local - 1);
+    try t.expectEqual(kept, counts.get(.app) + counts.get(.pane) + counts.get(.command));
+    try t.expectEqual(local - kept, counts.get(.file));
     try t.expectEqual(@as(usize, max_quicklink_rows), counts.get(.quicklink));
     try t.expectEqual(@as(usize, 3), heads(&r));
     r.build(input(&ix, "2+2", &.{}));

@@ -109,6 +109,8 @@ fn opened(t: *ui.Tester, s: *view.Nanolight) void {
 }
 
 /// Whether the footer shows `note`: whole, or cut to the panel's width.
+/// How much a cut keeps is the fonts': with none installed (a Nix build's
+/// sandbox), nothing but the "…".
 fn showsNote(t: *ui.Tester, note: []const u8) bool {
     const cut = "…";
     for (t.ctx.nodes.items) |n| switch (n.content) {
@@ -116,7 +118,7 @@ fn showsNote(t: *ui.Tester, note: []const u8) bool {
             if (std.mem.eql(u8, tx.str, note)) return true;
             if (!std.mem.endsWith(u8, tx.str, cut)) continue;
             const kept = std.mem.trimEnd(u8, tx.str[0 .. tx.str.len - cut.len], " ");
-            if (kept.len > "Copied. ".len and std.mem.startsWith(u8, note, kept)) return true;
+            if (std.mem.startsWith(u8, note, kept)) return true;
         },
         else => {},
     };
@@ -284,6 +286,8 @@ test "a paste that could only copy says why in the footer, and the panel stays" 
         f.hidden = false;
         support.press(t, &.{.{ .command = .insert_newline }});
         try testing.expect(!f.hidden and s.screen == .clipboard);
+        // How much of it fits is the fonts', so its words are checked here.
+        try testing.expectEqualStrings(case[1], s.clip_ui.note);
         try testing.expect(showsNote(t, case[1]));
     }
     // Copy-only (`paste_plain_text` off): Return is a copy.
@@ -392,14 +396,17 @@ test "Settings: the clipboard rows toggle recording and clear the history" {
     const t = &rig.t;
     try rig.mount(.{ .host = host, .screen = .settings });
     try testing.expect(t.hasText("Record Copied Items"));
-    // Its section is as tall as the height it adds says.
+    // Its section is as tall as the height it adds says. The heading's line
+    // is measured in the Mac's system font; elsewhere it is whichever font
+    // is installed, and only the rest of the sum is known.
+    const mac = @import("builtin").os.tag == .macos;
     const head = t.findText("Clipboard History").?;
-    const next = t.findText(if (@import("builtin").os.tag == .macos)
-        "Sync Across Macs"
-    else
-        "Sync Across Computers").?;
-    try testing.expectEqual(settings_view.heading_h, head.h);
-    try testing.expectEqual(settings_view.clip_height, next.y - head.y);
+    const next = t.findText(if (mac) "Sync Across Macs" else "Sync Across Computers").?;
+    if (mac) try testing.expectEqual(settings_view.heading_h, head.h);
+    try testing.expectEqual(
+        settings_view.clip_height - settings_view.heading_h + head.h,
+        next.y - head.y,
+    );
     try t.clickText("Record Copied Items");
     t.settle(1);
     try testing.expectEqual(false, prefs.clip_on);
