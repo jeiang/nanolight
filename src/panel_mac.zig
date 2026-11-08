@@ -200,6 +200,10 @@ fn backdrop(w: *nanoui.Window, radius: f64) ?objc.Object {
     objc.release(v);
     // In a flipped host view, from the top; the window never resizes.
     objc.msg(void, v, "setAutoresizingMask:", .{@as(objc.NSUInteger, 0)});
+    // No height until a frame shows the panel over it (`afterFrame`):
+    // `attachBackdrop` sized it to the window, which then stood empty
+    // while the first showing drew its first frame.
+    objc.msg(void, v, "setFrame:", .{glassFrame(0)});
     return v;
 }
 
