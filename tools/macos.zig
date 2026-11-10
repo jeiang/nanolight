@@ -10,7 +10,7 @@ const command = @import("command.zig");
 const release = @import("release.zig");
 
 /// The team every release is signed by. The updater refuses any other.
-pub const team = "WWP9DLJ27P";
+pub const team = "P5U52CGYGW";
 /// Apple's CloudKit, which stapling and validating ask for the ticket, drops
 /// the connection now and then (error 68) though notarization succeeded.
 const staple_tries = 5;
