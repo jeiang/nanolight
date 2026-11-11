@@ -456,3 +456,29 @@ test "a tab or line break pasted round the words reads as the words, to rows and
     pipeline.filesAnswered(s, "report", &found);
     try t.expect(rowOf(s, .file, "/tmp/report-a") != null);
 }
+
+test "a file row's folder label is the frame's own copy" {
+    const t = std.testing;
+    var rig: Rig = undefined;
+    rig.init(t.allocator);
+    defer rig.deinit();
+    const s = &rig.s;
+    s.turn(.files, true);
+    try rig.mount(.{});
+    @import("test_support.zig").retype(&rig.t, "report");
+    var found: @import("files.zig").List = .{ .allocator = t.allocator };
+    defer found.deinit();
+    const folder = "/nanolight-synthetic-parent";
+    found.add(folder ++ "/report.txt", false, .{ .score = 100 });
+    pipeline.filesAnswered(s, "report", &found);
+    rig.t.frame();
+    // Layout reads the label after the row is built: it may point neither
+    // into the row builder's stack nor into the list an answer replaces.
+    const list: []const u8 = std.mem.asBytes(&s.found);
+    const label = for (rig.t.ctx.nodes.items) |n| switch (n.content) {
+        .text => |text| if (std.mem.eql(u8, text.str, folder)) break text.str,
+        else => {},
+    } else return error.MissingFolderLabel;
+    const at = @intFromPtr(label.ptr);
+    try t.expect(at < @intFromPtr(list.ptr) or at >= @intFromPtr(list.ptr) + list.len);
+}

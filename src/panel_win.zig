@@ -24,9 +24,6 @@ pub fn setup(_: *nanoui.Window, _: f32) chrome.Fit {
     return .{};
 }
 
-/// The panel draws its own corners here: nothing under it to round.
-pub fn corners(_: f32) void {}
-
 /// Whether the panel shows and has the keys.
 pub fn showing(w: *nanoui.Window) bool {
     return w.isVisible() and w.isFocused();

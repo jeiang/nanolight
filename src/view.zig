@@ -512,7 +512,9 @@ fn scriptBody(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void 
 fn fileBody(s: *Nanolight, c: *ui.Context, p: Palette, i: usize, r: Row) void {
     const e = &s.found.entries[r.item];
     var buf: [files.max_path]u8 = undefined;
-    const parent = paths.parent(&buf, e.path());
+    // text() borrows until layout, after this returns: a home-relative
+    // parent is in `buf`, so the frame keeps a copy.
+    const parent = c.print("{s}", .{paths.parent(&buf, e.path())});
     chrome.nameDetail(c, p, e.name(), highlight(s, i, r, p), parent, .ellipsis);
     ui.text(c, if (e.folder) "Folder" else "File", .{ .size = 11.5, .color = p.sub });
 }

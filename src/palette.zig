@@ -111,17 +111,11 @@ pub const Theme = enum {
         };
     }
 
-    /// The panel's corners, and its glass's.
-    pub fn radius(t: Theme) f32 {
-        return switch (t) {
-            // 18, or theme.json's rounding on Linux, as its colors.
-            .system => @import("linux_theme.zig").radius(),
-            .ocean => 24,
-            .forest => 12,
-            .rose => 28,
-            .amber => 8,
-            .violet => 20,
-        };
+    /// The panel's corners, and its glass's: the same for every theme, so
+    /// a theme changes the tint and the glyph, never the window's shape.
+    /// 18, or theme.json's rounding on Linux.
+    pub fn radius(_: Theme) f32 {
+        return @import("linux_theme.zig").radius();
     }
 
     /// What's typed in the search bar, in points.
@@ -213,13 +207,17 @@ test "a theme is kept by name" {
     try std.testing.expectEqual(Theme.system, Theme.parse("plaid"));
 }
 
-test "System keeps the bar as it was; each theme has its own" {
+test "System keeps the bar as it was; each theme has its own glyph" {
     const t = std.testing;
     try t.expectEqual(@as(f32, 18), Theme.system.radius());
     try t.expectEqual(@as(f32, 21), Theme.system.fieldSize());
     for (Theme.all[1..], 0..) |a, i| for (Theme.all[i + 2 ..]) |b| {
         try t.expect(!std.mem.eql(u8, a.glyphOn(true), b.glyphOn(true)));
     };
+}
+
+test "every theme keeps the same corners" {
+    for (Theme.all) |th| try std.testing.expectEqual(Theme.system.radius(), th.radius());
 }
 
 test "off the Mac a theme names only an icon nanoui can draw" {
