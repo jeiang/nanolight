@@ -136,7 +136,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" -q .tag_name 2>/dev/null || true)
+          # No release yet is a 404, whose JSON body gh still prints on stdout.
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" -q .tag_name 2>/dev/null) || latest=""
           if [ -n "$latest" ] && [ "$latest" != "$GITHUB_REF_NAME" ]; then
             newest=$(printf '%s\n%s\n' "$latest" "$GITHUB_REF_NAME" | sort -V | tail -1)
             if [ "$newest" != "$GITHUB_REF_NAME" ]; then
