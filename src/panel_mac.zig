@@ -132,13 +132,6 @@ fn afterFrame(_: ?*anyopaque, s: *nanoui.Surface) bool {
     return true;
 }
 
-/// The glass's corners to the theme's, as the panel's follow it.
-pub fn corners(radius: f32) void {
-    const g = glass orelse return;
-    const layer = objc.msg(?objc.Object, g, "layer", .{}) orelse return;
-    objc.msg(void, layer, "setCornerRadius:", .{@as(f64, radius)});
-}
-
 pub fn showing(w: *nanoui.Window) bool {
     return w.isVisible() and w.isFocused();
 }

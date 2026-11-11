@@ -144,8 +144,7 @@ fn theme(ctx: *anyopaque, set: ?Theme) Theme {
         core.s.theme = t;
         // Unkept, the next launch has the old tint.
         prefs.keepText(core.kv, .theme, @tagName(t));
-        // The glass's corners and the menu bar icon follow the theme too.
-        shell.panel.corners(t.radius());
+        // The menu bar icon follows the theme too.
         if (from(ctx).menu.tray) |tray| tray.setSymbol(t.glyph());
         core.redraw();
     }
