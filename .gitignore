@@ -5,3 +5,4 @@ zig-pkg/
 result
 result-*
 .worktrees/
+.direnv/

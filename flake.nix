@@ -33,6 +33,15 @@
       config-parse = import ./nix/tests/config-parse.nix {inherit self nixpkgs pkgs;};
     });
 
+    # The Zig of build.zig.zon, with editor language servers for its Zig and Nix.
+    devShells = forSystems systems (pkgs: let
+      source = pkgs.callPackage ./nix/source.nix {};
+    in {
+      default = pkgs.mkShellNoCC {
+        packages = [source.zig source.zls pkgs.nixd pkgs.alejandra];
+      };
+    });
+
     formatter = forSystems systems (pkgs: pkgs.alejandra);
   };
 }
