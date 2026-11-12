@@ -58,6 +58,8 @@ in {
 
   # nixpkgs' Zig of build.zig.zon's minimum_zig_version (zig_0_17 for 0.17.0).
   zig = pkgs."zig_${builtins.elemAt zigVersion 0}_${builtins.elemAt zigVersion 1}";
+  # Its language server: zls must be of the same Zig version.
+  zls = pkgs."zls_${builtins.elemAt zigVersion 0}_${builtins.elemAt zigVersion 1}";
 
   src = lib.fileset.toSource {
     root = ../.;
