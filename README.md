@@ -246,7 +246,7 @@ zig build test -Dmac-tools=false        # leaves out the Mac's release tools (ve
 | `src/pipeline.zig`, `src/host.zig` | The rows built from the query, the selected row held across a refill, and Google's and file search's answers landing, their room kept until they do; what the panel and its screens ask of the app, and the target Return opens |
 | `src/chrome.zig`, `src/palette.zig`, `src/calc_card.zig` | What every screen lays out alike (sizes, the footer and its keys, section heads, a row's pieces, the keys that move a selection); the colors, light and dark, and the roles text plays; the math row |
 | `src/results.zig` | What a query lists, in order: one provider per kind of row and its cap |
-| `src/launchers.zig`, `src/launch_counts.zig` | The apps and script commands side by side, in one name order, and how often each was opened |
+| `src/launchers.zig`, `src/launch_counts.zig` | The apps and script commands side by side, in one name order; how often each app, script, pane, command and file was opened |
 | `src/apps.zig`, `src/app_scan.zig`, `src/icon_mac.zig` | The apps found, sorted, their icons asked for only when shown; what the index and each OS's backend share (the app row, the folder walk); the Finder's icon as PNG |
 | `src/files.zig`, `src/spotlight.zig` | File search: the files found and a typed path's entries; Spotlight's index through `mdfind` (the Mac) |
 | `src/web.zig` | Quicklinks: the defaults, keywords, Google's, and the address a search opens |

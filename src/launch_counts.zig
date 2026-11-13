@@ -1,6 +1,7 @@
-//! How often apps and script commands were opened, as this machine keeps
-//! it (`Counts`) and a synced record carries it (settings.zig): one cap and
-//! one order for both.
+//! How often each thing the panel opens by name was opened (apps, script
+//! commands, panes, system commands, files), as this machine keeps it
+//! (`Counts`) and a synced record carries the apps' and scripts'
+//! (settings.zig): one cap and one order for both.
 const std = @import("std");
 const log = @import("log.zig");
 const assert = std.debug.assert;
@@ -8,8 +9,10 @@ const assert = std.debug.assert;
 /// At most this many counts are kept: the most opened.
 pub const max = 512;
 
-/// A count, by key: an app's path (or, in older rows, its name), or a
-/// script command's (script_commands.zig `Script.key`).
+/// A count, by key: an app's or a file's path (or, in older rows, an app's
+/// name), a script command's (script_commands.zig `Script.key`), a pane's
+/// address (settings_panes.zig `urls`), a system command's (commands.zig
+/// `Command.key`).
 pub const Launch = struct { key: []const u8, count: u16 };
 
 /// Most opened first; of equals, the earlier key: the same order every run.
