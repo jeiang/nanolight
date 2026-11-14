@@ -11,6 +11,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const proc = @import("proc.zig");
 const search = @import("search.zig");
+const Counts = @import("launch_counts.zig").Counts;
 const windows = @import("os.zig").windows;
 
 /// Argument lists to try in order: the first whose program is on the PATH runs.
@@ -19,6 +20,8 @@ const Argvs = []const []const []const u8;
 /// A command as this machine lists it.
 pub const Command = struct {
     name: []const u8,
+    /// What its runs are counted under (launch_counts.zig).
+    key: []const u8,
     /// Other words for it, matched a little lower than its name.
     keywords: []const []const u8 = &.{},
     runs: Argvs,
@@ -160,7 +163,12 @@ pub fn table(comptime os: Os) []const Command {
         var i: usize = 0;
         for (entries) |e| {
             const way = @field(e, @tagName(os)) orelse continue;
-            out[i] = .{ .name = e.name, .keywords = e.keywords ++ way.keywords, .runs = way.runs };
+            out[i] = .{
+                .name = e.name,
+                .key = "command:" ++ e.name,
+                .keywords = e.keywords ++ way.keywords,
+                .runs = way.runs,
+            };
             i += 1;
         }
         const done = out;
@@ -222,14 +230,21 @@ fn onPath(io: std.Io, path: []const u8, program: []const u8) bool {
 }
 
 /// The commands `query` asks for among those `in` lists, best first (table
-/// order among equals), into `out`: how many.
-pub fn rank(query: []const u8, in: *const Installed, out: []search.Ranked) usize {
+/// order among equals), lifted by how often each was run (`counts`), into
+/// `out`: how many.
+pub fn rank(
+    query: []const u8,
+    in: *const Installed,
+    counts: *const Counts,
+    out: []search.Ranked,
+) usize {
     const q = std.mem.trim(u8, query, " ");
     if (q.len < 2) return 0;
     var top: search.Top = .init(out);
     for (all, 0..) |c, i| {
         if (!in.listed(i)) continue;
-        const m = search.scoreNamed(q, c.name, c.keywords, search.min_loose) orelse continue;
+        var m = search.scoreNamed(q, c.name, c.keywords, search.min_loose) orelse continue;
+        m.score += search.lift(counts.of(c.key));
         top.offer(.{ .index = @intCast(i), .match = m });
     }
     return top.n;
@@ -323,47 +338,49 @@ test "every table has named commands with fixed, non-empty argument lists" {
     }
 }
 
+const no_counts: Counts = .{};
+
 test "commands are ranked like apps, only when listed, and capped by the room given" {
     const t = std.testing;
     var out: [3]search.Ranked = undefined;
     // Nothing is listed until its program is found.
-    try t.expectEqual(@as(usize, 0), rank("sleep", &.{}, &out));
+    try t.expectEqual(@as(usize, 0), rank("sleep", &.{}, &no_counts, &out));
     const every: Installed = .{ .chosen = @splat(0) };
     const name = struct {
         fn of(r: search.Ranked) []const u8 {
             return all[r.index].name;
         }
     }.of;
-    try t.expect(rank("sleep", &every, &out) > 0);
+    try t.expect(rank("sleep", &every, &no_counts, &out) > 0);
     try t.expectEqualStrings("Sleep", name(out[0]));
     if (builtin.os.tag == .macos) {
-        try t.expectEqual(@as(usize, 0), rank("lock", &every, &out));
-        try t.expect(rank("sleep display", &every, &out) > 0);
+        try t.expectEqual(@as(usize, 0), rank("lock", &every, &no_counts, &out));
+        try t.expect(rank("sleep display", &every, &no_counts, &out) > 0);
         try t.expectEqualStrings("Sleep Display", name(out[0]));
     } else {
-        try t.expect(rank("lock", &every, &out) > 0);
+        try t.expect(rank("lock", &every, &no_counts, &out) > 0);
         try t.expectEqualStrings("Lock Screen", name(out[0]));
     }
-    try t.expectEqual(@as(usize, 0), rank("volume", &every, out[0..0]));
+    try t.expectEqual(@as(usize, 0), rank("volume", &every, &no_counts, out[0..0]));
     // Windows has no volume.
     if (!windows) {
         // Both are found for "mute", the exact name first.
-        try t.expectEqual(@as(usize, 2), rank("mute", &every, &out));
+        try t.expectEqual(@as(usize, 2), rank("mute", &every, &no_counts, &out));
         try t.expectEqualStrings("Mute", name(out[0]));
         try t.expectEqualStrings("Unmute", name(out[1]));
         // A cap: the first of equals, in table order.
-        try t.expectEqual(@as(usize, 3), rank("volume", &every, &out));
+        try t.expectEqual(@as(usize, 3), rank("volume", &every, &no_counts, &out));
         try t.expectEqual(@as(u32, 0), out[0].index);
         var one: [1]search.Ranked = undefined;
-        try t.expectEqual(@as(usize, 1), rank("volume", &every, &one));
+        try t.expectEqual(@as(usize, 1), rank("volume", &every, &no_counts, &one));
         // A word for it lights nothing in the name.
         try t.expectEqual(@as(u8, 0), out[0].match.n);
     }
     // Not for one letter or loose letters.
-    try t.expectEqual(@as(usize, 0), rank("s", &every, &out));
-    try t.expectEqual(@as(usize, 0), rank("qzx", &every, &out));
+    try t.expectEqual(@as(usize, 0), rank("s", &every, &no_counts, &out));
+    try t.expectEqual(@as(usize, 0), rank("qzx", &every, &no_counts, &out));
     if (builtin.os.tag == .linux) {
-        try t.expect(rank("volume 25", &every, &out) > 0);
+        try t.expect(rank("volume 25", &every, &no_counts, &out) > 0);
         try t.expectEqualStrings("Set Volume to 25%", name(out[0]));
     }
 }

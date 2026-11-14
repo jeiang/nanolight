@@ -1,6 +1,7 @@
 //! What the panel lists for a query, in order: the answer when it is math,
 //! local results ranked together by match (apps and script commands, files
-//! and folders, panes, commands; or what was opened most, with no query),
+//! and folders, panes, commands, each lifted by how often it was opened; or
+//! the apps and scripts opened most, with no query),
 //! then the quicklinks (web.zig, `[[quicklinks]]`): the first is a search for
 //! exactly what is typed, and Google's completions of it go under the
 //! quicklink whose address is Google's, a key or two away. `<keyword> words`
@@ -270,23 +271,26 @@ fn rankClipboard(r: *Results, in: *const Input) void {
 
 fn rankPanes(r: *Results, in: *const Input) void {
     var ranked: [providers.get(.pane).cap]search.Ranked = undefined;
-    const n = panes.rank(in.words, &r.panes, in.from.apps.io, &ranked);
+    const n = panes.rank(in.words, &r.panes, in.from.apps.io, in.from.counts, &ranked);
     for (ranked[0..n]) |x| r.push(.{ .kind = .pane, .item = x.index, .match = x.match });
 }
 
 fn rankCommands(r: *Results, in: *const Input) void {
     const installed = in.commands orelse return;
     var ranked: [providers.get(.command).cap]search.Ranked = undefined;
-    const n = commands.rank(in.words, installed, &ranked);
+    const n = commands.rank(in.words, installed, in.from.counts, &ranked);
     for (ranked[0..n]) |x| r.push(.{ .kind = .command, .item = x.index, .match = x.match });
 }
 
 /// Files and folders compete by their names' match (equal scores after the
-/// rest); a path typed out that exists leads (files.zig).
+/// rest), lifted by how often each was opened; a path typed out that exists
+/// leads (files.zig).
 fn rankFiles(r: *Results, in: *const Input) void {
     const found = in.found orelse return;
-    for (found.entries[0..found.n], 0..) |e, i| {
-        r.push(.{ .kind = .file, .item = @intCast(i), .match = e.match });
+    for (found.entries[0..found.n], 0..) |*e, i| {
+        var m = e.match;
+        m.score += search.lift(in.from.counts.of(e.path()));
+        r.push(.{ .kind = .file, .item = @intCast(i), .match = m });
     }
 }
 
@@ -326,8 +330,9 @@ comptime {
 pub const Input = struct {
     /// The query's words (`Query.words`): nothing blank at either end.
     words: []const u8,
-    /// The apps and script commands, and how often each was opened: the
-    /// most opened are listed for no words.
+    /// The apps and script commands, and how often each thing was opened
+    /// (panes, commands and files too): the most opened apps and scripts
+    /// are listed for no words.
     from: Launchers,
     /// Listed by name after the most opened, for no words (`apps.starters`).
     starters: []const []const u8,
@@ -392,9 +397,10 @@ pub const Results = struct {
         return r.rows[0..r.n];
     }
 
-    /// Lists what `in.words` find among the apps and script commands (lifted
-    /// by how often each was opened, the most opened for no words), from
-    /// the other local providers, the quicklinks, and Google's completions.
+    /// Lists what `in.words` find among the apps and script commands (the
+    /// most opened for no words) and from the other local providers, each
+    /// lifted by how often it was opened, then the quicklinks and Google's
+    /// completions.
     pub fn build(r: *Results, in: Input) void {
         r.clear();
         const words = in.words;
@@ -741,6 +747,46 @@ test "System Settings' panes share the local results header and keep the panel's
     for (r.slice()) |row| try t.expect(row.kind != .pane);
     r.build(input(&ix, "2+2", &.{}));
     try t.expectEqual(@as(usize, 1), r.n);
+}
+
+test "a command, a file and a pane opened often climb past a closer match" {
+    const t = std.testing;
+    const every: commands.Installed = .{ .chosen = @splat(0) };
+    var ix = try testIndex(t.allocator, &.{ "Sle", "Discord" });
+    defer ix.deinit();
+    var found: files.List = .{};
+    defer found.deinit();
+    found.add("/notes/sleeve.txt", false, search.score("sle", "sleeve.txt").?);
+    var counts: launch_counts.Counts = .{};
+    defer counts.deinit(t.allocator);
+    var in = input(&ix, "sle", &.{});
+    in.from = .{ .apps = &ix, .counts = &counts };
+    in.commands = &every;
+    in.found = &found;
+    var r: Results = .{};
+    // Nothing opened: the app whose whole name was typed.
+    r.build(in);
+    try t.expectEqual(Kind.app, r.rows[0].kind);
+    const sleep = for (commands.all) |c| {
+        if (std.mem.eql(u8, c.name, "Sleep")) break c;
+    } else return error.NoCommand;
+    counts.raise(t.allocator, sleep.key, 5);
+    r.build(in);
+    try t.expectEqual(Kind.command, r.rows[0].kind);
+    try t.expectEqualStrings("Sleep", commands.all[r.rows[0].item].name);
+    counts.raise(t.allocator, "/notes/sleeve.txt", 10);
+    r.build(in);
+    try t.expectEqual(Kind.file, r.rows[0].kind);
+    if (!mac) return;
+    // Discord's shorter name leads Displays for "dis" until Displays is opened once.
+    found.deinit();
+    in.words = "dis";
+    r.build(in);
+    try t.expectEqual(Kind.app, r.rows[0].kind);
+    counts.bump(t.allocator, comptime panes.named("Displays").url());
+    r.build(in);
+    try t.expectEqual(Kind.pane, r.rows[0].kind);
+    try t.expectEqualStrings("Displays", panes.all[r.rows[0].item].name);
 }
 
 /// Seven apps that match "ho", and Google's words for it.

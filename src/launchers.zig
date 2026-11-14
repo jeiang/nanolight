@@ -120,8 +120,7 @@ pub const Launchers = struct {
                 .app => |i| apps.score(query, l.apps.apps.items[i]),
                 .script => |i| search.score(query, l.scripts[i].title),
             } orelse continue;
-            const boost = @as(i32, l.count(x)) * search.launch_boost;
-            scored.score += @min(boost, search.max_launch_boost);
+            scored.score += search.lift(l.count(x));
             top.offer(.{ .index = l.flat(x), .match = scored });
         }
         return top.n;

@@ -591,15 +591,19 @@ fn openScript(s: *Nanolight, _: *ui.Context, r: Row) void {
 }
 
 fn openFile(s: *Nanolight, _: *ui.Context, r: Row) void {
-    go(s, .{ .app = s.found.entries[r.item].path() });
+    const path = s.found.entries[r.item].path();
+    s.opened(path);
+    go(s, .{ .app = path });
 }
 
 fn openPane(s: *Nanolight, _: *ui.Context, r: Row) void {
+    s.opened(settings_panes.urls[r.item]);
     go(s, .{ .pane = @intCast(r.item) });
 }
 
 fn runCommand(s: *Nanolight, _: *ui.Context, r: Row) void {
     const run = s.host.command orelse return;
+    s.opened(commands.all[r.item].key);
     run.func(run.ctx, r.item);
 }
 

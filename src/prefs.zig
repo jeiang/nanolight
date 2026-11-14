@@ -33,7 +33,7 @@ pub const Key = enum {
     sync_at,
     /// The server this machine last synced with: a different one is a first sync again.
     account_synced,
-    /// Each app's launch count: "<path>\t<count>" lines (launchers.zig).
+    /// How often each thing was opened: "<key>\t<count>" lines (launch_counts.zig).
     launches,
     /// Where file search looks, and what it leaves out (files_live.zig).
     files_locations,

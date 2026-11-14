@@ -5,6 +5,7 @@
 //! never listed.
 const std = @import("std");
 const search = @import("search.zig");
+const Counts = @import("launch_counts.zig").Counts;
 const platform = @import("platform.zig");
 
 pub const Pane = struct {
@@ -357,18 +358,28 @@ fn strip(query: []const u8) []const u8 {
 }
 
 /// The panes `query` asks for, among those `present`, best first (table
-/// order among equals), into `out`; how many.
-pub fn rank(query: []const u8, present: *Present, io: std.Io, out: []search.Ranked) usize {
+/// order among equals), lifted by how often each was opened (`counts`, by
+/// its address), into `out`; how many.
+pub fn rank(
+    query: []const u8,
+    present: *Present,
+    io: std.Io,
+    counts: *const Counts,
+    out: []search.Ranked,
+) usize {
     const q = strip(query);
     if (q.len < 2) return 0;
     var top: search.Top = .init(out);
     for (all, 0..) |p, i| {
-        const m = search.scoreNamed(q, p.name, p.keywords, search.min_loose) orelse continue;
+        var m = search.scoreNamed(q, p.name, p.keywords, search.min_loose) orelse continue;
         if (!present.has(io, i)) continue;
+        m.score += search.lift(counts.of(urls[i]));
         top.offer(.{ .index = @intCast(i), .match = m });
     }
     return top.n;
 }
+
+const no_counts: Counts = .{};
 
 test "panes are found by name and by the words people use (#12)" {
     if (!platform.panes) return error.SkipZigTest;
@@ -380,25 +391,25 @@ test "panes are found by name and by the words people use (#12)" {
             return all[r.index].name;
         }
     }.of;
-    try t.expect(rank("login items", &here, t.io, &out) > 0);
+    try t.expect(rank("login items", &here, t.io, &no_counts, &out) > 0);
     try t.expectEqualStrings("Login Items & Extensions", name(out[0]));
-    try t.expect(rank("login settings", &here, t.io, &out) > 0);
+    try t.expect(rank("login settings", &here, t.io, &no_counts, &out) > 0);
     try t.expectEqualStrings("Login Items & Extensions", name(out[0]));
-    try t.expect(rank("wifi", &here, t.io, &out) > 0);
+    try t.expect(rank("wifi", &here, t.io, &no_counts, &out) > 0);
     try t.expectEqualStrings("Wi-Fi", name(out[0]));
-    try t.expect(rank("dark mode", &here, t.io, &out) > 0);
+    try t.expect(rank("dark mode", &here, t.io, &no_counts, &out) > 0);
     try t.expectEqualStrings("Appearance", name(out[0]));
-    try t.expect(rank("bluetooth", &here, t.io, &out) > 0);
+    try t.expect(rank("bluetooth", &here, t.io, &no_counts, &out) > 0);
     try t.expectEqualStrings("Bluetooth", name(out[0]));
     // Its name's letters light up; a keyword's light nothing.
-    try t.expect(rank("blue", &here, t.io, &out) > 0 and out[0].match.n == 4);
-    _ = rank("wifi", &here, t.io, &out);
+    try t.expect(rank("blue", &here, t.io, &no_counts, &out) > 0 and out[0].match.n == 4);
+    _ = rank("wifi", &here, t.io, &no_counts, &out);
     try t.expectEqual(@as(u8, 0), out[0].match.n);
     // Not for loose letters, nor one letter.
-    try t.expectEqual(@as(usize, 0), rank("saf", &here, t.io, &out));
-    try t.expectEqual(@as(usize, 0), rank("w", &here, t.io, &out));
+    try t.expectEqual(@as(usize, 0), rank("saf", &here, t.io, &no_counts, &out));
+    try t.expectEqual(@as(usize, 0), rank("w", &here, t.io, &no_counts, &out));
     // A pane's address is the one beside it in `urls`.
-    try t.expect(rank("login items", &here, t.io, &out) > 0);
+    try t.expect(rank("login items", &here, t.io, &no_counts, &out) > 0);
     try t.expectEqualStrings(
         url_prefix ++ "com.apple.LoginItems-Settings.extension",
         urls[out[0].index],

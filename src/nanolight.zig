@@ -61,7 +61,8 @@ pub const Nanolight = struct {
     index: *Index,
     /// The script commands found, listed among the apps (script_live.zig).
     scripts: ?*script_commands.List = null,
-    /// How often each app and script command was opened, and where it is kept.
+    /// How often each app, script command, pane, system command and file
+    /// was opened, and where it is kept.
     tally: launchers.Tally = .{},
     query: Query = .{},
     res: results.Results = .{},

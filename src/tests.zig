@@ -153,6 +153,15 @@ test "the panel finds, moves, answers and hands off" {
         probe.opened[0..probe.opened_len],
     );
 
+    // A pane opened from its row is counted too, by its address.
+    if (@import("platform.zig").panes) {
+        const displays = comptime @import("settings_panes.zig").named("Displays").url();
+        retype(t, "displays");
+        press(t, &.{.{ .command = .insert_newline }});
+        try std.testing.expectEqualStrings(displays, probe.opened[0..probe.opened_len]);
+        try std.testing.expectEqual(@as(u16, 1), s.tally.counts.of(displays));
+    }
+
     // Math: answered, and Return copies it.
     retype(t, "2^10 * 3");
     try std.testing.expect(t.hasText("3,072"));
