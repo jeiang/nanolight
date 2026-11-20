@@ -74,7 +74,8 @@ in {
       (lib.optionalString cfg.disableSpotlightShortcut ''
         sudo -u ${user} defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64 \
           '{ enabled = 0; value = { parameters = (32, 49, 1048576); type = standard; }; }'
-        sudo -u ${user} /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u || true
+        # Run outside the user's login session, activateSettings exits 0 but the hotkey server never rereads the change.
+        launchctl asuser "$(id -u ${user})" sudo -u ${user} /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u || true
       '')
     ];
   };
