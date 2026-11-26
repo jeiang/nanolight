@@ -273,6 +273,7 @@ pub const App = struct {
 
     pub fn useKey(a: *App, choice: keys.Choice) void {
         a.choice = choice;
+        shortcut_holders.turnOffLive(choice);
         hotkey.register(choice, .{ .ctx = a, .func = toggle }) catch |e|
             log.warn(
                 "nanolight: {f} can't be registered ({s}); open it from the menu bar",

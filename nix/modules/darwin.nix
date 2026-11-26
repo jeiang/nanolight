@@ -72,8 +72,9 @@ in {
         fi
       '')
       (lib.optionalString cfg.disableSpotlightShortcut ''
+        # XML: the `{ … }` form stores every value as a string, which the app reads as no entry.
         sudo -u ${user} defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64 \
-          '{ enabled = 0; value = { parameters = (32, 49, 1048576); type = standard; }; }'
+          '<dict><key>enabled</key><false/><key>value</key><dict><key>parameters</key><array><integer>32</integer><integer>49</integer><integer>1048576</integer></array><key>type</key><string>standard</string></dict></dict>'
         # activateSettings -u no longer reloads symbolic hotkeys; this sets the live one too.
         launchctl asuser "$(id -u ${user})" sudo -u ${user} /usr/bin/osascript -l JavaScript \
           -e 'ObjC.import("CoreGraphics"); ObjC.bindFunction("CGSSetSymbolicHotKeyEnabled", ["int", ["int", "bool"]]); $.CGSSetSymbolicHotKeyEnabled(64, false)' \
