@@ -15,6 +15,7 @@ const Holders = shortcut_clash.Holders;
 const known_launchers = shortcut_clash.known_launchers;
 const clash = shortcut_clash.clash;
 const platform = @import("platform.zig");
+const dl = @import("dl.zig");
 const objc = nanoui.objc;
 
 /// The system's shortcuts and the running launchers now; `system_buf` holds
@@ -26,6 +27,26 @@ pub fn look(system_buf: []SystemKey) Holders {
         return h;
     }
     return .{ .system = systemKeys(system_buf), .running = runningLaunchers() };
+}
+
+/// WindowServer can keep a system shortcut on after a restart though the
+/// table has it off, and then takes `choice` first: switched off there too.
+pub fn turnOffLive(choice: Choice) void {
+    if (!platform.system_shortcuts) return;
+    var buf: [96]SystemKey = undefined;
+    for (systemKeys(&buf)) |k| {
+        if (k.enabled) continue;
+        const d = k.id.default() orelse continue;
+        if (!d.eql(choice)) continue;
+        // Private, so looked up rather than linked.
+        const cgs = dl.table(struct {
+            CGSSetSymbolicHotKeyEnabled: *const fn (u32, bool) callconv(.c) i32,
+        }, &.{.{
+            .name = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+            .loaded = true,
+        }}, "a system shortcut turned off may still take the key") orelse return;
+        _ = cgs.CGSSetSymbolicHotKeyEnabled(@backingInt(k.id), false);
+    }
 }
 
 /// The system's shortcuts (macOS keeps them in its defaults).
